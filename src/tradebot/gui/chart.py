@@ -29,6 +29,7 @@ from tradebot.core.timeframes import TIMEFRAMES, to_timedelta
 from tradebot.gui.common import epoch_seconds, run_async
 from tradebot.gui.params import ParamDialog
 from tradebot.gui.theme import Theme, ThemeManager, qcolor
+from tradebot.gui.touch import PlotTouchHandler, TouchController
 from tradebot.indicators import INDICATORS
 
 pg.setConfigOptions(antialias=True)
@@ -148,6 +149,8 @@ class ChartView(QWidget):
         lay.setContentsMargins(16, 16, 16, 16)
         lay.addLayout(bar)
         lay.addWidget(self.canvas, 1)
+        self.touch = TouchController(self.canvas.viewport(), PlotTouchHandler(
+            self.canvas, self._plot_at, on_tap=self._tap, on_long_press=self._context_menu))
         themes.changed.connect(lambda _: self.redraw())
 
     # -- data ------------------------------------------------------------------------------------
@@ -280,8 +283,7 @@ class ChartView(QWidget):
         self._style(t)
         self.info.setText("   ".join(f"<span style='color:{c}'>■</span> {n}" for c, n in legend_items))
         if autorange:
-            self.price.enableAutoRange()
-            self.price.autoRange()
+            self.reset_view()
 
     # -- crosshair & drawing tools ---------------------------------------------------------------
     def _mouse_moved(self, pos):
@@ -308,30 +310,68 @@ class ChartView(QWidget):
         return next((k for k, b in self.tools.items() if b.isChecked()), None)
 
     def _mouse_clicked(self, ev):
+        if ev.button() == Qt.MouseButton.RightButton:
+            self._context_menu(ev.scenePos(), ev.screenPos().toPoint())
+        elif ev.button() == Qt.MouseButton.LeftButton:
+            self._click(ev.scenePos())
+
+    def _tap(self, scene_pos):
+        """Touch tap: move the crosshair / OHLC readout there, then act like a click."""
+        self._mouse_moved(scene_pos)
+        self._click(scene_pos)
+
+    def _plot_at(self, scene_pos):
+        return next((p for p in [self.price, *self.panes] if p.sceneBoundingRect().contains(scene_pos)), None)
+
+    def _click(self, scene_pos):
         tool = self._active_tool()
-        if tool is None or ev.button() != Qt.MouseButton.LeftButton:
+        if tool is None or not self.price.sceneBoundingRect().contains(scene_pos):
             return
-        if not self.price.sceneBoundingRect().contains(ev.scenePos()):
-            return
-        pt = self.price.vb.mapSceneToView(ev.scenePos())
-        t = self.themes.current
-        pen = pg.mkPen(qcolor(t.accent), width=2)
+        pt = self.price.vb.mapSceneToView(scene_pos)
         if tool == "hline":
-            item = pg.InfiniteLine(pt.y(), angle=0, movable=True, pen=pen,
-                                   label="{value:.6g}", labelOpts={"position": 0.97, "color": t.accent})
-            self._add_drawing(item, tool)
+            self._add_level(pt.y())
             return
         if self._pending_point is None:
             self._pending_point = pt
-            self.status.emit("click the second point")
+            self.status.emit("tap/click the second point")
             return
         p1, self._pending_point = self._pending_point, None
+        pen = pg.mkPen(qcolor(self.themes.current.accent), width=2)
         if tool == "trend":
             item = pg.LineSegmentROI([[p1.x(), p1.y()], [pt.x(), pt.y()]], pen=pen)
         else:
             item = pg.RectROI([min(p1.x(), pt.x()), min(p1.y(), pt.y())], [abs(pt.x() - p1.x()), abs(pt.y() - p1.y())],
                               pen=pen)
         self._add_drawing(item, tool)
+
+    def _add_level(self, price: float):
+        t = self.themes.current
+        item = pg.InfiniteLine(price, angle=0, movable=True, pen=pg.mkPen(qcolor(t.accent), width=2),
+                               label="{value:.6g}", labelOpts={"position": 0.97, "color": t.accent})
+        self._add_drawing(item, "hline")
+
+    def reset_view(self):
+        for plot in [self.price, *self.panes]:
+            plot.autoRange()  # autoRange() disables auto range in pyqtgraph, so re-enable afterwards
+            plot.enableAutoRange()
+
+    def _context_menu(self, scene_pos, global_pos):
+        """Secondary actions: right click, or long press on a touchscreen."""
+        plot = self._plot_at(scene_pos)
+        menu = QMenu(self)
+        menu.addAction("Reset zoom", self.reset_view)
+        if plot is self.price and self.df is not None:
+            price = self.price.vb.mapSceneToView(scene_pos).y()
+            menu.addAction(f"Add level at {price:.6g}", lambda: self._add_level(price))
+        for key, btn in self.tools.items():
+            if key != "hline":
+                menu.addAction(f"Draw {btn.text().split(' ', 1)[-1].lower()}", lambda k=key: self.tools[k].setChecked(True))
+        if self.drawings:
+            menu.addAction("Clear drawings", self.clear_drawings)
+        menu.addSeparator()
+        menu.addAction("Line chart" if not self.style_btn.isChecked() else "Candles", self.style_btn.toggle)
+        menu.popup(global_pos)
+        self._menu = menu  # keep a reference while open (and for tests)
 
     def _add_drawing(self, item, tool):
         self.price.addItem(item)

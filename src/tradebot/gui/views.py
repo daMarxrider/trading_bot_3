@@ -42,6 +42,7 @@ from tradebot.core.timeframes import TIMEFRAMES, to_timedelta
 from tradebot.gui.common import DataFrameModel, Kpi, card, epoch_seconds, pct, run_async
 from tradebot.gui.params import ParamForm
 from tradebot.gui.theme import ThemeManager, qcolor
+from tradebot.gui.touch import PlotTouchHandler, TouchController, enable_kinetic_scroll
 
 
 def _title(text: str) -> QLabel:
@@ -59,6 +60,7 @@ def _table(model) -> QTableView:
     view.verticalHeader().hide()
     view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+    enable_kinetic_scroll(view)
     return view
 
 
@@ -162,6 +164,7 @@ class NewsView(QWidget):
         self.list = QListWidget()
         self.list.setWordWrap(True)
         self.list.setSpacing(4)
+        enable_kinetic_scroll(self.list)
         self.list.itemActivated.connect(lambda it: QDesktopServices.openUrl(QUrl(it.data(Qt.ItemDataRole.UserRole))))
         self.filter = QLineEdit()
         self.filter.setPlaceholderText("filter headlines …")
@@ -429,11 +432,13 @@ class BacktestView(QWidget):
         scroll.setWidget(left_w)
         scroll.setWidgetResizable(True)
         scroll.setFixedWidth(380)
+        enable_kinetic_scroll(scroll)
         scroll.setStyleSheet("QScrollArea { background: transparent; border: none; } QScrollArea > QWidget > QWidget { background: transparent; }")
 
         self.plot = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem()})
         self.plot.showGrid(x=True, y=True, alpha=0.15)
         self.plot.addLegend()
+        self.touch = TouchController(self.plot.viewport(), PlotTouchHandler(self.plot, lambda _: self.plot.getPlotItem()))
         self.metrics = DataFrameModel()
         metrics_view = _table(self.metrics)
         metrics_view.setMaximumHeight(300)

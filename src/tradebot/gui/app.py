@@ -27,6 +27,7 @@ from tradebot.core.registry import load_plugins
 from tradebot.data import MarketDataEngine
 from tradebot.gui.chart import ChartView
 from tradebot.gui.theme import GlassBackdrop, ThemeManager
+from tradebot.gui.touch import has_touchscreen
 from tradebot.gui.views import BacktestView, NewsView, PortfolioView, ScreenerView
 
 
@@ -115,8 +116,11 @@ def main(argv: list[str] | None = None) -> int:
     load_plugins()
     app = QApplication(argv if argv is not None else sys.argv)
     app.setApplicationName("tradebot")
-    themes = ThemeManager()
-    window = MainWindow(themes, load_config().get("theme", "glass"))
+    config = load_config()
+    # touch_mode: "auto" (default, on when a touchscreen is present), "on" or "off"
+    mode = str(config.get("touch_mode", "auto")).lower()
+    themes = ThemeManager(touch=mode == "on" or (mode == "auto" and has_touchscreen()))
+    window = MainWindow(themes, config.get("theme", "glass"))
     window.show()
     return app.exec()
 
