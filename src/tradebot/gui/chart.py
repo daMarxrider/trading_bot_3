@@ -453,12 +453,26 @@ class ChartView(QWidget):
         """While auto-fit is on, mouse and touch move only the time axis, and not past the data."""
         on = self.autofit and len(self._x) > 0
         margin = float(np.median(np.diff(self._x))) if len(self._x) > 1 else 86400.0  # keep the edge candles whole
+        limits = dict(xMin=self._x[0] - margin, xMax=self._x[-1] + margin) if on else dict(xMin=None, xMax=None)
         for plot in [self.price, *self.panes]:
             plot.vb.setMouseEnabled(x=True, y=not on)
-            if on:
-                plot.vb.setLimits(xMin=self._x[0] - margin, xMax=self._x[-1] + margin)
-            else:
-                plot.vb.setLimits(xMin=None, xMax=None)
+        self.price.vb.setLimits(**limits)
+        if not on:
+            for pane in self.panes:
+                pane.vb.setLimits(**limits)
+            return
+        # A pane redraw() just created still has pyqtgraph's default 0..1 range: limits would clamp that to a
+        # 1-second window at the first candle and the x-link would push it to every pane (#36). So give each pane
+        # the price range first, with the price pane not following back: before layout, the link's pixel mapping
+        # would shrink the price range a little on every redraw.
+        x_range = self.price.vb.viewRange()[0]
+        self.price.vb.blockLink(True)
+        try:
+            for pane in self.panes:
+                pane.vb.setXRange(*x_range, padding=0)
+                pane.vb.setLimits(**limits)
+        finally:
+            self.price.vb.blockLink(False)
 
     def _autofit_toggled(self, on):
         if self.settings:
