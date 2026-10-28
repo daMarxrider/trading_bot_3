@@ -132,3 +132,14 @@ def test_redraw_keeps_the_hovered_bar_and_panes(chart):
     assert set(chart._legend) == {chart.price, *chart.panes}
     assert fmt_value(chart.df.close.iloc[77]) in text(chart, chart.price)
     assert fmt_value(RSI()(chart.df)["rsi_value"].iloc[77]) in text(chart, chart.panes[0])
+
+
+def test_title_shows_the_full_name_once_known(chart):
+    assert "BTC/USDT · 1d" in text(chart, chart.price)  # the ticker until the lookup answers (offline in tests)
+    chart._named("BTC/USDT", "1d", "Bitcoin / TetherUS")
+    assert "Bitcoin / TetherUS · 1d" in text(chart, chart.price)
+    chart._loaded("AAPL", chart.df)
+    chart._named("BTC/USDT", "1d", "Bitcoin / TetherUS")  # a late answer for the previous symbol
+    assert "AAPL · 1d" in text(chart, chart.price) and "Bitcoin" not in text(chart, chart.price)
+    chart._named("AAPL", "1d", None)  # unknown: keep the ticker
+    assert "AAPL · 1d" in text(chart, chart.price)

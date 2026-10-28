@@ -32,7 +32,7 @@ from tradebot.gui.params import ParamDialog
 from tradebot.gui.theme import Theme, ThemeManager, qcolor
 from tradebot.gui.touch import PlotTouchHandler, TouchController
 from tradebot.indicators import INDICATORS
-from tradebot.symbols import SymbolSearch
+from tradebot.symbols import SymbolSearch, symbol_name
 
 pg.setConfigOptions(antialias=True)
 FIT_PADDING = 0.05  #: auto-fit margin above and below the visible data, as a fraction of its span
@@ -229,10 +229,18 @@ class ChartView(QWidget):
 
     def _loaded(self, symbol, df, note=""):
         self.df = df
-        self._title = f"{symbol} · {self.tf.currentText()}"
+        tf = self.tf.currentText()
+        self._title = f"{symbol} · {tf}"  # the ticker until the full name arrives
         self._hover = None
+        run_async(lambda: symbol_name(symbol), lambda name: self._named(symbol, tf, name))
         self.status.emit(f"{symbol}: {len(df)} candles {df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d %H:%M}{note}")
         self.redraw(autorange=True)
+
+    def _named(self, symbol, tf, name):
+        """Full instrument name for the price pane's title, if the chart still shows that symbol."""
+        if name and self._title == f"{symbol} · {tf}":
+            self._title = f"{name} · {tf}"
+            self._show_values()
 
     # -- indicators & algorithms -----------------------------------------------------------------
     def _fill_indicator_menu(self):
