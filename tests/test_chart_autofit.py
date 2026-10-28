@@ -173,3 +173,20 @@ def test_touch_pinch_and_reset_keep_the_fit(chart):
     chart.reset_view()  # what a double tap does: everything visible, still fitted
     assert chart.fit_btn.isChecked()
     assert_fits(chart.price, chart.df.low.min(), chart.df.high.max())
+
+
+def test_toggle_is_remembered_across_sessions(tmp_path):
+    from tradebot.config import Settings
+
+    app = QApplication.instance() or QApplication([])
+    themes = ThemeManager(user_dir=tmp_path)
+    themes.apply("dark")
+    path = tmp_path / "settings.json"
+    first = ChartView(None, themes, ["TEST"], Settings(path))
+    assert first.fit_btn.isChecked()  # default on
+    first.fit_btn.setChecked(False)
+    second = ChartView(None, themes, ["TEST"], Settings(path))  # a new session
+    assert not second.fit_btn.isChecked()
+    second.fit_btn.setChecked(True)
+    assert ChartView(None, themes, ["TEST"], Settings(path)).fit_btn.isChecked()
+    app.processEvents()

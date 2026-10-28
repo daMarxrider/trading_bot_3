@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 )
 
 from tradebot.algorithms import ALGORITHMS, build_algorithm
+from tradebot.config import Settings
 from tradebot.core.timeframes import TIMEFRAMES, to_timedelta
 from tradebot.gui.common import epoch_seconds, run_async
 from tradebot.gui.params import ParamDialog
@@ -84,9 +85,9 @@ class CandlestickItem(pg.GraphicsObject):
 class ChartView(QWidget):
     status = pyqtSignal(str)
 
-    def __init__(self, engine, themes: ThemeManager, watchlist: list[str]):
+    def __init__(self, engine, themes: ThemeManager, watchlist: list[str], settings: Settings | None = None):
         super().__init__()
-        self.engine, self.themes = engine, themes
+        self.engine, self.themes, self.settings = engine, themes, settings
         self.df: pd.DataFrame | None = None
         self.indicators: list = []
         self.algorithm = None
@@ -167,7 +168,8 @@ class ChartView(QWidget):
         self.price.vb.sigRangeChanged.connect(self._range_changed)
 
         self.fit_btn = QToolButton(self.canvas, text="↕", checkable=True, toolTip="Auto-fit price axis to visible candles")
-        self.fit_btn.setChecked(True)  # on by default (a checked= keyword is applied before checkable and lost)
+        # on by default (a checked= keyword is applied before checkable and lost)
+        self.fit_btn.setChecked(bool(settings.get("chart.autofit", True)) if settings else True)
         size = 40 if themes.touch else 28  # finger-sized in touch mode
         self.fit_btn.setFixedSize(size, size)
         self.fit_btn.toggled.connect(self._autofit_toggled)
@@ -447,6 +449,8 @@ class ChartView(QWidget):
             self.fit_btn.setChecked(False)  # the user scaled the price axis: respect it
 
     def _autofit_toggled(self, on):
+        if self.settings:
+            self.settings.set("chart.autofit", on)
         if on:
             self.fit_y()
         else:
