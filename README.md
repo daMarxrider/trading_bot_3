@@ -330,6 +330,23 @@ plain `int`.
 set `overlay=False` for its own pane, and add `levels` for reference lines.
 Then implement `compute(cls, o, **params) -> dict`.
 
+To choose how each output is drawn, set `styles`:
+
+```python
+from tradebot.indicators import Style
+
+styles = {
+    "fast": Style(color="#ffd166", width=2),      # any CSS colour, rgba(r, g, b, a) too
+    "slow": Style(color="up", dash="dash"),       # a theme colour: follows the theme
+}
+```
+
+Theme colours are `up`, `down`, `accent`, `muted`, `text` and `series[N]` (the
+palette's N-th colour). `dash` is `"dash"` or `"dot"`. A `*_hist` output draws as
+bars in its colour. Outputs without a colour take the theme palette, and keep
+their colour when other indicators are added or removed. The chart's value
+readout uses the same colours.
+
 **Broker.** For any ccxt exchange this is two lines:
 
 ```python

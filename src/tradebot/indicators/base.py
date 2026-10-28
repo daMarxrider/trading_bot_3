@@ -19,11 +19,18 @@ Writing a new indicator::
 
 Defining the class registers it; it then shows up in the GUI chart, the
 screener, the CLI and can be used by any algorithm.
+
+How each output is drawn can be set with :attr:`BaseIndicator.styles`::
+
+    styles = {"value": Style(color="#ffd166", width=2), "signal": Style(color="accent", dash="dash")}
+
+Outputs without a style (or colour) get the theme's palette colours.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import ClassVar
 
 import numpy as np
@@ -33,6 +40,17 @@ from tradebot.core.registry import Param, Registry, resolve_params
 from tradebot.core.series import OHLC
 
 INDICATORS: Registry["BaseIndicator"] = Registry("indicator")
+
+
+@dataclass(frozen=True)
+class Style:
+    """How the chart draws one indicator output; unset fields keep the chart's default."""
+
+    #: ``"#rrggbb"``, ``"rgba(r, g, b, a)"`` (a in 0..1), or a theme colour that follows theme changes:
+    #: ``"up"``, ``"down"``, ``"accent"``, ``"muted"``, ``"text"`` or ``"series[N]"`` (the palette's N-th colour)
+    color: str | None = None
+    width: float | None = None  #: line width in pixels (default 1.6)
+    dash: str | None = None  #: ``None`` (solid), ``"dash"`` or ``"dot"``
 
 
 class BaseIndicator(ABC):
@@ -51,6 +69,8 @@ class BaseIndicator(ABC):
     label_anchor: ClassVar[str | None] = None
     #: Outputs that are computed (for algorithms/screeners) but not drawn.
     hidden: ClassVar[tuple[str, ...]] = ()
+    #: How outputs are drawn: ``{output: Style(...)}``; outputs without a colour use the theme palette.
+    styles: ClassVar[dict[str, Style]] = {}
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
