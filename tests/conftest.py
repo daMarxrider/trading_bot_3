@@ -27,6 +27,17 @@ def _collect_garbage_between_gui_tests(request):
         gc.collect()
 
 
+@pytest.fixture(autouse=True)
+def _no_symbol_name_lookups(monkeypatch):
+    """The chart looks up the instrument's full name online after loading; tests stay offline."""
+    import tradebot.symbols
+
+    def offline(*args, **kwargs):
+        raise ConnectionError("network disabled in tests")
+
+    monkeypatch.setattr(tradebot.symbols, "yahoo_search_http", offline)
+
+
 def make_ohlc(n: int = 400, seed: int = 0, freq: str = "D") -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     close = 100 * np.exp(np.cumsum(rng.normal(0, 0.02, n)))

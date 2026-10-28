@@ -166,3 +166,21 @@ def test_stale_remote_results_are_dropped(qt_app, tmp_path):
     edit.editingFinished.emit()  # Enter pressed / field left before the search finished
     completer._remote_done("appl", [APPLE])
     assert completer.model.rowCount() == 0
+
+
+def test_symbol_name_for_stocks_and_crypto_pairs():
+    from tradebot.symbols import symbol_name
+
+    names = {"AAPL": [APPLE, HOSPITALITY], "BTC-USD": [SymbolMatch("BTC/USD", "Bitcoin USD", "CCC", "crypto")],
+             "ETH-USD": [SymbolMatch("ETH/USD", "Ethereum USD", "CCC", "crypto")]}
+    search = lambda q: names.get(q, [])  # noqa: E731
+    assert symbol_name("AAPL", search) == "Apple Inc."  # the exact ticker, not the first result
+    assert symbol_name("BTC/USDT", search) == "Bitcoin / TetherUS"  # common quotes from the table
+    assert symbol_name("BTC/ETH", search) == "Bitcoin / Ethereum"
+    assert symbol_name("BTC/XYZ", search) == "Bitcoin / XYZ"  # unknown quote: its ticker
+    assert symbol_name("NOPE", search) is None and symbol_name("NOPE/USDT", search) is None
+
+    def offline(q):
+        raise ConnectionError
+
+    assert symbol_name("MSFT", offline) is None  # no name, no error

@@ -6,6 +6,8 @@ algorithm buy/sell markers, crosshair, and drawing tools
 
 from __future__ import annotations
 
+from html import escape
+
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
@@ -14,7 +16,6 @@ from PyQt6.QtGui import QPainter, QPicture
 from PyQt6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QMenu,
     QPushButton,
@@ -31,10 +32,27 @@ from tradebot.gui.params import ParamDialog
 from tradebot.gui.theme import Theme, ThemeManager, qcolor
 from tradebot.gui.touch import PlotTouchHandler, TouchController
 from tradebot.indicators import INDICATORS
-from tradebot.symbols import SymbolSearch
+from tradebot.symbols import SymbolSearch, symbol_name
 
 pg.setConfigOptions(antialias=True)
 FIT_PADDING = 0.05  #: auto-fit margin above and below the visible data, as a fraction of its span
+
+
+def _decimals(v: float) -> int:
+    """About five significant digits: 93,564 · 184.20 · 0.12345."""
+    v = abs(float(v))
+    return 2 if v == 0 or not np.isfinite(v) else int(np.clip(4 - np.floor(np.log10(v)), 0, 8))
+
+
+def fmt_value(v) -> str:
+    """A value for the cursor readout; NaN (e.g. an indicator's warm-up) shows as a dash."""
+    v = float(v)
+    return "–" if not np.isfinite(v) else f"{v:,.{_decimals(v)}f}"
+
+
+def _spaced_label(name: str, values: dict) -> str:
+    """``rsi 14`` / ``macd 12 26 9``: the name followed by the parameter values, as in the readout."""
+    return " ".join([name, *(f"{v:g}" if isinstance(v, float) else str(v) for v in values.values())])
 
 
 def nearest_bar(x, t: float) -> int:
@@ -103,6 +121,11 @@ class ChartView(QWidget):
         self._x = np.empty(0)
         self._fit_series: dict = {}  # plot -> the arrays its y-axis auto-fit covers
         self._adjusting = False  # set while the chart changes view ranges itself, as opposed to the user
+        self._title = ""  # "SYMBOL · 1d" of the loaded data
+        self._hover: int | None = None  # bar under the cursor; None = show the latest bar
+        self._rows: dict = {}  # plot -> [(label, [(values, colour), …])] for the value lines (#45)
+        self._legend: dict = {}  # plot -> LabelItem in its top-left corner
+        self._positions = None  # the signal's target position per bar
 
         # -- toolbar -----------------------------------------------------------------------------
         self.symbol = QLineEdit(watchlist[0] if watchlist else "BTC/USDT")
@@ -155,9 +178,6 @@ class ChartView(QWidget):
         for w in (*tool_group, clear):
             bar.addWidget(w)
         bar.addStretch()
-        self.info = QLabel()
-        self.info.setObjectName("Muted")
-        bar.addWidget(self.info)
 
         # -- plot area ---------------------------------------------------------------------------
         self.canvas = pg.GraphicsLayoutWidget()
@@ -171,6 +191,7 @@ class ChartView(QWidget):
         # crosshair: per pane a vertical line (shown in every pane) and a horizontal one (hovered pane only)
         self._cross: dict = {}
         self.vline, self.hline = self._add_crosshair(self.price)
+        self._add_legend(self.price)
         self.canvas.scene().sigMouseMoved.connect(self._mouse_moved)
         self.canvas.scene().sigMouseClicked.connect(self._mouse_clicked)
         self.price.vb.sigRangeChanged.connect(self._range_changed)
@@ -208,8 +229,18 @@ class ChartView(QWidget):
 
     def _loaded(self, symbol, df, note=""):
         self.df = df
+        tf = self.tf.currentText()
+        self._title = f"{symbol} · {tf}"  # the ticker until the full name arrives
+        self._hover = None
+        run_async(lambda: symbol_name(symbol), lambda name: self._named(symbol, tf, name))
         self.status.emit(f"{symbol}: {len(df)} candles {df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d %H:%M}{note}")
         self.redraw(autorange=True)
+
+    def _named(self, symbol, tf, name):
+        """Full instrument name for the price pane's title, if the chart still shows that symbol."""
+        if name and self._title == f"{symbol} · {tf}":
+            self._title = f"{name} · {tf}"
+            self._show_values()
 
     # -- indicators & algorithms -----------------------------------------------------------------
     def _fill_indicator_menu(self):
@@ -277,6 +308,57 @@ class ChartView(QWidget):
         self._cross[plot] = (vline, hline)
         return vline, hline
 
+    # -- values under the cursor (#45) -----------------------------------------------------------
+    def _add_legend(self, plot):
+        """Text block in the plot's top-left corner, a child of its view box: never part of auto-fit or ranges."""
+        label = pg.LabelItem(justify="left")
+        label.setParentItem(plot.vb)
+        label.anchor(itemPos=(0, 0), parentPos=(0, 0), offset=(6, 2))
+        label.setAcceptedMouseButtons(Qt.MouseButton.NoButton)  # clicks and drags go to the chart below
+        self._legend[plot] = label
+
+    def _show_values(self):
+        """Fill every pane's corner with its values at the hovered bar, or the latest one."""
+        if self.df is None or self.df.empty:
+            return
+        t = self.themes.current
+        i = self._hover if self._hover is not None and self._hover < len(self.df) else len(self.df) - 1
+        muted = lambda text: f"<span style='color:{t.muted}'>{text}</span>"  # noqa: E731
+
+        def colored(v, color):
+            return f"<span style='color:{color}'>{fmt_value(v)}</span>"
+
+        def line(label, values):
+            return " ".join([muted(escape(label)), *(colored(series[i], color) for series, color in values)])
+
+        row = self.df.iloc[i]
+        direction = t.up if row.close >= row.open else t.down
+        ohlc = " ".join(f"{muted(k)}{colored(row[c], direction)}" for k, c in
+                        (("O", "open"), ("H", "high"), ("L", "low"), ("C", "close")))
+        head = [f"<span style='color:{t.text}'>{escape(self._title)}</span>" if self._title else "", ohlc]
+        if i > 0:
+            prev = self.df["close"].iloc[i - 1]
+            diff = row.close - prev
+            sign_color = t.up if diff >= 0 else t.down
+            head.append(f"<span style='color:{sign_color}'>{diff:+,.{_decimals(diff)}f} ({diff / prev * 100:+.2f}%)</span>")
+        lines = {self.price: ["&nbsp;&nbsp;".join(p for p in head if p)]}
+        for plot, rows in self._rows.items():
+            lines.setdefault(plot, []).extend(line(label, values) for label, values in rows)
+        if self._positions is not None:
+            lines[self.price].append(self._signal_line(i, t, muted))
+        for plot, label in self._legend.items():
+            label.setText("<br>".join(lines.get(plot, [])), size="9pt")
+
+    def _signal_line(self, i, t, muted) -> str:
+        algo, pos = self.algorithm, self._positions
+        state = {1: ("long", t.up), -1: ("short", t.down)}.get(int(np.sign(pos[i])), ("flat", t.muted))
+        prev = pos[i - 1] if i > 0 else 0.0
+        if pos[i] > prev:
+            state = ("buy", t.up)
+        elif pos[i] < prev:
+            state = ("sell", t.down)
+        return f"{muted(escape(_spaced_label(algo.name, algo.values)))} <span style='color:{state[1]}'>{state[0]}</span>"
+
     def redraw(self, autorange: bool = False):
         t = self.themes.current
         for item in list(self.price.items):
@@ -285,10 +367,14 @@ class ChartView(QWidget):
         for pane in self.panes:
             self.canvas.removeItem(pane)
             self._cross.pop(pane, None)
+            self._legend.pop(pane, None)
         self.panes.clear()
         self._fit_series = {}
+        self._rows = {self.price: []}
+        self._positions = None
         self._style(t)
         if self.df is None or self.df.empty:
+            self._legend[self.price].setText("")
             return
         df = self.df
         x = self._x = epoch_seconds(df.index)
@@ -304,7 +390,6 @@ class ChartView(QWidget):
             self.price.addItem(candles)
 
         series_colors = iter(t.series * 4)
-        legend_items = []
         for ind in self.indicators:
             frame = ind(df)
             target = self.price
@@ -317,12 +402,14 @@ class ChartView(QWidget):
                 target.hideAxis("left")
                 target.getAxis("right").setWidth(70)
                 target.setMenuEnabled(False)
-                target.setTitle(ind.label, color=t.muted, size="9pt")
                 for level in ind.levels:
                     target.addItem(pg.InfiniteLine(level, angle=0, pen=pg.mkPen(qcolor(t.muted), style=Qt.PenStyle.DotLine)))
                 target.vb.sigRangeChanged.connect(self._range_changed)
                 self._add_crosshair(target)
+                self._add_legend(target)
                 self.panes.append(target)
+            values = []  # this indicator's drawn outputs for the value line
+            self._rows.setdefault(target, []).append((_spaced_label(ind.name, ind.values), values))
             for col in frame.columns:
                 if not ind.is_line(col):
                     self._draw_labels(target, ind, frame, col, x, c, t)
@@ -331,20 +418,22 @@ class ChartView(QWidget):
                 ok = ~np.isnan(y)
                 color = next(series_colors)
                 if col.endswith("_hist"):
-                    target.addItem(pg.BarGraphItem(x=x[ok], height=y[ok], width=width, brush=pg.mkBrush(qcolor(t.muted))))
+                    color = t.muted
+                    target.addItem(pg.BarGraphItem(x=x[ok], height=y[ok], width=width, brush=pg.mkBrush(qcolor(color))))
                     self._fit_series.setdefault(target, []).append(np.zeros_like(y))  # bars grow from 0
                 else:
                     target.plot(x[ok], y[ok], pen=pg.mkPen(color, width=1.6), name=col)
                 self._fit_series.setdefault(target, []).append(y)
-                legend_items.append((color, col))
+                values.append((y, color))
         if self.algorithm is not None:
-            change = np.diff(np.r_[0.0, self.algorithm.run(df).to_numpy()])
+            self._positions = self.algorithm.run(df).to_numpy()
+            change = np.diff(np.r_[0.0, self._positions])
             for mask, symbol, color, anchor in ((change > 0, "t1", t.up, l * 0.995), (change < 0, "t", t.down, h * 1.005)):
                 if mask.any():
                     self.price.addItem(pg.ScatterPlotItem(x=x[mask], y=anchor[mask], symbol=symbol, size=13,
                                                           brush=pg.mkBrush(color), pen=pg.mkPen(None)))
         self._style(t)
-        self.info.setText("   ".join(f"<span style='color:{c}'>■</span> {n}" for c, n in legend_items))
+        self._show_values()
         self._lock_view()
         if autorange:
             self.reset_view()
@@ -383,6 +472,9 @@ class ChartView(QWidget):
             hline.setVisible(p is plot)
             if p is plot:
                 hline.setPos(pt.y())
+        if i != self._hover:
+            self._hover = i
+            self._show_values()
         row = self.df.iloc[i]
         chg = row.close / row.open - 1
         self.status.emit(f"{self.df.index[i]:%Y-%m-%d %H:%M}  O {row.open:.6g}  H {row.high:.6g}  "
@@ -511,6 +603,9 @@ class ChartView(QWidget):
     def eventFilter(self, obj, event):
         if obj is self.canvas and event.type() == QEvent.Type.Resize:
             self.fit_btn.move(8, self.canvas.height() - self.fit_btn.height() - 8)
+        elif obj is self.canvas and event.type() == QEvent.Type.Leave and self._hover is not None:
+            self._hover = None  # cursor left the chart: show the latest bar again
+            self._show_values()
         return super().eventFilter(obj, event)
 
     def _context_menu(self, scene_pos, global_pos):
