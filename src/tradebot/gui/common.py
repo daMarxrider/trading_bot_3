@@ -10,7 +10,7 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 from PyQt6.QtCore import QAbstractTableModel, QDate, QModelIndex, QObject, QRunnable, Qt, QThreadPool, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QIcon
 from PyQt6.QtWidgets import QCalendarWidget, QDateEdit, QFrame, QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
 
 
@@ -130,6 +130,15 @@ class Kpi(QFrame):
 
 
 class _Calendar(QCalendarWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # Qt's month arrows are fixed dark icons, invisible on dark themes; text follows the theme colour
+        for name, arrow in (("qt_calendar_prevmonth", "‹"), ("qt_calendar_nextmonth", "›")):
+            button = self.findChild(QToolButton, name)
+            if button is not None:
+                button.setIcon(QIcon())
+                button.setText(arrow)
+
     def showEvent(self, event):
         super().showEvent(event)
         if self.selectedDate() == self.minimumDate():  # unset field: open on this month, not 1970
