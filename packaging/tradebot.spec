@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # PyInstaller build of the tradebot CLI + GUI as a one-dir bundle in dist/tradebot/.
-# On Windows it also contains tradebot-gui.exe, which opens the GUI without a console window.
+# On Windows it also contains tradebot-gui.exe, which opens the GUI without a console window;
+# on macOS the bundle is wrapped in dist/tradebot.app, whose launcher opens the GUI.
 #   uv sync --extra gui --group build && uv run pyinstaller packaging/tradebot.spec
 import sys
 
@@ -23,9 +24,17 @@ a = Analysis(["entry.py"], **options)
 exe = EXE(PYZ(a.pure), a.scripts, [], exclude_binaries=True, name="tradebot", console=True)
 parts = [exe, a.binaries, a.datas]
 
-if sys.platform == "win32":
+if sys.platform in ("win32", "darwin"):
     g = Analysis(["gui_entry.py"], **options)
     gui_exe = EXE(PYZ(g.pure), g.scripts, [], exclude_binaries=True, name="tradebot-gui", console=False)
     parts += [gui_exe, g.binaries, g.datas]  # COLLECT drops the files both builds share
 
 coll = COLLECT(*parts, name="tradebot")
+
+if sys.platform == "darwin":
+    app = BUNDLE(
+        coll,
+        name="tradebot.app",
+        bundle_identifier="io.github.damarxrider.tradebot",
+        info_plist={"CFBundleExecutable": "tradebot-gui", "NSHighResolutionCapable": True},  # opening the app starts the GUI
+    )

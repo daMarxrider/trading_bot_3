@@ -21,7 +21,7 @@ The core (CLI, backtests, CPU optimizer) needs none of them.
 ## Download / run the binary
 
 Every release on the [Releases page](https://github.com/daMarxrider/trading_bot_3/releases)
-has standalone builds for Linux and Windows that need no Python. One binary is both the CLI and the
+has standalone builds for Linux, Windows and macOS that need no Python. One binary is both the CLI and the
 desktop app (`tradebot gui`). The builds are CPU-only (no `gpu` extra) and
 **unsigned**. Each archive has a `.sha256` checksum next to it.
 
@@ -54,6 +54,22 @@ desktop app (no console window) or `tradebot.exe` in a terminal for the CLI:
 Because the binaries are unsigned, SmartScreen warns on first start ("Windows
 protected your PC"). Click **More info → Run anyway**. Config, plugins and
 themes live in `%USERPROFILE%\.config\tradebot\`, the same layout as on Linux.
+
+**macOS (Apple Silicon `arm64`, Intel `x86_64`).** Unzip
+`tradebot-v1.0.0-macos-arm64.zip` (or `-x86_64` on an Intel Mac) and move
+`tradebot.app` to Applications. Opening the app starts the desktop app; the CLI
+is inside the bundle:
+
+```sh
+shasum -a 256 -c tradebot-v1.0.0-macos-arm64.zip.sha256
+/Applications/tradebot.app/Contents/MacOS/tradebot --help
+sudo ln -s /Applications/tradebot.app/Contents/MacOS/tradebot /usr/local/bin/tradebot   # optional
+```
+
+The app is not signed or notarized, so Gatekeeper blocks the first start ("Apple
+could not verify ..."). Try to open it once, then go to **System Settings →
+Privacy & Security** and click **Open Anyway**. Alternatively, remove the
+quarantine flag in a terminal with `xattr -dr com.apple.quarantine /Applications/tradebot.app`.
 
 **Plugins in the binary.** Plugin files from `~/.config/tradebot/plugins/` (or
 `$TRADEBOT_PLUGIN_DIR`) load as usual and can import any `tradebot` module and
