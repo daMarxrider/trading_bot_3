@@ -48,6 +48,10 @@ class BaseDataProvider(ABC):
     def supports(self, asset_class: AssetClass, timeframe: str) -> bool:
         return asset_class in self.asset_classes
 
+    def history_limit(self, timeframe: str) -> pd.Timedelta | None:
+        """How far back from now this provider serves ``timeframe`` candles (None = no limit)."""
+        return None
+
     @abstractmethod
     def fetch(self, symbol: str, timeframe: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
         """Candles with ``start <= index < end``."""
@@ -94,6 +98,12 @@ class YFinanceProvider(BaseDataProvider):
     asset_classes = frozenset({AssetClass.STOCK, AssetClass.CRYPTO})
     timeframes = frozenset({"1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"})
     _INTERVALS = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1h", "4h": "1h", "1d": "1d", "1w": "1wk"}
+    # Yahoo rejects intraday requests reaching further back than 7 / 60 / 730 days; stay a day inside
+    _LIMIT_DAYS = {"1m": 6, "5m": 59, "15m": 59, "30m": 59, "1h": 729, "4h": 729}
+
+    def history_limit(self, timeframe):
+        days = self._LIMIT_DAYS.get(timeframe)
+        return pd.Timedelta(days=days) if days else None
 
     @staticmethod
     def map_symbol(symbol: str) -> str:

@@ -26,8 +26,8 @@ from PyQt6.QtWidgets import (
 
 from tradebot.algorithms import ALGORITHMS, build_algorithm
 from tradebot.config import Settings
-from tradebot.core.timeframes import TIMEFRAMES, to_timedelta
-from tradebot.gui.common import epoch_seconds, run_async
+from tradebot.core.timeframes import TIMEFRAMES
+from tradebot.gui.common import DateRange, epoch_seconds, run_async, shortfall
 from tradebot.gui.params import ParamDialog
 from tradebot.gui.theme import Theme, ThemeManager, qcolor
 from tradebot.gui.touch import PlotTouchHandler, TouchController
@@ -110,6 +110,7 @@ class ChartView(QWidget):
         self.bars.addItems(["200", "500", "1000", "2000", "5000"])
         self.bars.setCurrentText("500")
         self.bars.currentTextChanged.connect(lambda _: self.load())
+        self.dates = DateRange()
         load = QPushButton("Load")
         load.setObjectName("Primary")
         load.clicked.connect(self.load)
@@ -140,7 +141,7 @@ class ChartView(QWidget):
         clear.clicked.connect(self.clear_drawings)
 
         bar = QHBoxLayout()
-        for w in (self.symbol, self.tf, self.bars, load, self.style_btn, self.ind_btn, self.algo_box):
+        for w in (self.symbol, self.tf, self.bars, self.dates, load, self.style_btn, self.ind_btn, self.algo_box):
             bar.addWidget(w)
         bar.addSpacing(12)
         for w in (*tool_group, clear):
@@ -193,13 +194,14 @@ class ChartView(QWidget):
         if not symbol:
             return
         self.status.emit(f"loading {symbol} {tf} …")
-        end = pd.Timestamp.now(tz="UTC")
-        run_async(lambda: self.engine.get_ohlc(symbol, tf, start=end - bars * to_timedelta(tf), end=end),
-                  lambda df: self._loaded(symbol, df), lambda err: self.status.emit(f"{symbol}: {err}"))
+        start, end = self.dates.range()
+        run_async(lambda: self.engine.get_ohlc(symbol, tf, start=start, end=end, bars=bars),
+                  lambda df: self._loaded(symbol, df, shortfall(df, bars, start)),
+                  lambda err: self.status.emit(f"{symbol}: {err}"))
 
-    def _loaded(self, symbol, df):
+    def _loaded(self, symbol, df, note=""):
         self.df = df
-        self.status.emit(f"{symbol}: {len(df)} candles {df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d %H:%M}")
+        self.status.emit(f"{symbol}: {len(df)} candles {df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d %H:%M}{note}")
         self.redraw(autorange=True)
 
     # -- indicators & algorithms -----------------------------------------------------------------

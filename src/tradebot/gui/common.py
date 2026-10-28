@@ -9,9 +9,9 @@ from typing import Callable
 
 import numpy as np
 import pandas as pd
-from PyQt6.QtCore import QAbstractTableModel, QModelIndex, QObject, QRunnable, Qt, QThreadPool, pyqtSignal
+from PyQt6.QtCore import QAbstractTableModel, QDate, QModelIndex, QObject, QRunnable, Qt, QThreadPool, pyqtSignal
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import QFrame, QLabel, QVBoxLayout
+from PyQt6.QtWidgets import QCalendarWidget, QDateEdit, QFrame, QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
 
 
 class _Signals(QObject):
@@ -127,6 +127,59 @@ class Kpi(QFrame):
 
     def set(self, text: str):
         self.value.setText(text)
+
+
+class _Calendar(QCalendarWidget):
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.selectedDate() == self.minimumDate():  # unset field: open on this month, not 1970
+            today = QDate.currentDate()
+            self.setCurrentPage(today.year(), today.month())
+
+
+class DateRange(QWidget):
+    """Optional From/To dates as an alternative to a candle count.
+
+    An unset field shows "auto": no From means "use the candle count", no To means "up to now".
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.start = self._edit("from: auto", "First day (overrides the candle count)")
+        self.end = self._edit("to: now", "Last day, inclusive")
+        clear = QToolButton(text="✕", toolTip="Clear the dates and use the candle count")
+        clear.clicked.connect(self.clear)
+        for w in (self.start, self.end, clear):
+            lay.addWidget(w)
+
+    @staticmethod
+    def _edit(unset_text: str, tip: str) -> QDateEdit:
+        edit = QDateEdit(calendarPopup=True, displayFormat="yyyy-MM-dd", toolTip=tip)
+        edit.setMinimumDate(QDate(1970, 1, 1))
+        edit.setSpecialValueText(unset_text)  # shown while the date sits at the minimum, i.e. unset
+        edit.setCalendarWidget(_Calendar(edit))  # the edit doesn't take ownership: parent it so it outlives Python's ref
+        edit.setDate(edit.minimumDate())
+        return edit
+
+    def clear(self):
+        for edit in (self.start, self.end):
+            edit.setDate(edit.minimumDate())
+
+    def range(self) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+        """``(start, end)`` for ``MarketDataEngine.get_ohlc``; ``end`` is exclusive, so the To day is included."""
+        def day(edit):
+            d = edit.date()
+            return None if d == edit.minimumDate() else pd.Timestamp(d.year(), d.month(), d.day(), tz="UTC")
+
+        start, end = day(self.start), day(self.end)
+        return start, end + pd.Timedelta(days=1) if end is not None else None
+
+
+def shortfall(df: pd.DataFrame, bars: int, start) -> str:
+    """Status note when a candle-count request found less history than asked for."""
+    return f" (only {len(df)} of {bars} candles available)" if start is None and len(df) < bars else ""
 
 
 def epoch_seconds(index: pd.DatetimeIndex) -> np.ndarray:
