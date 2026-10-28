@@ -231,3 +231,72 @@ def test_toggle_is_remembered_across_sessions(tmp_path):
     second.fit_btn.setChecked(True)
     assert ChartView(None, themes, ["TEST"], Settings(path)).fit_btn.isChecked()
     app.processEvents()
+
+
+# -- #36: adding indicators or switching the signal must not blank the chart ------------------------
+def accept_next_dialog():
+    from PyQt6.QtCore import QTimer
+
+    def accept():
+        dialog = QApplication.activeModalWidget()
+        if dialog is None:
+            QTimer.singleShot(10, accept)
+        else:
+            dialog.accept()
+
+    QTimer.singleShot(0, accept)
+
+
+def x_ranges(chart):
+    return [tuple(p.vb.viewRange()[0]) for p in [chart.price, *chart.panes]]
+
+
+@pytest.mark.parametrize("added", [["rsi", "stoch"], ["stoch", "bbands"], ["rsi", "stoch", "bbands"]])
+def test_adding_indicators_through_the_menu_keeps_the_time_range(chart, added):
+    from tradebot.indicators import INDICATORS
+
+    app = QApplication.instance()
+    before = chart.price.vb.viewRange()[0]
+    for name in added:
+        accept_next_dialog()
+        chart._add_indicator(INDICATORS.get(name))  # what the Indicators menu does, dialog included
+        app.processEvents()
+    ranges = x_ranges(chart)
+    assert all(r == pytest.approx(before, abs=1) for r in ranges)  # no collapse, no drift, all panes aligned
+    overlays = [ind(chart.df) for ind in chart.indicators if ind.overlay]  # all candles are visible
+    assert_fits(chart.price, min([chart.df.low.min()] + [f.min().min() for f in overlays]),
+                max([chart.df.high.max()] + [f.max().max() for f in overlays]))
+
+
+def test_switching_the_signal_keeps_the_time_range(chart):
+    app = QApplication.instance()
+    chart.indicators = [RSI()]
+    chart.redraw()
+    before = chart.price.vb.viewRange()[0]
+    for name in ("rsi_threshold", "macd_cross"):
+        accept_next_dialog()
+        chart.algo_box.setCurrentText(name)  # what picking a signal does, dialog included
+        app.processEvents()
+    assert all(r == pytest.approx(before, abs=1) for r in x_ranges(chart))
+
+
+def test_zoomed_view_survives_redraws(chart):
+    x = chart._x
+    chart.price.setXRange(x[100], x[160], padding=0)
+    zoomed = chart.price.vb.viewRange()[0]
+    for _ in range(3):
+        chart.indicators = [RSI(), Bollinger()]
+        chart.redraw()
+    assert all(r == pytest.approx(zoomed, abs=1) for r in x_ranges(chart))
+    v = visible(chart, 100, 160)
+    assert chart.price.vb.viewRange()[1][0] < v.low.min() and chart.price.vb.viewRange()[1][1] > v.high.max()
+
+
+def test_panning_a_pane_past_the_data_stays_clamped(chart):
+    chart.indicators = [RSI()]
+    chart.redraw()
+    x = chart._x
+    (pane,) = chart.panes
+    pane.setXRange(x[0] - 1e9, x[0] - 1e9 + (x[50] - x[0]), padding=0)  # far before the first candle
+    for x0, x1 in x_ranges(chart):
+        assert x1 > x[0] and x0 >= x[0] - (x[1] - x[0]) * 1.01
