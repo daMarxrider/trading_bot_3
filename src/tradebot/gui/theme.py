@@ -110,12 +110,27 @@ QToolTip {{ background: {menu_bg}; color: {text}; border: 1px solid {panel_borde
 """
 
 
+#: Appended in touch mode: finger-sized hit targets (~40 px) and grabbable scrollbars.
+TOUCH_QSS = """
+QPushButton, QToolButton {{ min-height: 30px; padding: 8px 16px; }}
+QPushButton#Nav {{ min-height: 34px; padding: 12px 16px; }}
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{ min-height: 30px; }}
+QSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{ width: 28px; }}
+QComboBox QAbstractItemView::item, QMenu::item {{ min-height: 36px; padding: 6px 24px; }}
+QCheckBox::indicator {{ width: 24px; height: 24px; }}
+QTableView {{ font-size: 14px; }}
+QHeaderView::section {{ padding: 10px 6px; }}
+QScrollBar:vertical, QScrollBar:horizontal {{ width: 18px; height: 18px; }}
+QScrollBar::handle {{ border-radius: 9px; min-height: 48px; min-width: 48px; }}
+"""
+
+
 def _opaque(color: str, fallback: str) -> str:
     return fallback if color.startswith("rgba") else color
 
 
-def stylesheet(t: Theme) -> str:
-    return QSS.format(
+def stylesheet(t: Theme, touch: bool = False) -> str:
+    return (QSS + (TOUCH_QSS if touch else "")).format(
         **asdict(t),
         root_bg="transparent" if t.glass else t.bg,
         radius_sm=max(4, t.radius // 2),
@@ -136,8 +151,9 @@ def qcolor(css: str) -> QColor:
 class ThemeManager(QObject):
     changed = pyqtSignal(object)
 
-    def __init__(self, user_dir: Path | None = None):
+    def __init__(self, user_dir: Path | None = None, touch: bool = False):
         super().__init__()
+        self.touch = touch
         self.themes: dict[str, Theme] = dict(BUILTIN)
         self.themes.update(self._load_user_themes(user_dir or Path("~/.config/tradebot/themes").expanduser()))
         self.current: Theme = self.themes["glass"]
@@ -160,7 +176,7 @@ class ThemeManager(QObject):
         theme = self.themes[key]
         self.current = theme
         app = QApplication.instance()
-        app.setStyleSheet(stylesheet(theme))
+        app.setStyleSheet(stylesheet(theme, self.touch))
         font = QFont()
         font.setFamilies([f.strip().strip("'") for f in theme.font.split(",")])
         app.setFont(font)
