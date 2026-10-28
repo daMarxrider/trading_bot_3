@@ -1,8 +1,30 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 daMarxrider
+import gc
+
 import numpy as np
 import pandas as pd
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _collect_garbage_between_gui_tests(request):
+    """Free reference cycles between GUI tests, never in the middle of one.
+
+    GUI views form cycles (signal lambdas), so the cyclic GC destroys them at an arbitrary
+    later moment. When that falls inside Qt's event processing in a later test, Qt can touch
+    a half-destroyed widget and segfault. Pausing automatic collection during a GUI test and
+    collecting afterwards makes destruction happen at a safe, deterministic point.
+    """
+    if not hasattr(request.module, "QApplication"):  # only GUI test modules run Qt's event loop
+        yield
+        return
+    gc.disable()
+    try:
+        yield
+    finally:
+        gc.enable()
+        gc.collect()
 
 
 def make_ohlc(n: int = 400, seed: int = 0, freq: str = "D") -> pd.DataFrame:
