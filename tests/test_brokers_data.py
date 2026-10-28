@@ -92,15 +92,15 @@ def test_semi_auto_broker_creates_intents(tmp_path):
 
 
 def test_read_only_broker_refuses_orders():
-    class Tracker(ManualExecutionBroker):
-        name = "_tracker_test"
+    class Tracker(ManualExecutionBroker):  # no class-level name -> stays out of the registry
         execution_mode = ExecutionMode.READ_ONLY
 
         def get_balance(self):
             return {}
 
     b = Tracker()
-    assert not b.can_trade
+    b.name = "tracker"
+    assert not b.can_trade and "tracker" not in BROKERS
     with pytest.raises(ReadOnlyBrokerError):
         b.place_order("AAPL", "buy", 1)
 
