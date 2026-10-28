@@ -1,0 +1,41 @@
+[project]
+name = "tradebot"
+version = "0.1.0"
+description = "Extensible algorithmic trading platform: brokers, indicators, strategies, backtesting, GPU optimization, GUI and CLI."
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "daMarxrider" }]
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "ccxt>=4.3",
+    "yfinance>=0.2.40",
+    "requests>=2.31",
+    "typer>=0.12",
+    "rich>=13.7",
+    "plotext>=5.2",
+]
+
+[project.optional-dependencies]
+gui = ["PyQt6>=6.6", "pyqtgraph>=0.13.7"]
+gpu = ["torch>=2.3"]
+traderepublic = ["pytr>=0.2"]
+all = ["tradebot[gui,gpu,traderepublic]"]
+
+[project.scripts]
+tradebot = "tradebot.cli.main:app"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tradebot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
