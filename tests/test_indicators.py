@@ -9,7 +9,18 @@ import pytest
 from tradebot.core import ops
 from tradebot.core.series import OHLC
 from tradebot.indicators import INDICATORS
-from tradebot.indicators.builtin import ATR, EMA, MACD, RSI, SMA, Bollinger, Donchian, Ichimoku, Stochastic
+from tradebot.indicators.builtin import (
+    ATR,
+    EMA,
+    MACD,
+    RSI,
+    SMA,
+    Bollinger,
+    Donchian,
+    Ichimoku,
+    Stochastic,
+    StochasticShortWaves,
+)
 
 
 def close_eq(a, b):
@@ -113,3 +124,31 @@ def test_batched_float_params_broadcast(ohlc):
     assert pos.shape == (3, len(ohlc))
     # lower entry threshold => never more time in the market than a higher one
     assert pos[0].sum() <= pos[2].sum()
+
+
+def _wilder_rsi(c, n):
+    d = c.diff()
+    gain = d.clip(lower=0).ewm(alpha=1 / n, adjust=False).mean()
+    loss = (-d.clip(upper=0)).ewm(alpha=1 / n, adjust=False).mean()
+    ref = 100 - 100 / (1 + gain / loss)
+    ref.iloc[:n] = np.nan
+    return ref
+
+
+@pytest.mark.parametrize("period", [22, 5])
+def test_stochastic_short_waves_matches_the_pine_definition(ohlc, period):
+    # Pine: sma(rsi(close,5),period), sma(rsi(close,14),period), and three constant levels
+    c = ohlc["close"]
+    out = StochasticShortWaves(period=period, first_drop=60, ath=90, lower=30)(ohlc)
+    close_eq(out["ssw_fast"], _wilder_rsi(c, 5).rolling(period).mean())
+    close_eq(out["ssw_slow"], _wilder_rsi(c, 14).rolling(period).mean())
+    assert (out["ssw_lower"] == 30).all() and (out["ssw_first_drop"] == 60).all() and (out["ssw_ath"] == 90).all()
+
+
+def test_stochastic_short_waves_defaults_and_drawing():
+    ssw = StochasticShortWaves()
+    assert ssw.values == {"period": 22, "first_drop": 66, "ath": 83, "lower": 35}  # Pine's inputs, same order
+    assert list(ssw.params) == ["period", "first_drop", "ath", "lower"]
+    assert not ssw.overlay and INDICATORS.get("ssw") is StochasticShortWaves
+    colors = {k: s.color for k, s in ssw.styles.items()}
+    assert colors == {"fast": "#ffeb3b", "slow": "#4caf50", "lower": "#4caf50", "first_drop": "#ff9800", "ath": "#ff5252"}

@@ -8,7 +8,7 @@ import numpy as np
 
 from tradebot.core import ops
 from tradebot.core.registry import IntParam, Param
-from tradebot.indicators.base import BaseIndicator
+from tradebot.indicators.base import BaseIndicator, Style
 
 
 class SMA(BaseIndicator):
@@ -108,6 +108,54 @@ class Stochastic(BaseIndicator):
         with np.errstate(divide="ignore", invalid="ignore"):
             k = 100 * (o.close - ll) / (hh - ll)
         return {"k": k, "d": ops.sma(k, smooth)}
+
+
+# Custom Indicator made by daMarxrider
+class StochasticShortWaves(BaseIndicator):
+    """Stochastic Short Waves (SSW): the SMA of a fast (5) and a slow (14) RSI, with three signal levels.
+
+    Custom Indicator made by daMarxrider, translated from the Pine Script study "Stochastic Short Waves"::
+
+        period = input(22) · first_drop = input(66) · ath = input(83) · lower = input(35)
+        plot(sma(rsi(close,5),period), color=yellow) · plot(sma(rsi(close,14),period), color=green)
+        plot(lower, color=green) · plot(first_drop, color=orange) · plot(ath, color=red)
+
+    Pine's ``rsi`` uses Wilder's smoothing like :class:`RSI`. The levels depend on parameters, so they're
+    constant outputs rather than fixed ``levels``, which also shows their values in the chart's readout.
+    """
+
+    name = "ssw"
+    description = "Stochastic Short Waves: smoothed fast and slow RSI with signal levels"
+    # same order as the Pine inputs, so the chart reads "ssw 22 66 83 35"
+    params = {
+        "period": IntParam(22, 1, 200, "SMA length applied to both RSIs"),
+        "first_drop": IntParam(66, 1, 100, "first-drop level (orange)"),
+        "ath": IntParam(83, 1, 100, "all-time-high level (red)"),
+        "lower": IntParam(35, 1, 100, "lower level (green)"),
+    }
+    outputs = ("fast", "slow", "lower", "first_drop", "ath")
+    overlay = False
+    # Pine's colours (TradingView palette): yellow, green, green, orange, red
+    styles = {
+        "fast": Style(color="#ffeb3b"),
+        "slow": Style(color="#4caf50"),
+        "lower": Style(color="#4caf50", width=1),
+        "first_drop": Style(color="#ff9800", width=1),
+        "ath": Style(color="#ff5252", width=1),
+    }
+
+    @classmethod
+    def compute(cls, o, period, first_drop, ath, lower):
+        def level(v):  # a constant line on the same backend and length as the data
+            return o.close * 0.0 + v
+
+        return {
+            "fast": ops.sma(RSI.compute(o, period=5)["value"], period),  # Pine: sma(rsi(close,5), period)
+            "slow": ops.sma(RSI.compute(o, period=14)["value"], period),  # Pine: sma(rsi(close,14), period)
+            "lower": level(lower),
+            "first_drop": level(first_drop),
+            "ath": level(ath),
+        }
 
 
 class Donchian(BaseIndicator):

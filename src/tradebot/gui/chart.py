@@ -48,7 +48,9 @@ def _decimals(v: float) -> int:
 def fmt_value(v) -> str:
     """A value for the cursor readout; NaN (e.g. an indicator's warm-up) shows as a dash."""
     v = float(v)
-    return "–" if not np.isfinite(v) else f"{v:,.{_decimals(v)}f}"
+    if not np.isfinite(v):
+        return "–"
+    return f"{v:,.0f}" if v.is_integer() else f"{v:,.{_decimals(v)}f}"  # levels read "66", not "66.000"
 
 
 def _spaced_label(name: str, values: dict) -> str:
