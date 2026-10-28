@@ -79,3 +79,22 @@ def test_donut(app, tmp_path):
     assert list(d.weights.index)[-1] == "other" and d.weights.sum() == pytest.approx(1)
     d.resize(400, 300)
     assert not d.grab().isNull()
+
+
+def test_backtest_view_shows_ga_pso_comparison(app, tmp_path):
+    from tradebot.optimize import run_comparison
+
+    themes = ThemeManager(user_dir=tmp_path)
+    themes.apply("dark")
+    view = BacktestView(None, themes, ["TEST"])
+    df = make_ohlc(500, seed=4)
+    cmp = run_comparison(build_algorithm("sma_cross"), df, population=16, generations=3, seed=2, backend="numpy",
+                         min_trades=0)
+    view._show((df, {"GA in-sample": cmp.ga.train, "GA out-of-sample": cmp.ga.test,
+                     "PSO in-sample": cmp.pso.train, "PSO out-of-sample": cmp.pso.test,
+                     "_params": cmp.better.best_params, "_comparison": cmp}))
+    assert not view.verdict_card.isHidden()
+    assert cmp.verdict.upper() in view.verdict.text() and "agreement" in view.verdict.text()
+    assert list(view.metrics.df.columns)[1:] == ["GA in-sample", "GA out-of-sample", "PSO in-sample", "PSO out-of-sample"]
+    view._show((df, {"backtest": cmp.ga.train}))  # a plain backtest hides the verdict again
+    assert view.verdict_card.isHidden()

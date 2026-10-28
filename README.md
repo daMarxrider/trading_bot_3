@@ -32,6 +32,8 @@ tradebot list algorithms|indicators|brokers
 tradebot chart BTC/USDT --tf 4h --bars 200 -i bbands -i rsi --algo rsi_threshold
 tradebot backtest AAPL macd_cross --bars 2000 -p fast=8 -p slow=21
 tradebot optimize BTC/USDT rsi_threshold --population 1024 --generations 40 --objective calmar
+tradebot optimize BTC/USDT rsi_threshold --method pso          # particle swarm instead of the genetic algorithm
+tradebot optimize BTC/USDT rsi_threshold --method both         # run GA and PSO, then compare them
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50          # dry run
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50 --live   # real orders
 tradebot positions --broker kucoin
@@ -44,6 +46,23 @@ Charts are rendered with plotext, so they work in fish, bash and zsh.
 `optimize` evolves parameters on the first 70 % of the data and reports the
 remaining 30 % out-of-sample. Candidates with fewer than `--min-trades` round
 trips are rejected.
+
+**GA, PSO, or both.** `--method` chooses the search:
+- `ga`: genetic algorithm, the default.
+- `pso`: particle swarm.
+- `both`: runs GA and PSO one after the other on the same data, split, budget
+  and seed, and reports how much they disagree. The report covers the
+  difference per parameter (as % of its range), the in-sample score gap and
+  both out-of-sample results.
+
+The comparison ends with a verdict:
+- `consistent`: both found the same region, so the optimum looks well-defined.
+- `fragile`: different parameters with nearly the same score. The exact
+  values are mostly noise.
+- `divergent`: one method got stuck in a weaker region.
+
+A separate warning flags overfitting when the in-sample winner does worse out
+of sample. The GUI's Backtest lab offers the same options.
 
 ## Desktop app
 
@@ -118,7 +137,7 @@ src/tradebot/
   data/        providers (ccxt exchanges, yfinance, Alpha Vantage, FMP) + MarketDataEngine (fallback/stitching)
   brokers/     BaseBroker; ccxt live brokers (Binance, KuCoin, Pionex); semi-automated Scalable / Trade Republic
   backtest/    vectorized engine + metrics (Sharpe, Sortino, max drawdown, win rate, profit factor, CAGR)
-  optimize/    backend selection (CUDA → ROCm → CPU) + genetic algorithm
+  optimize/    backend selection (CUDA → ROCm → CPU), genetic algorithm, particle swarm, GA-vs-PSO comparison
   live/        TradingBot (same execution model as the backtester)
   portfolio.py, screener.py, news.py, config.py
   cli/         typer + rich + plotext
