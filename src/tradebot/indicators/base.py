@@ -45,6 +45,12 @@ class BaseIndicator(ABC):
     overlay: ClassVar[bool] = True
     #: Horizontal reference lines for non-overlay panes (e.g. RSI 30/70).
     levels: ClassVar[tuple[float, ...]] = ()
+    #: Outputs drawn as text labels instead of lines: ``{output: {code: text}}``; NaN = no label.
+    labels: ClassVar[dict[str, dict[float, str]]] = {}
+    #: Output whose value positions the labels vertically (default: the close).
+    label_anchor: ClassVar[str | None] = None
+    #: Outputs that are computed (for algorithms/screeners) but not drawn.
+    hidden: ClassVar[tuple[str, ...]] = ()
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -62,6 +68,14 @@ class BaseIndicator(ABC):
         """Compute on a pandas OHLC frame; columns are ``<name>_<output>``."""
         out = self.compute(OHLC.from_frame(df), **self.values)
         return pd.DataFrame({f"{self.name}_{k}": np.asarray(v) for k, v in out.items()}, index=df.index)
+
+    def output_of(self, column: str) -> str:
+        """Output name for a column produced by :meth:`__call__` (``"<name>_<output>"``)."""
+        return column[len(self.name) + 1:]
+
+    def is_line(self, column: str) -> bool:
+        out = self.output_of(column)
+        return out not in self.labels and out not in self.hidden
 
     @property
     def label(self) -> str:

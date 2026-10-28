@@ -179,6 +179,8 @@ def optimize(
         raise typer.BadParameter("method must be ga, pso or both")
     algorithm = make_algo(algo, [], members)
     df = load_data(symbol, tf, start, end, bars)
+    if backend == "auto" and not algorithm.vectorized:
+        backend = "numpy"  # loop-based algorithms (e.g. elliott_wave) run on the CPU anyway
     kwargs = dict(population=population, generations=generations, objective=objective, train_fraction=train,
                   backend=select_backend(backend), fee=fee, seed=seed, fixed=parse_kv(fix), min_trades=min_trades)
     n_genes = len([k for k in algorithm.param_space() if k not in kwargs["fixed"]])
