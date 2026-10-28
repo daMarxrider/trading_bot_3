@@ -116,3 +116,20 @@ def test_chart_draws_elliott_wave_labels(app, tmp_path):
     texts = sorted(i.toPlainText() for i in chart.price.items if isinstance(i, pg.TextItem))
     assert texts == sorted("012345ABC")
     assert not chart.panes  # the hidden causal state is not drawn as a pane or line
+
+
+@pytest.mark.parametrize("key", list(BUILTIN))
+def test_param_dialog_uses_theme_background(app, key, tmp_path):
+    from tradebot.gui.params import ParamDialog
+
+    themes = ThemeManager(user_dir=tmp_path)
+    t = themes.apply(key)
+    algo = build_algorithm("rsi_threshold")
+    dlg = ParamDialog("rsi_threshold parameters", algo.param_space(), algo.values)
+    dlg.show()
+    app.processEvents()
+    img = dlg.grab().toImage()
+    # a dialog is its own window: without a background rule it was default light grey, which made
+    # the glass theme's near-white text invisible
+    assert img.pixelColor(1, 1).name() == qcolor(t.bg).name()
+    dlg.close()
