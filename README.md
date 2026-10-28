@@ -129,7 +129,10 @@ of sample. The GUI's Backtest lab offers the same options.
 
 * **Chart**: candles or line, any indicator as an overlay or in its own pane,
   buy/sell markers for any algorithm, a crosshair with an OHLC readout, and
-  drawing tools (trendline, support/resistance level, zone rectangle).
+  drawing tools (trendline, support/resistance level, zone rectangle). The ↕
+  button in the bottom-left corner (on by default) fits the price axis and
+  indicator panes to the candles in view while you scroll or zoom. Scaling the
+  price axis by hand turns it off.
 * **Screener**: filter any universe by technicals, volume and market cap using
   expressions or presets. Double-click a row to open it in the chart.
 * **Backtest lab**: parameter forms generated from each algorithm, equity vs.

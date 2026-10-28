@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
-from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QPainter, QPicture
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -33,6 +33,23 @@ from tradebot.gui.touch import PlotTouchHandler, TouchController
 from tradebot.indicators import INDICATORS
 
 pg.setConfigOptions(antialias=True)
+FIT_PADDING = 0.05  #: auto-fit margin above and below the visible data, as a fraction of its span
+
+
+def visible_y_range(x, series, x0, x1, padding=FIT_PADDING):
+    """Padded (low, high) of all ``series`` (arrays aligned with the sorted ``x``) over ``x0 <= x <= x1``.
+
+    NaNs are ignored; returns None if nothing is visible.
+    """
+    i0, i1 = np.searchsorted(x, x0, "left"), np.searchsorted(x, x1, "right")
+    visible = [np.asarray(s, dtype=float)[i0:i1] for s in series]
+    visible = np.concatenate(visible) if visible else np.empty(0)
+    visible = visible[~np.isnan(visible)]
+    if not visible.size:
+        return None
+    lo, hi = float(visible.min()), float(visible.max())
+    span = (hi - lo) or abs(hi) * 0.01 or 1.0  # flat data: open up a small band around it
+    return lo - padding * span, hi + padding * span
 
 
 class CandlestickItem(pg.GraphicsObject):
@@ -75,6 +92,9 @@ class ChartView(QWidget):
         self.algorithm = None
         self.drawings: list = []
         self._pending_point = None
+        self._x = np.empty(0)
+        self._fit_series: dict = {}  # plot -> the arrays its y-axis auto-fit covers
+        self._adjusting = False  # set while the chart changes view ranges itself, as opposed to the user
 
         # -- toolbar -----------------------------------------------------------------------------
         self.symbol = QLineEdit(watchlist[0] if watchlist else "BTC/USDT")
@@ -144,13 +164,21 @@ class ChartView(QWidget):
         self.price.addItem(self.hline, ignoreBounds=True)
         self.canvas.scene().sigMouseMoved.connect(self._mouse_moved)
         self.canvas.scene().sigMouseClicked.connect(self._mouse_clicked)
+        self.price.vb.sigRangeChanged.connect(self._range_changed)
+
+        self.fit_btn = QToolButton(self.canvas, text="↕", checkable=True, toolTip="Auto-fit price axis to visible candles")
+        self.fit_btn.setChecked(True)  # on by default (a checked= keyword is applied before checkable and lost)
+        size = 40 if themes.touch else 28  # finger-sized in touch mode
+        self.fit_btn.setFixedSize(size, size)
+        self.fit_btn.toggled.connect(self._autofit_toggled)
+        self.canvas.installEventFilter(self)  # keeps the button in the bottom-left corner
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 16, 16, 16)
         lay.addLayout(bar)
         lay.addWidget(self.canvas, 1)
         self.touch = TouchController(self.canvas.viewport(), PlotTouchHandler(
-            self.canvas, self._plot_at, on_tap=self._tap, on_long_press=self._context_menu))
+            self.canvas, self._plot_at, on_tap=self._tap, on_long_press=self._context_menu, on_reset=self.reset_view))
         themes.changed.connect(lambda _: self.redraw())
 
     # -- data ------------------------------------------------------------------------------------
@@ -233,16 +261,19 @@ class ChartView(QWidget):
         for pane in self.panes:
             self.canvas.removeItem(pane)
         self.panes.clear()
+        self._fit_series = {}
         self._style(t)
         if self.df is None or self.df.empty:
             return
         df = self.df
-        x = epoch_seconds(df.index)
+        x = self._x = epoch_seconds(df.index)
         width = (np.median(np.diff(x)) if len(x) > 1 else 86400) * 0.7
         o, h, l, c = (df[k].to_numpy() for k in ("open", "high", "low", "close"))
         if self.style_btn.isChecked():
             self.price.plot(x, c, pen=pg.mkPen(qcolor(t.accent), width=2))
+            self._fit_series[self.price] = [c]
         else:
+            self._fit_series[self.price] = [l, h]
             candles = CandlestickItem()
             candles.set_data(x, o, h, l, c, width, qcolor(t.up), qcolor(t.down))
             self.price.addItem(candles)
@@ -264,6 +295,7 @@ class ChartView(QWidget):
                 target.setTitle(ind.label, color=t.muted, size="9pt")
                 for level in ind.levels:
                     target.addItem(pg.InfiniteLine(level, angle=0, pen=pg.mkPen(qcolor(t.muted), style=Qt.PenStyle.DotLine)))
+                target.vb.sigRangeChanged.connect(self._range_changed)
                 self.panes.append(target)
             for col in frame.columns:
                 if not ind.is_line(col):
@@ -274,8 +306,10 @@ class ChartView(QWidget):
                 color = next(series_colors)
                 if col.endswith("_hist"):
                     target.addItem(pg.BarGraphItem(x=x[ok], height=y[ok], width=width, brush=pg.mkBrush(qcolor(t.muted))))
+                    self._fit_series.setdefault(target, []).append(np.zeros_like(y))  # bars grow from 0
                 else:
                     target.plot(x[ok], y[ok], pen=pg.mkPen(color, width=1.6), name=col)
+                self._fit_series.setdefault(target, []).append(y)
                 legend_items.append((color, col))
         if self.algorithm is not None:
             change = np.diff(np.r_[0.0, self.algorithm.run(df).to_numpy()])
@@ -287,6 +321,8 @@ class ChartView(QWidget):
         self.info.setText("   ".join(f"<span style='color:{c}'>■</span> {n}" for c, n in legend_items))
         if autorange:
             self.reset_view()
+        else:
+            self.fit_y()
 
     def _draw_labels(self, target, ind, frame, col, x, close, t):
         """Text labels of an indicator output (e.g. Elliott wave numbers) at its anchor values."""
@@ -373,9 +409,54 @@ class ChartView(QWidget):
         self._add_drawing(item, "hline")
 
     def reset_view(self):
-        for plot in [self.price, *self.panes]:
-            plot.autoRange()  # autoRange() disables auto range in pyqtgraph, so re-enable afterwards
-            plot.enableAutoRange()
+        self._adjusting = True
+        try:
+            for plot in [self.price, *self.panes]:
+                plot.autoRange()  # autoRange() disables auto range in pyqtgraph, so re-enable afterwards
+                plot.enableAutoRange()
+        finally:
+            self._adjusting = False
+        self.fit_y()
+
+    # -- y-axis auto-fit -------------------------------------------------------------------------
+    @property
+    def autofit(self) -> bool:
+        return self.fit_btn.isChecked()
+
+    def fit_y(self):
+        """Fit each plot's y-axis to its data inside the visible time range (while auto-fit is on)."""
+        if not self.autofit:
+            return
+        x0, x1 = self.price.vb.viewRange()[0]
+        self._adjusting = True
+        try:
+            for plot in [self.price, *self.panes]:
+                plot.enableAutoRange(y=False)  # pyqtgraph would otherwise fit y to all data
+                bounds = visible_y_range(self._x, self._fit_series.get(plot, []), x0, x1)
+                if bounds is not None:
+                    plot.setYRange(*bounds, padding=0)
+        finally:
+            self._adjusting = False
+
+    def _range_changed(self, vb, _ranges, changed):
+        if self._adjusting or not self.autofit:
+            return
+        if changed[0]:
+            self.fit_y()  # scrolled or zoomed in time
+        elif changed[1] and not vb.state["autoRange"][1]:
+            self.fit_btn.setChecked(False)  # the user scaled the price axis: respect it
+
+    def _autofit_toggled(self, on):
+        if on:
+            self.fit_y()
+        else:
+            for plot in [self.price, *self.panes]:
+                plot.enableAutoRange(y=False)  # keep the current y-range until the user changes it
+
+    def eventFilter(self, obj, event):
+        if obj is self.canvas and event.type() == QEvent.Type.Resize:
+            self.fit_btn.move(8, self.canvas.height() - self.fit_btn.height() - 8)
+        return super().eventFilter(obj, event)
 
     def _context_menu(self, scene_pos, global_pos):
         """Secondary actions: right click, or long press on a touchscreen."""

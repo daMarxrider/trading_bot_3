@@ -193,6 +193,7 @@ S = QEventPoint.State
 
 
 def test_pinch_zooms_time_axis(chart):
+    chart.fit_btn.setChecked(False)  # test the gesture alone; auto-fit would refit the price axis
     vp = chart.canvas.viewport()
     c = vp.rect().center()
     (x0, x1), (y0, y1) = chart.price.vb.viewRange()

@@ -224,11 +224,12 @@ class PlotTouchHandler(GestureHandler):
 
     ``plot_at(scene_pos)`` returns the PlotItem under a point; ``on_tap`` /
     ``on_long_press`` receive the scene position (and the global position for menus).
+    ``on_reset`` replaces the default double-tap reset (auto range of the touched plot).
     """
 
-    def __init__(self, view, plot_at, on_tap=None, on_long_press=None):
+    def __init__(self, view, plot_at, on_tap=None, on_long_press=None, on_reset=None):
         self.view, self.plot_at = view, plot_at
-        self.tap_cb, self.long_press_cb = on_tap, on_long_press
+        self.tap_cb, self.long_press_cb, self.reset_cb = on_tap, on_long_press, on_reset
         self._plot = None
 
     def _scene(self, x, y) -> QPointF:
@@ -252,6 +253,9 @@ class PlotTouchHandler(GestureHandler):
         vb.scaleBy(s=(1 / sx, 1 / sy), center=vb.mapSceneToView(self._scene(cx, cy)))
 
     def on_double_tap(self, x, y):
+        if self.reset_cb:
+            self.reset_cb()
+            return
         plot = self.plot_at(self._scene(x, y)) or self._plot
         if plot is not None:
             plot.autoRange()  # fit now (this also disables auto range in pyqtgraph) ...
