@@ -11,7 +11,7 @@ from tradebot.algorithms import ALGORITHMS
 from tradebot.brokers import BROKERS, ReadOnlyBrokerError
 from tradebot.brokers.base import ManualExecutionBroker
 from tradebot.brokers.crypto import BinanceBroker, KucoinBroker
-from tradebot.brokers.stocks import ScalableCapitalBroker
+from tradebot.brokers.stocks import TradeRepublicBroker
 from tradebot.core.models import ExecutionMode, OrderStatus, OrderType, Side
 from tradebot.core.registry import load_plugins
 from tradebot.data import DataUnavailable, MarketDataEngine
@@ -82,7 +82,7 @@ def test_semi_auto_broker_creates_intents(tmp_path):
     csv = tmp_path / "h.csv"
     csv.write_text("Symbol,Quantity,Avg_Cost\nAAPL,10,150\nSAP.DE,5,\n")
     seen = []
-    b = ScalableCapitalBroker({"holdings_csv": str(csv)}, on_intent=seen.append)
+    b = TradeRepublicBroker({"holdings_csv": str(csv)}, on_intent=seen.append)
     pos = b.get_positions()
     assert [(p.symbol, p.quantity, p.avg_cost) for p in pos] == [("AAPL", 10, 150), ("SAP.DE", 5, None)]
     order = b.place_order("AAPL", "buy", 3)
