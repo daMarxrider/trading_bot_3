@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
 )
 
 from tradebot import __version__
-from tradebot.config import load_config, watchlist
+from tradebot.config import Settings, load_config, watchlist
 from tradebot.core.registry import load_plugins
 from tradebot.data import MarketDataEngine
 from tradebot.data.providers import quiet_yfinance
@@ -33,7 +33,7 @@ from tradebot.gui.views import BacktestView, NewsView, PortfolioView, ScreenerVi
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, themes: ThemeManager, theme_key: str = "glass"):
+    def __init__(self, themes: ThemeManager, theme_key: str = "glass", settings: Settings | None = None):
         super().__init__()
         self.setWindowTitle("tradebot")
         self.resize(1440, 900)
@@ -42,7 +42,7 @@ class MainWindow(QMainWindow):
         symbols = watchlist()
         self.portfolio_symbols: list[str] = []
 
-        self.chart = ChartView(engine, themes, symbols)
+        self.chart = ChartView(engine, themes, symbols, settings)
         self.screener = ScreenerView(engine, themes, symbols)
         self.news = NewsView(themes, lambda: list(dict.fromkeys(symbols + self.portfolio_symbols)))
         self.portfolio = PortfolioView(engine, themes)
@@ -122,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
     # touch_mode: "auto" (default, on when a touchscreen is present), "on" or "off"
     mode = str(config.get("touch_mode", "auto")).lower()
     themes = ThemeManager(touch=mode == "on" or (mode == "auto" and has_touchscreen()))
-    window = MainWindow(themes, config.get("theme", "glass"))
+    window = MainWindow(themes, config.get("theme", "glass"), Settings())
     window.show()
     return app.exec()
 
