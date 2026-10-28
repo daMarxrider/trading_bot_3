@@ -27,7 +27,7 @@ def test_fmt_value():
     assert fmt_value(184.2) == "184.20"
     assert fmt_value(-1.95349) == "-1.9535"
     assert fmt_value(0.123456) == "0.12346"
-    assert fmt_value(float("nan")) == "–" and fmt_value(0) == "0.00"
+    assert fmt_value(float("nan")) == "–" and fmt_value(0) == "0" and fmt_value(66.0) == "66"
 
 
 @pytest.fixture
