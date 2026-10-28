@@ -102,6 +102,10 @@ QCalendarWidget QAbstractItemView {{ selection-background-color: {accent}; selec
 QCalendarWidget QAbstractItemView:disabled {{ color: {muted}; }}
 QComboBox QAbstractItemView, QMenu, QAbstractItemView#SymbolPopup {{ background: {menu_bg}; border: 1px solid {panel_border}; selection-background-color: {selection}; }}
 QMenu::item {{ padding: 5px 22px; }}
+QMenu QPushButton#LoadoutName {{ background: transparent; border: none; border-radius: 0; text-align: left; padding: 5px 22px; }}
+QMenu QPushButton#LoadoutName:hover {{ background: {selection}; }}
+QMenu QToolButton#LoadoutDelete {{ background: transparent; border: none; color: {muted}; padding: 2px 8px; }}
+QMenu QToolButton#LoadoutDelete:hover {{ color: {down}; }}
 QMenu::item:selected {{ background: {selection}; }}
 QTableView, QListWidget {{ background: {panel}; border: 1px solid {panel_border}; border-radius: {radius}px;
     gridline-color: {grid}; selection-background-color: {selection}; alternate-background-color: {alt_row}; }}
