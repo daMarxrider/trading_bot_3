@@ -21,7 +21,7 @@ The core (CLI, backtests, CPU optimizer) needs none of them.
 ## Download / run the binary
 
 Every release on the [Releases page](https://github.com/daMarxrider/trading_bot_3/releases)
-has standalone builds that need no Python. One binary is both the CLI and the
+has standalone builds for Linux and Windows that need no Python. One binary is both the CLI and the
 desktop app (`tradebot gui`). The builds are CPU-only (no `gpu` extra) and
 **unsigned**. Each archive has a `.sha256` checksum next to it.
 
@@ -41,6 +41,19 @@ have. On Debian/Ubuntu:
 ```sh
 sudo apt install libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libdbus-1-3 libxcb-cursor0
 ```
+
+**Windows (x86_64, Windows 10/11).** Unzip
+`tradebot-v1.0.0-windows-x86_64.zip`, then run `tradebot-gui.exe` for the
+desktop app (no console window) or `tradebot.exe` in a terminal for the CLI:
+
+```powershell
+(Get-FileHash tradebot-v1.0.0-windows-x86_64.zip).Hash   # compare with the .sha256 file
+.\tradebot\tradebot.exe --help
+```
+
+Because the binaries are unsigned, SmartScreen warns on first start ("Windows
+protected your PC"). Click **More info → Run anyway**. Config, plugins and
+themes live in `%USERPROFILE%\.config\tradebot\`, the same layout as on Linux.
 
 **Plugins in the binary.** Plugin files from `~/.config/tradebot/plugins/` (or
 `$TRADEBOT_PLUGIN_DIR`) load as usual and can import any `tradebot` module and
