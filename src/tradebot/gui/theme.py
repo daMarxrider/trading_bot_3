@@ -88,11 +88,18 @@ QPushButton#Nav:checked {{ background: {selection}; color: {text}; font-weight: 
 QToolButton {{ background: {input_bg}; border: 1px solid {panel_border}; border-radius: {radius_sm}px; padding: 5px 9px; }}
 QToolButton:checked {{ background: {accent}; color: #ffffff; }}
 QToolButton::menu-indicator {{ image: none; }}
-QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit {{
+QLineEdit, QComboBox, QAbstractSpinBox, QPlainTextEdit {{
     background: {input_bg}; border: 1px solid {panel_border}; border-radius: {radius_sm}px; padding: 5px 8px;
     selection-background-color: {selection};
 }}
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus {{ border-color: {accent}; }}
+QLineEdit:focus, QComboBox:focus, QAbstractSpinBox:focus, QPlainTextEdit:focus {{ border-color: {accent}; }}
+QCalendarWidget QWidget {{ background: {menu_bg}; color: {text}; alternate-background-color: {menu_bg}; }}
+QCalendarWidget QWidget#qt_calendar_navigationbar {{ border-bottom: 1px solid {panel_border}; }}
+QCalendarWidget QToolButton {{ background: transparent; border: none; color: {text}; font-weight: 600; padding: 4px 8px; }}
+QCalendarWidget QToolButton:hover {{ background: {selection}; }}
+QCalendarWidget QToolButton#qt_calendar_prevmonth, QCalendarWidget QToolButton#qt_calendar_nextmonth {{ font-size: 18px; }}
+QCalendarWidget QAbstractItemView {{ selection-background-color: {accent}; selection-color: #ffffff; outline: 0; }}
+QCalendarWidget QAbstractItemView:disabled {{ color: {muted}; }}
 QComboBox QAbstractItemView, QMenu, QAbstractItemView#SymbolPopup {{ background: {menu_bg}; border: 1px solid {panel_border}; selection-background-color: {selection}; }}
 QMenu::item {{ padding: 5px 22px; }}
 QMenu::item:selected {{ background: {selection}; }}
@@ -115,7 +122,7 @@ QToolTip {{ background: {menu_bg}; color: {text}; border: 1px solid {panel_borde
 TOUCH_QSS = """
 QPushButton, QToolButton {{ min-height: 30px; padding: 8px 16px; }}
 QPushButton#Nav {{ min-height: 34px; padding: 12px 16px; }}
-QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{ min-height: 30px; }}
+QLineEdit, QComboBox, QAbstractSpinBox {{ min-height: 30px; }}
 QSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{ width: 28px; }}
 QComboBox QAbstractItemView::item, QMenu::item, QAbstractItemView#SymbolPopup::item {{ min-height: 36px; padding: 6px 24px; }}
 QCheckBox::indicator {{ width: 24px; height: 24px; }}

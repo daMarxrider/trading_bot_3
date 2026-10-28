@@ -20,7 +20,7 @@ from PyQt6.QtCore import (
     QTimer,
     pyqtSignal,
 )
-from PyQt6.QtGui import QColor, QStandardItem, QStandardItemModel
+from PyQt6.QtGui import QColor, QIcon, QStandardItem, QStandardItemModel
 from PyQt6.QtWidgets import (
     QCalendarWidget,
     QCompleter,
@@ -153,6 +153,15 @@ class Kpi(QFrame):
 
 
 class _Calendar(QCalendarWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # Qt's month arrows are fixed dark icons, invisible on dark themes; text follows the theme colour
+        for name, arrow in (("qt_calendar_prevmonth", "‹"), ("qt_calendar_nextmonth", "›")):
+            button = self.findChild(QToolButton, name)
+            if button is not None:
+                button.setIcon(QIcon())
+                button.setText(arrow)
+
     def showEvent(self, event):
         super().showEvent(event)
         if self.selectedDate() == self.minimumDate():  # unset field: open on this month, not 1970

@@ -185,3 +185,45 @@ def test_chart_and_lab_request_a_candle_count_or_the_date_range(app, tmp_path):
     lab.dates.start.setDate(QDate(2020, 1, 1))
     lab._data()
     assert engine.calls[-1]["start"] == pd.Timestamp("2020-01-01", tz="UTC")  # the dates win over the count
+
+
+def _contrast(a, b) -> float:
+    """WCAG contrast ratio of two QColors."""
+    def lum(c):
+        ch = [v / 255 for v in (c.red(), c.green(), c.blue())]
+        ch = [v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4 for v in ch]
+        return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2]
+
+    hi, lo = sorted((lum(a), lum(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+@pytest.mark.parametrize("key", list(BUILTIN))
+def test_date_fields_and_calendar_are_readable(app, key, tmp_path):
+    from PyQt6.QtCore import QDate
+
+    from tradebot.gui.common import DateRange
+    from tradebot.gui.theme import GlassBackdrop
+
+    themes = ThemeManager(user_dir=tmp_path)
+    t = themes.apply(key)
+    host = GlassBackdrop(themes)  # the glass inputs are translucent: render them over the real backdrop
+    dates = DateRange(host)
+    dates.start.setDate(QDate(2024, 3, 1))
+    host.resize(420, 60)
+    host.show()
+    app.processEvents()
+    from PyQt6.QtCore import QPoint, QRect
+
+    # the empty "to: now" field, grabbed from the window so translucent glass shows what's really behind it
+    field = host.grab(QRect(dates.end.mapTo(host, QPoint(0, 0)), dates.end.size())).toImage()
+    background = field.pixelColor(field.width() - 30, field.height() // 2)
+    # the text uses the theme's text colour; unstyled date edits were white, i.e. unreadable in dark themes
+    assert _contrast(background, qcolor(t.text)) > 4.5
+    calendar = dates.start.calendarWidget()
+    calendar.resize(300, 220)
+    calendar.show()
+    app.processEvents()
+    grid = calendar.grab().toImage()
+    assert _contrast(grid.pixelColor(grid.width() // 2, grid.height() - 3), qcolor(t.text)) > 4.5
+    calendar.hide()
