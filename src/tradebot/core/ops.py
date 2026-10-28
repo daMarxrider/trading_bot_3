@@ -66,6 +66,10 @@ def cumsum(x):
     return torch.cumsum(x, dim=-1) if is_torch(x) else np.cumsum(x, axis=-1)
 
 
+def cumprod(x):
+    return torch.cumprod(x, dim=-1) if is_torch(x) else np.cumprod(x, axis=-1)
+
+
 def cummax(x):
     return torch.cummax(x, dim=-1).values if is_torch(x) else np.maximum.accumulate(x, axis=-1)
 
