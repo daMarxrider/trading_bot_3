@@ -37,6 +37,12 @@ pg.setConfigOptions(antialias=True)
 FIT_PADDING = 0.05  #: auto-fit margin above and below the visible data, as a fraction of its span
 
 
+def nearest_bar(x, t: float) -> int:
+    """Index of the bar in the sorted ``x`` closest to time ``t``."""
+    i = int(np.clip(np.searchsorted(x, t), 1, len(x) - 1)) if len(x) > 1 else 0
+    return i - 1 if len(x) > 1 and t - x[i - 1] < x[i] - t else i
+
+
 def visible_y_range(x, series, x0, x1, padding=FIT_PADDING):
     """Padded (low, high) of all ``series`` (arrays aligned with the sorted ``x``) over ``x0 <= x <= x1``.
 
@@ -162,10 +168,9 @@ class ChartView(QWidget):
         self.price.showAxis("right")
         self.price.hideAxis("left")
         self.panes: list[pg.PlotItem] = []
-        self.vline = pg.InfiniteLine(angle=90, movable=False)
-        self.hline = pg.InfiniteLine(angle=0, movable=False)
-        self.price.addItem(self.vline, ignoreBounds=True)
-        self.price.addItem(self.hline, ignoreBounds=True)
+        # crosshair: per pane a vertical line (shown in every pane) and a horizontal one (hovered pane only)
+        self._cross: dict = {}
+        self.vline, self.hline = self._add_crosshair(self.price)
         self.canvas.scene().sigMouseMoved.connect(self._mouse_moved)
         self.canvas.scene().sigMouseClicked.connect(self._mouse_clicked)
         self.price.vb.sigRangeChanged.connect(self._range_changed)
@@ -256,8 +261,21 @@ class ChartView(QWidget):
                 ax.setPen(pg.mkPen(qcolor(t.panel_border)))
                 ax.setTextPen(pg.mkPen(qcolor(t.muted)))
         cross = pg.mkPen(qcolor(t.muted), width=1, style=Qt.PenStyle.DashLine)
-        self.vline.setPen(cross)
-        self.hline.setPen(cross)
+        for vline, hline in self._cross.values():
+            vline.setPen(cross)
+            hline.setPen(cross)
+            hline.label.setColor(qcolor(t.text))
+            hline.label.fill = pg.mkBrush(qcolor(t.panel_border))
+
+    def _add_crosshair(self, plot):
+        vline = pg.InfiniteLine(angle=90, movable=False)
+        # the value under the cursor, at the right edge next to the axis
+        hline = pg.InfiniteLine(angle=0, movable=False, label="{value:.6g}", labelOpts={"position": 0.98})
+        hline.setVisible(False)  # until the cursor is over this pane
+        for line in (vline, hline):
+            plot.addItem(line, ignoreBounds=True)  # never part of auto-fit or view ranges
+        self._cross[plot] = (vline, hline)
+        return vline, hline
 
     def redraw(self, autorange: bool = False):
         t = self.themes.current
@@ -266,6 +284,7 @@ class ChartView(QWidget):
                 self.price.removeItem(item)
         for pane in self.panes:
             self.canvas.removeItem(pane)
+            self._cross.pop(pane, None)
         self.panes.clear()
         self._fit_series = {}
         self._style(t)
@@ -302,6 +321,7 @@ class ChartView(QWidget):
                 for level in ind.levels:
                     target.addItem(pg.InfiniteLine(level, angle=0, pen=pg.mkPen(qcolor(t.muted), style=Qt.PenStyle.DotLine)))
                 target.vb.sigRangeChanged.connect(self._range_changed)
+                self._add_crosshair(target)
                 self.panes.append(target)
             for col in frame.columns:
                 if not ind.is_line(col):
@@ -352,13 +372,17 @@ class ChartView(QWidget):
 
     # -- crosshair & drawing tools ---------------------------------------------------------------
     def _mouse_moved(self, pos):
-        if self.df is None or not self.price.sceneBoundingRect().contains(pos):
+        """Crosshair through every pane at the hovered bar, from whichever pane the cursor is over (#46)."""
+        plot = self._plot_at(pos)
+        if self.df is None or self.df.empty or plot is None:
             return
-        pt = self.price.vb.mapSceneToView(pos)
-        self.vline.setPos(pt.x())
-        self.hline.setPos(pt.y())
-        idx = epoch_seconds(self.df.index)
-        i = int(np.clip(np.searchsorted(idx, pt.x()), 0, len(idx) - 1))
+        pt = plot.vb.mapSceneToView(pos)
+        i = nearest_bar(self._x, pt.x())
+        for p, (vline, hline) in self._cross.items():
+            vline.setPos(self._x[i])  # panes are x-linked: the same time everywhere, snapped to the bar
+            hline.setVisible(p is plot)
+            if p is plot:
+                hline.setPos(pt.y())
         row = self.df.iloc[i]
         chg = row.close / row.open - 1
         self.status.emit(f"{self.df.index[i]:%Y-%m-%d %H:%M}  O {row.open:.6g}  H {row.high:.6g}  "
