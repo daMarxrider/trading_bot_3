@@ -63,7 +63,8 @@ def test_cagr_uses_observed_bar_frequency():
     df = pd.DataFrame({"open": c, "high": c, "low": c, "close": c}, index=idx)
     assert 250 < infer_periods_per_year(idx) < 262
     res = backtest(df, Fixed(np.ones(253)), fee=0.0)
-    assert res.metrics["cagr"] == pytest.approx(0.5, rel=0.03)
+    years = (idx[-1] - idx[0]).days / 365.25
+    assert res.metrics["cagr"] == pytest.approx(1.5 ** (1 / years) - 1)
 
 
 def test_max_drawdown():

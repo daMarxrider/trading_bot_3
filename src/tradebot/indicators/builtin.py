@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from tradebot.core import ops
 from tradebot.core.registry import IntParam, Param
 from tradebot.indicators.base import BaseIndicator
@@ -39,9 +41,11 @@ class RSI(BaseIndicator):
     @classmethod
     def compute(cls, o, period):
         delta = o.close - ops.shift(o.close, 1)
-        gain = ops.wilder(ops.where(delta > 0, delta, 0.0), period)
-        loss = ops.wilder(ops.where(delta < 0, -delta, 0.0), period)
-        rsi = 100 - 100 / (1 + gain / loss)
+        # NaN (first bar) must stay NaN so the averages seed on the first real delta
+        gain = ops.wilder(ops.where(delta < 0, 0.0, delta), period)
+        loss = ops.wilder(ops.where(delta > 0, 0.0, -delta), period)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            rsi = 100 - 100 / (1 + gain / loss)
         rsi = ops.where(loss == 0, 100.0, rsi)
         # Wilder's average is undefined until `period` deltas have been seen
         rsi = ops.where(ops.isnan(ops.shift(o.close, period)), ops.NAN, rsi)
@@ -101,7 +105,8 @@ class Stochastic(BaseIndicator):
     @classmethod
     def compute(cls, o, period, smooth):
         hh, ll = ops.rolling_max(o.high, period), ops.rolling_min(o.low, period)
-        k = 100 * (o.close - ll) / (hh - ll)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            k = 100 * (o.close - ll) / (hh - ll)
         return {"k": k, "d": ops.sma(k, smooth)}
 
 

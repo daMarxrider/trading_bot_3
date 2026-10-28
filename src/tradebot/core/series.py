@@ -31,7 +31,7 @@ class OHLC:
         """Build from a normalized frame; ``device`` (e.g. ``"cuda"``) yields torch tensors."""
         cols = [df[c].to_numpy(dtype=np.float64) for c in ("open", "high", "low", "close")]
         if device is not None:
-            cols = [ops.torch.as_tensor(c, dtype=ops.torch.float64, device=device) for c in cols]
+            cols = [ops.torch.tensor(c, dtype=ops.torch.float64, device=device) for c in cols]
         return cls(*cols)
 
     def __len__(self) -> int:

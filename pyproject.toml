@@ -28,7 +28,9 @@ all = ["tradebot[gui,gpu,traderepublic]"]
 tradebot = "tradebot.cli.main:app"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = [
+    "pytest>=8",
+]
 
 [build-system]
 requires = ["hatchling"]
