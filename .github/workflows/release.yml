@@ -28,10 +28,20 @@ jobs:
         include:
           - os: ubuntu-22.04  # oldest available runner: a binary built against an old glibc also runs on newer distros
             platform: linux-x86_64
+            bin: dist/tradebot
             gui: ./tradebot gui
           - os: windows-latest
             platform: windows-x86_64
+            bin: dist/tradebot
             gui: ./tradebot-gui.exe  # the windowed exe without a console
+          - os: macos-15  # Apple Silicon
+            platform: macos-arm64
+            bin: dist/tradebot.app/Contents/MacOS
+            gui: ./tradebot-gui  # what opening tradebot.app runs
+          - os: macos-15-intel  # GitHub's last Intel image
+            platform: macos-x86_64
+            bin: dist/tradebot.app/Contents/MacOS
+            gui: ./tradebot-gui
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     defaults:
@@ -55,14 +65,14 @@ jobs:
         run: uv run pyinstaller --noconfirm packaging/tradebot.spec
 
       - name: Smoke test
-        working-directory: dist/tradebot
+        working-directory: ${{ matrix.bin }}
         env:
           QT_QPA_PLATFORM: offscreen
           TRADEBOT_PLUGIN_DIR: ${{ github.workspace }}/examples/plugins
         run: |
           ./tradebot --help
           ./tradebot list algorithms | grep donchian_breakout  # built-ins plus a directory plugin
-          ls _internal/plotext/_kernel/cpp/kernel.*  # the terminal charts need plotext's C++ kernel
+          find "$GITHUB_WORKSPACE/dist" -path '*/plotext/_kernel/cpp/kernel.*' | grep .  # the terminal charts need plotext's C++ kernel
           ${{ matrix.gui }} & pid=$!
           sleep 20
           kill -0 $pid  # still running after 20 s = the GUI started fine
@@ -74,11 +84,14 @@ jobs:
           if [[ "$RUNNER_OS" == Windows ]]; then
             asset=tradebot-$version-${{ matrix.platform }}.zip
             (cd dist && 7z a -tzip -bd "../$asset" tradebot >/dev/null)
+          elif [[ "$RUNNER_OS" == macOS ]]; then
+            asset=tradebot-$version-${{ matrix.platform }}.zip
+            ditto -c -k --keepParent dist/tradebot.app "$asset"  # keeps the bundle's symlinks and ad-hoc signature
           else
             asset=tradebot-$version-${{ matrix.platform }}.tar.gz
             tar -czf "$asset" -C dist tradebot  # tar keeps the executable bit, which artifact zips would drop
           fi
-          sha256sum "$asset" > "$asset.sha256"
+          shasum -a 256 "$asset" > "$asset.sha256"  # same output as sha256sum; macOS has no sha256sum
 
       - uses: actions/upload-artifact@v7
         with:
