@@ -91,7 +91,8 @@ jobs:
             asset=tradebot-$version-${{ matrix.platform }}.tar.gz
             tar -czf "$asset" -C dist tradebot  # tar keeps the executable bit, which artifact zips would drop
           fi
-          shasum -a 256 "$asset" > "$asset.sha256"  # same output as sha256sum; macOS has no sha256sum
+          if [[ "$RUNNER_OS" == macOS ]]; then sha="shasum -a 256"; else sha=sha256sum; fi  # each OS lacks the other
+          $sha "$asset" > "$asset.sha256"
 
       - uses: actions/upload-artifact@v7
         with:
