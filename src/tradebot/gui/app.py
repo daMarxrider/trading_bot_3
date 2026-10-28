@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
 )
 
 from tradebot import __version__
-from tradebot.config import Settings, load_config, watchlist
+from tradebot.config import Settings, config_path, load_config, save_config_value, watchlist
 from tradebot.core.registry import load_plugins
 from tradebot.data import MarketDataEngine
 from tradebot.data.providers import quiet_yfinance
@@ -79,7 +79,7 @@ class MainWindow(QMainWindow):
         self.theme_box = QComboBox()
         for key, theme in themes.themes.items():
             self.theme_box.addItem(theme.name, key)
-        self.theme_box.currentIndexChanged.connect(lambda _: themes.apply(self.theme_box.currentData()))
+        self.theme_box.currentIndexChanged.connect(lambda _: self._theme_chosen(self.theme_box.currentData()))
         side.addWidget(self.theme_box)
 
         # cross-page navigation
@@ -109,10 +109,18 @@ class MainWindow(QMainWindow):
         for page in pages:
             page[2].status.connect(self.statusBar().showMessage)
 
-        idx = self.theme_box.findData(theme_key if theme_key in themes.themes else "glass")
+        idx = self.theme_box.findData(theme_key if theme_key in themes.themes else "glass")  # e.g. a deleted user theme
+        self.theme_box.blockSignals(True)  # starting with the configured theme isn't a choice to save
         self.theme_box.setCurrentIndex(idx)
+        self.theme_box.blockSignals(False)
         themes.apply(self.theme_box.currentData())
         self.chart.load()
+
+    def _theme_chosen(self, key: str):
+        """Apply a theme picked in the sidebar and remember it as ``theme`` in the config file (#49)."""
+        self.themes.apply(key)
+        if not save_config_value("theme", key):
+            self.statusBar().showMessage(f"theme not saved: couldn't write {config_path()}", 8000)
 
 
 def main(argv: list[str] | None = None) -> int:

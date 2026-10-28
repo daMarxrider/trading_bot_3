@@ -217,6 +217,10 @@ password = "..."            # KuCoin API passphrase
 holdings_csv = "~/finance/scalable.csv"   # columns: symbol,quantity,avg_cost
 ```
 
+Choosing a theme in the app saves it as `theme` in this file, so the app starts
+with it next time. Only that line changes; your comments and other settings stay
+as they are, and a missing file is created.
+
 Settings the app remembers by itself (such as the chart's auto-fit toggle) are
 saved in `settings.json` in the OS config folder, not in `config.toml`:
 `$XDG_CONFIG_HOME/tradebot/` (usually `~/.config/tradebot/`) on Linux,
