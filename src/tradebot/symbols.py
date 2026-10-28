@@ -11,13 +11,20 @@
 Remote sources are slow, so :meth:`SymbolSearch.local` answers immediately and
 :meth:`SymbolSearch.search` adds the network results; errors there are swallowed,
 so search degrades to local suggestions when offline.
+
+Shell completion starts a new process for every TAB, so it can't keep anything in
+memory: it uses :func:`yahoo_search_http` (no yfinance import), and keeps the
+crypto pairs and recent queries in on-disk caches (see ``cache`` arguments).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
-from dataclasses import dataclass
+import time
+from dataclasses import astuple, dataclass
+from pathlib import Path
 from typing import Callable, Iterable
 
 log = logging.getLogger(__name__)
@@ -62,8 +69,25 @@ def rank(query: str, match: SymbolMatch) -> int | None:
 def yahoo_search(query: str, limit: int = 12) -> list[SymbolMatch]:
     import yfinance as yf
 
+    return _yahoo_matches(yf.Search(query, max_results=limit, news_count=0).quotes)
+
+
+YAHOO_SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search"
+
+
+def yahoo_search_http(query: str, limit: int = 12, timeout: float = 1.0) -> list[SymbolMatch]:
+    """Same as :func:`yahoo_search` over plain HTTP: no ~0.5 s yfinance import, and a hard timeout."""
+    import requests
+
+    resp = requests.get(YAHOO_SEARCH_URL, params={"q": query, "quotesCount": limit, "newsCount": 0},
+                        headers={"User-Agent": "Mozilla/5.0"}, timeout=timeout)
+    resp.raise_for_status()
+    return _yahoo_matches(resp.json().get("quotes", []))
+
+
+def _yahoo_matches(quotes: list[dict]) -> list[SymbolMatch]:
     out = []
-    for q in yf.Search(query, max_results=limit, news_count=0).quotes:
+    for q in quotes:
         kind = YAHOO_TYPES.get(q.get("quoteType", ""))
         symbol = q.get("symbol", "")
         if not kind or not symbol:
@@ -76,18 +100,35 @@ def yahoo_search(query: str, limit: int = 12) -> list[SymbolMatch]:
 
 
 class CryptoPairs:
-    """Spot pairs of the first ccxt exchange that answers, loaded once per session."""
+    """Spot pairs of the first ccxt exchange that answers, loaded once per session.
 
-    def __init__(self, exchange_ids: Iterable[str] = ("binance", "kucoin", "kraken")):
+    With ``cache`` (a JSON file), the list also survives across processes for ``max_age`` seconds.
+    """
+
+    def __init__(self, exchange_ids: Iterable[str] = ("binance", "kucoin", "kraken"), cache: Path | None = None,
+                 max_age: float = 86400.0):
         self.exchange_ids = tuple(exchange_ids)
+        self.cache, self.max_age = cache, max_age
         self._pairs: list[SymbolMatch] | None = None
         self._lock = threading.Lock()
 
     def load(self) -> list[SymbolMatch]:
         with self._lock:  # one download even if several searches start at once
             if self._pairs is None:
+                self._pairs = self._read_cache()
+            if self._pairs is None:
                 self._pairs = self._fetch()
+                if self._pairs:  # don't cache an outage
+                    _write_json(self.cache, [astuple(m) for m in self._pairs])
             return self._pairs
+
+    def _read_cache(self) -> list[SymbolMatch] | None:
+        if self.cache is None or not self.cache.is_file() or time.time() - self.cache.stat().st_mtime > self.max_age:
+            return None
+        try:
+            return [SymbolMatch(*row) for row in json.loads(self.cache.read_text())]
+        except (OSError, ValueError, TypeError):
+            return None
 
     def _fetch(self) -> list[SymbolMatch]:
         import ccxt
@@ -135,6 +176,46 @@ class SymbolSearch:
         return [m for _, _, m in sorted(scored, key=lambda t: t[:2])]  # stable: source order breaks ties
 
 
-def _crypto_source() -> Callable[[str], list[SymbolMatch]]:
-    pairs = CryptoPairs()
+def _crypto_source(cache: Path | None = None) -> Callable[[str], list[SymbolMatch]]:
+    pairs = CryptoPairs(cache=cache)
     return lambda query: pairs.load()
+
+
+def cached_queries(source: Callable[[str], list[SymbolMatch]], cache: Path, max_age: float = 7 * 86400.0,
+                   keep: int = 300) -> Callable[[str], list[SymbolMatch]]:
+    """Wrap a search source with a JSON cache of recent queries (failures aren't cached)."""
+
+    def search(query: str) -> list[SymbolMatch]:
+        key = query.strip().lower()
+        try:
+            entries = json.loads(cache.read_text())
+        except (OSError, ValueError):
+            entries = {}
+        hit = entries.get(key)
+        if hit and time.time() - hit[0] <= max_age:
+            return [SymbolMatch(*row) for row in hit[1]]
+        found = source(query)  # may raise: SymbolSearch treats that as "source unavailable"
+        entries[key] = [time.time(), [astuple(m) for m in found]]
+        newest = sorted(entries.items(), key=lambda kv: kv[1][0])[-keep:]
+        _write_json(cache, dict(newest))
+        return found
+
+    return search
+
+
+def cli_symbol_search(local: Callable[[], Iterable[str]], cache_dir: Path) -> SymbolSearch:
+    """The search for shell completion: everything that can come from disk does."""
+    return SymbolSearch(local, remote=[_crypto_source(cache_dir / "crypto_pairs.json"),
+                                       cached_queries(yahoo_search_http, cache_dir / "symbol_search.json")])
+
+
+def _write_json(path: Path | None, data) -> None:
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data))
+        tmp.replace(path)
+    except OSError as exc:
+        log.debug("could not write cache %s: %s", path, exc)

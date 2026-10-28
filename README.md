@@ -108,6 +108,26 @@ request reaching further back returns what exists and prints a warning. In the
 GUI, the chart and the Backtest lab have optional From/To dates that override the
 candle count.
 
+**Tab completion** (bash, fish, zsh, PowerShell). Run this once, *from the shell you want it in*:
+it detects the shell and installs the completion script (bash: `~/.bash_completions/`, fish:
+`~/.config/fish/completions/tradebot.fish`). Open a new shell afterwards.
+
+```sh
+tradebot --install-completion
+tradebot --show-completion      # print the script instead, to install it by hand
+```
+
+TAB then completes commands and options, algorithm and indicator names (plugins
+included), `-p`/`--fix` parameters of the chosen algorithm with defaults and ranges,
+`-i name:param=`, `--members`, brokers, timeframes and fixed choices. Symbols
+complete by ticker, case-insensitively: your watchlist first, then crypto pairs
+(`sol` → `SOL/USDT`) and stocks/ETFs from Yahoo (`nvd` → `NVDA`, …). Shells match
+suggestions against what you typed, so unlike the GUI you can't find a ticker by
+company name here. The `tradebot` command must be on your `PATH` (an activated
+venv, `uv tool install`, or the standalone binary). Lookups are cached in the OS
+cache folder (e.g. `~/.cache/tradebot/`), so after the first TAB a completion
+takes about half a second.
+
 Charts are rendered with plotext, so they work in fish, bash and zsh.
 `optimize` evolves parameters on the first 70 % of the data and reports the
 remaining 30 % out-of-sample. Candidates with fewer than `--min-trades` round

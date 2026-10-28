@@ -13,18 +13,25 @@ from rich.console import Console
 from rich.table import Table
 
 from tradebot.algorithms import ALGORITHMS, build_algorithm
+from tradebot.cli import complete
 from tradebot.brokers import BROKERS, create_broker
 from tradebot.core.registry import load_plugins
 from tradebot.indicators import INDICATORS
 
+complete.match_case_insensitively()  # before the commands are built: "sol" TAB -> SOL/USDT
 app = typer.Typer(help="Algorithmic trading platform: charts, backtests, optimization, live bots.", no_args_is_help=True)
 bot_app = typer.Typer(help="Automated trading bots.", no_args_is_help=True)
 app.add_typer(bot_app, name="bot")
 console = Console()
 
-Params = Annotated[list[str], typer.Option("--param", "-p", help="Algorithm parameter, e.g. -p lower=30")]
-Members = Annotated[Optional[str], typer.Option(help="Comma-separated members for the 'vote' ensemble")]
-TF = Annotated[str, typer.Option("--tf", help="Timeframe: 1m 5m 15m 30m 1h 4h 1d 1w")]
+Params = Annotated[list[str], typer.Option("--param", "-p", help="Algorithm parameter, e.g. -p lower=30",
+                                           autocompletion=complete.algorithm_params)]
+Members = Annotated[Optional[str], typer.Option(help="Comma-separated members for the 'vote' ensemble",
+                                                autocompletion=complete.members)]
+TF = Annotated[str, typer.Option("--tf", help="Timeframe: 1m 5m 15m 30m 1h 4h 1d 1w", autocompletion=complete.timeframes)]
+Symbol = Annotated[str, typer.Argument(help="e.g. AAPL, SAP.DE, BTC/USDT", autocompletion=complete.symbols)]
+Algo = Annotated[str, typer.Argument(help="Algorithm name (tradebot list)", autocompletion=complete.algorithms)]
+Broker = Annotated[str, typer.Option(help="Registered broker name", autocompletion=complete.brokers)]
 
 
 @app.callback()
@@ -76,7 +83,8 @@ def metrics_table(title: str, metrics: dict) -> Table:
 
 # -- commands -----------------------------------------------------------------------------------------
 @app.command("list")
-def list_(kind: Annotated[str, typer.Argument(help="algorithms | indicators | brokers")] = "algorithms"):
+def list_(kind: Annotated[str, typer.Argument(help="algorithms | indicators | brokers", autocompletion=complete.choices(
+        ("algorithms", "strategies"), ("indicators", ""), ("brokers", "")))] = "algorithms"):
     """List registered algorithms, indicators or brokers (built-ins and plugins)."""
     reg = {"algorithms": ALGORITHMS, "indicators": INDICATORS, "brokers": BROKERS}.get(kind)
     if reg is None:
@@ -96,11 +104,13 @@ def list_(kind: Annotated[str, typer.Argument(help="algorithms | indicators | br
 
 @app.command()
 def chart(
-    symbol: str,
+    symbol: Symbol,
     tf: TF = "1d",
     bars: Annotated[int, typer.Option(help="Number of candles")] = 150,
-    indicator: Annotated[list[str], typer.Option("--indicator", "-i", help="e.g. -i sma:period=50 -i rsi")] = [],
-    algo: Annotated[Optional[str], typer.Option(help="Overlay this algorithm's buy/sell signals")] = None,
+    indicator: Annotated[list[str], typer.Option("--indicator", "-i", help="e.g. -i sma:period=50 -i rsi",
+                                                 autocompletion=complete.indicator_specs)] = [],
+    algo: Annotated[Optional[str], typer.Option(help="Overlay this algorithm's buy/sell signals",
+                                                autocompletion=complete.algorithms)] = None,
     param: Params = [],
     members: Members = None,
     line: Annotated[bool, typer.Option(help="Line chart instead of candles")] = False,
@@ -118,8 +128,8 @@ def chart(
 
 @app.command()
 def backtest(
-    symbol: str,
-    algo: str,
+    symbol: Symbol,
+    algo: Algo,
     tf: TF = "1d",
     start: Annotated[Optional[str], typer.Option(help="ISO date")] = None,
     end: Annotated[Optional[str], typer.Option(help="ISO date")] = None,
@@ -147,20 +157,24 @@ def backtest(
 
 @app.command()
 def optimize(
-    symbol: str,
-    algo: str,
+    symbol: Symbol,
+    algo: Algo,
     tf: TF = "1d",
     start: Optional[str] = None,
     end: Optional[str] = None,
     bars: Annotated[int, typer.Option(help="Number of candles (ignored with --start)")] = 2000,
     members: Members = None,
-    fix: Annotated[list[str], typer.Option(help="Keep a parameter fixed, e.g. --fix period=14")] = [],
-    method: Annotated[str, typer.Option(help="ga | pso | both (run both and compare them)")] = "ga",
+    fix: Annotated[list[str], typer.Option(help="Keep a parameter fixed, e.g. --fix period=14",
+                                           autocompletion=complete.algorithm_params)] = [],
+    method: Annotated[str, typer.Option(help="ga | pso | both (run both and compare them)", autocompletion=complete.choices(
+        ("ga", "genetic algorithm"), ("pso", "particle swarm"), ("both", "run both and compare")))] = "ga",
     population: Annotated[int, typer.Option(help="Population (GA) / swarm size (PSO)")] = 256,
     generations: Annotated[int, typer.Option(help="Generations (GA) / iterations (PSO)")] = 30,
-    objective: Annotated[str, typer.Option(help="sharpe | return | calmar")] = "sharpe",
+    objective: Annotated[str, typer.Option(help="sharpe | return | calmar", autocompletion=complete.choices(
+        ("sharpe", ""), ("return", ""), ("calmar", "")))] = "sharpe",
     train: Annotated[float, typer.Option(help="Fraction of data used for training")] = 0.7,
-    backend: Annotated[str, typer.Option(help="auto | gpu | cpu | numpy")] = "auto",
+    backend: Annotated[str, typer.Option(help="auto | gpu | cpu | numpy", autocompletion=complete.choices(
+        ("auto", "GPU if available"), ("gpu", ""), ("cpu", "torch on the CPU"), ("numpy", "")))] = "auto",
     fee: float = 0.001,
     min_trades: Annotated[int, typer.Option(help="Reject parameter sets with fewer round trips")] = 4,
     seed: Optional[int] = None,
@@ -243,9 +257,9 @@ def _print_comparison(cmp, symbol: str, algo: str) -> None:
 
 @bot_app.command("run")
 def bot_run(
-    symbol: str,
-    algo: str,
-    broker: Annotated[str, typer.Option(help="Registered broker name")] = "binance",
+    symbol: Symbol,
+    algo: Algo,
+    broker: Broker = "binance",
     tf: TF = "1h",
     stake: Annotated[float, typer.Option(help="Max quote-currency value per entry")] = 100.0,
     param: Params = [],
@@ -276,7 +290,7 @@ def bot_run(
 
 
 @app.command()
-def positions(broker: Annotated[str, typer.Option(help="Registered broker name")] = "binance"):
+def positions(broker: Broker = "binance"):
     """Show balances / open positions at a broker."""
     b = create_broker(broker)
     t = Table(title=f"{broker} balances")
@@ -288,7 +302,8 @@ def positions(broker: Annotated[str, typer.Option(help="Registered broker name")
 
 
 @app.command()
-def portfolio(broker: Annotated[list[str], typer.Option(help="Broker(s) to aggregate")] = ["scalable"]):
+def portfolio(broker: Annotated[list[str], typer.Option(help="Broker(s) to aggregate",
+                                                       autocompletion=complete.brokers)] = ["scalable"]):
     """Portfolio value, allocation and dividend metrics (current yield, annual yield, yield on cost)."""
     from tradebot.data import MarketDataEngine
     from tradebot.portfolio import build_portfolio
@@ -312,7 +327,8 @@ def portfolio(broker: Annotated[list[str], typer.Option(help="Broker(s) to aggre
 
 @app.command()
 def screen(
-    symbols: Annotated[Optional[list[str]], typer.Argument(help="Defaults to the configured watchlist")] = None,
+    symbols: Annotated[Optional[list[str]], typer.Argument(help="Defaults to the configured watchlist",
+                                                           autocompletion=complete.symbols)] = None,
     filter: Annotated[list[str], typer.Option("--filter", "-f", help='e.g. -f "rsi < 30" -f "close > sma200"')] = [],
     sort: str = "change_1d",
 ):
@@ -347,7 +363,7 @@ def _fmt_cell(col, v):
 
 
 @app.command()
-def news(symbols: Annotated[Optional[list[str]], typer.Argument()] = None, limit: int = 25):
+def news(symbols: Annotated[Optional[list[str]], typer.Argument(autocompletion=complete.symbols)] = None, limit: int = 25):
     """Latest headlines for symbols (defaults to the watchlist)."""
     from tradebot.config import watchlist
     from tradebot.news import fetch_news
