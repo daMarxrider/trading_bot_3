@@ -387,10 +387,16 @@ class BacktestView(QWidget):
         self.generations.setValue(20)
         self.objective = QComboBox()
         self.objective.addItems(["sharpe", "calmar", "return"])
+        self.method = QComboBox()
+        for label, key in (("Genetic algorithm (GA)", "ga"), ("Particle swarm (PSO)", "pso"),
+                           ("Both + compare", "both")):
+            self.method.addItem(label, key)
+        self.method.setToolTip("'Both' runs GA, then PSO on the same data and budget and reports how much they "
+                               "disagree. Big disagreement means a fragile optimum.")
         run = QPushButton("Run backtest")
         run.setObjectName("Primary")
         run.clicked.connect(self.run_backtest)
-        opt = QPushButton("Optimize (GA)")
+        opt = QPushButton("Optimize")
         opt.clicked.connect(self.run_optimizer)
         chart = QPushButton("Show on chart")
         chart.clicked.connect(lambda: self.show_on_chart.emit(self.symbol.text(), self._algorithm()))
@@ -402,7 +408,8 @@ class BacktestView(QWidget):
                          ("Algorithm", self.algo)):
             form.addRow(label, w)
         opt_form = QFormLayout()
-        for label, w in (("Population", self.population), ("Generations", self.generations), ("Objective", self.objective)):
+        for label, w in (("Method", self.method), ("Population / swarm", self.population),
+                         ("Generations / iterations", self.generations), ("Objective", self.objective)):
             opt_form.addRow(label, w)
         from tradebot.optimize import select_backend
 
@@ -445,6 +452,12 @@ class BacktestView(QWidget):
         right = QVBoxLayout()
         right.addWidget(card(QLabel("Equity curve vs. buy & hold"), self.plot), 3)
         right.addWidget(metrics_view, 2)
+        self.verdict = QLabel()
+        self.verdict.setWordWrap(True)
+        self.verdict.setTextFormat(Qt.TextFormat.RichText)
+        self.verdict_card = card(self.verdict)
+        self.verdict_card.hide()
+        right.addWidget(self.verdict_card)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(16, 16, 16, 16)
         lay.addWidget(scroll)
@@ -490,24 +503,38 @@ class BacktestView(QWidget):
         run_async(work, self._show, self._fail)
 
     def run_optimizer(self):
-        from tradebot.optimize import GeneticOptimizer
+        from tradebot.optimize import OPTIMIZERS, run_comparison
 
         algo, fee = self._algorithm(), self.fee.value()
-        pop, gens, objective = self.population.value(), self.generations.value(), self.objective.currentText()
-        self._busy(True, gens)
+        method = self.method.currentData()
+        kwargs = dict(population=self.population.value(), generations=self.generations.value(),
+                      objective=self.objective.currentText(), fee=fee, min_trades=4)
+        gens = kwargs["generations"]
+        self._busy(True, gens * (2 if method == "both" else 1))
+        self._phase = {"name": method.upper(), "offset": 0}
         self.status.emit("optimizing …")
+
+        def phase(name):  # called in the worker thread; only touches plain data
+            self._phase = {"name": name.upper(), "offset": 0 if name == "ga" else gens}
+
+        def report(step, best, _params):
+            self.generation.emit(self._phase["offset"] + step, best)
 
         def work():
             df = self._data()
-            opt = GeneticOptimizer(algo, df, population=pop, generations=gens, objective=objective, fee=fee, min_trades=4)
-            res = opt.run(lambda g, best, p: self.generation.emit(g, best))
+            if method == "both":
+                cmp = run_comparison(algo, df, progress=report, on_phase=phase, **kwargs)
+                return df, {"GA in-sample": cmp.ga.train, "GA out-of-sample": cmp.ga.test,
+                            "PSO in-sample": cmp.pso.train, "PSO out-of-sample": cmp.pso.test,
+                            "_params": cmp.better.best_params, "_comparison": cmp}
+            res = OPTIMIZERS[method](algo, df, **kwargs).run(report)
             return df, {"in-sample": res.train, "out-of-sample": res.test, "_params": res.best_params}
 
         run_async(work, self._show, self._fail)
 
-    def _progress(self, gen, best):
-        self.progress.setValue(gen + 1)
-        self.status.emit(f"generation {gen + 1}: best {self.objective.currentText()} = {best:.3f}")
+    def _progress(self, step, best):
+        self.progress.setValue(step + 1)
+        self.status.emit(f"{self._phase['name']} step {step + 1}: best {self.objective.currentText()} = {best:.3f}")
 
     def _fail(self, err):
         self._busy(False)
@@ -517,6 +544,8 @@ class BacktestView(QWidget):
         df, results = payload
         self._busy(False)
         params = results.pop("_params", None)
+        comparison = results.pop("_comparison", None)
+        self._show_comparison(comparison)
         if params:
             self.params.set_space(self._algorithm().param_space(), params)
         t = self.themes.current
@@ -530,9 +559,28 @@ class BacktestView(QWidget):
             if res is None:
                 continue
             eq = res.equity
-            if name == "out-of-sample":  # continue from where the in-sample curve ended
-                eq = eq / eq.iloc[0] * results["in-sample"].equity.iloc[-1]
+            if name.endswith("out-of-sample"):  # continue from where the matching in-sample curve ended
+                eq = eq / eq.iloc[0] * results[name.replace("out-of-sample", "in-sample")].equity.iloc[-1]
             self.plot.plot(epoch_seconds(eq.index), eq.to_numpy(), pen=pg.mkPen(color, width=2), name=name)
             rows[name] = {k: fmt(k, v) for k, v in res.metrics.items()}
         self.metrics.set_frame(pd.DataFrame(rows).rename_axis("metric").reset_index())
         self.status.emit("done" + (f" · best params {params}" if params else ""))
+
+    def _show_comparison(self, cmp):
+        """Verdict card for GA-vs-PSO runs: parameter differences, fitness gap and interpretation."""
+        if cmp is None:
+            self.verdict_card.hide()
+            return
+        t = self.themes.current
+        color = {"consistent": t.up, "fragile": "#f5a524", "divergent": t.down}[cmp.verdict]
+        rows = "".join(
+            f"<tr><td>{k}</td><td align='right'>{cmp.ga.best_params[k]:.4g}</td>"
+            f"<td align='right'>{cmp.pso.best_params[k]:.4g}</td><td align='right'>{d:.0%}</td></tr>"
+            for k, d in cmp.param_diff.items())
+        self.verdict.setText(
+            f"<b style='color:{color}'>{cmp.verdict.upper()}</b> · agreement {cmp.agreement:.0%} · "
+            f"in-sample {cmp.objective} gap {cmp.fitness_gap:.1%}<br>{cmp.explanation()}"
+            f"<table cellspacing='6'><tr><th align='left'>param</th><th>GA</th><th>PSO</th>"
+            f"<th>difference (% of range)</th></tr>{rows}</table>"
+            f"Parameters on the left were set to the better in-sample result ({cmp.better.method.upper()}).")
+        self.verdict_card.show()
