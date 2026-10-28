@@ -109,3 +109,19 @@ def test_unstyled_indicators_keep_their_palette_colours(chart):
     chart.redraw()
     middle = curves(chart.price)["bbands_middle"].opts["pen"].color().name()
     assert middle not in {t.series[0], t.series[1], t.series[2], rsi_color}
+
+
+def test_ssw_draws_in_its_pine_colours_with_readout(chart):
+    from tradebot.indicators.builtin import StochasticShortWaves
+
+    chart.indicators = [StochasticShortWaves()]
+    chart.redraw()
+    (pane,) = chart.panes
+    lines = curves(pane)
+    colors = {name: item.opts["pen"].color().name() for name, item in lines.items()}
+    assert colors == {"ssw_fast": "#ffeb3b", "ssw_slow": "#4caf50", "ssw_lower": "#4caf50",
+                      "ssw_first_drop": "#ff9800", "ssw_ath": "#ff5252"}
+    readout = chart._legend[pane].text
+    assert "ssw 22 66 83 35" in readout  # name + Pine inputs, then the five values in their colours
+    for color, value in (("#ff9800", "66"), ("#ff5252", "83"), ("#4caf50", "35")):
+        assert f"color:{color}'>{value}" in readout
