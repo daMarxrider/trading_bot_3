@@ -71,6 +71,7 @@ BUILTIN: dict[str, Theme] = {
 QSS = """
 * {{ font-family: {font}; font-size: 13px; color: {text}; }}
 QMainWindow, #Root {{ background: {root_bg}; }}
+QDialog {{ background: {bg}; }}
 QWidget#Sidebar {{ background: {panel}; border-right: 1px solid {panel_border}; }}
 QFrame#Card, QGroupBox {{ background: {panel}; border: 1px solid {panel_border}; border-radius: {radius}px; }}
 QGroupBox {{ margin-top: 14px; padding: 10px; }}
