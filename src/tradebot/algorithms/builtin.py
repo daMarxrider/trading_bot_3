@@ -119,6 +119,11 @@ class VotingEnsemble(BaseAlgorithm):
         self.members = members or [RsiThreshold(), MacdCross(), IchimokuCloud()]
         super().__init__(**params)
 
+    @property
+    def vectorized(self) -> bool:
+        # batched [group, 1] parameters reach every member, so one loop-based member makes the whole vote loop-based
+        return all(m.vectorized for m in self.members)
+
     def param_space(self):
         space = dict(self.params)
         for m in self.members:
