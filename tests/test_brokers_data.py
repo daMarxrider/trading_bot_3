@@ -170,3 +170,17 @@ def test_plugin_loader(tmp_path):
     assert loaded == ["tradebot_plugin_my_algo"]
     algo = ALGORITHMS.get("always_long_plugin")()
     assert algo.run(make_ohlc(10)).eq(1).all()
+
+
+def test_quiet_yfinance_beats_yfinance_own_filter():
+    import warnings
+
+    from tradebot.data.providers import quiet_yfinance
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.resetwarnings()
+        quiet_yfinance()
+        warnings.warn_explicit("inplace is deprecated", DeprecationWarning, "yfinance/utils.py", 1,
+                               module="yfinance.utils")
+        warnings.warn_explicit("other", UserWarning, "tradebot/x.py", 1, module="tradebot.x")
+    assert [str(w.message) for w in caught] == ["other"]

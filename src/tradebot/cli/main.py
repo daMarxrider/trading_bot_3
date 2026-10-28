@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import logging
-import warnings
 from typing import Annotated, Optional
 
 import pandas as pd
@@ -30,7 +29,9 @@ TF = Annotated[str, typer.Option("--tf", help="Timeframe: 1m 5m 15m 30m 1h 4h 1d
 
 @app.callback()
 def _main(verbose: Annotated[bool, typer.Option("-v", "--verbose")] = False):
-    warnings.filterwarnings("ignore", module="yfinance")
+    from tradebot.data.providers import quiet_yfinance
+
+    quiet_yfinance()
     logging.basicConfig(level=logging.INFO if verbose else logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     load_plugins()
 

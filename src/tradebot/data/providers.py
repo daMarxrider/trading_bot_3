@@ -23,6 +23,19 @@ from tradebot.core.timeframes import resample, to_timedelta
 log = logging.getLogger(__name__)
 
 
+def quiet_yfinance() -> None:
+    """Hide yfinance's internal deprecation warnings (e.g. pandas ``inplace=`` notices) from users.
+
+    Importing yfinance installs its own ``default`` filter for its DeprecationWarnings
+    at the front of the filter list, so ours must be added *after* that import to win.
+    """
+    import warnings
+
+    import yfinance  # noqa: F401
+
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="yfinance")
+
+
 class DataUnavailable(RuntimeError):
     pass
 
