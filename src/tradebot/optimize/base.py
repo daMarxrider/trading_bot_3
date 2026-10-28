@@ -74,6 +74,8 @@ class PopulationOptimizer(ABC):
         self.fee, self.objective = fee, objective
         self.population, self.generations = population, generations
         self.min_trades = min_trades
+        if backend == "auto" and not getattr(algorithm, "vectorized", True):
+            backend = "numpy"  # loop-based algorithms run on the CPU anyway; the GPU would only add transfers
         self.backend = backend if isinstance(backend, Backend) else select_backend(backend)
         self.rng = np.random.default_rng(seed)
         self.fixed = fixed or {}
@@ -85,6 +87,7 @@ class PopulationOptimizer(ABC):
         self.ohlc = OHLC.from_frame(self.train_df, device=self.backend.device)
         self.evaluations = 0
         self._cache: dict[tuple, float] = {}
+        self._ohlc_np: OHLC | None = None
 
     @abstractmethod
     def run(self, progress: Progress | None = None) -> OptimizationResult:
@@ -137,8 +140,16 @@ class PopulationOptimizer(ABC):
         self.evaluations += sum(map(len, jobs))
         return fitness
 
-    def _evaluate_group(self, group: list[dict]) -> np.ndarray:
+    def _positions(self, group: list[dict]):
+        """Target positions ``[len(group), T]`` for a group sharing integer params."""
         o = self.ohlc
+        if not getattr(self.algorithm, "vectorized", True):
+            # loop-based algorithm: one NumPy evaluation per candidate, then back to the backend
+            if self._ohlc_np is None:
+                self._ohlc_np = OHLC.from_frame(self.train_df)
+            rows = [np.nan_to_num(np.broadcast_to(np.asarray(self.algorithm.signals(self._ohlc_np, p), float),
+                                                  (len(self.train_df),))) for p in group]
+            return ops.asarray(np.stack(rows), o.close)
         params = {}
         for key in self.algorithm.param_space():
             values = [p[key] for p in group]
@@ -147,7 +158,11 @@ class PopulationOptimizer(ABC):
             else:
                 arr = np.asarray(values, dtype=np.float64)[:, None]
                 params[key] = ops.asarray(arr, o.close)
-        pos = self.algorithm.signals(o, params)
+        return self.algorithm.signals(o, params)
+
+    def _evaluate_group(self, group: list[dict]) -> np.ndarray:
+        o = self.ohlc
+        pos = self._positions(group)
         lo = -1.0 if self.algorithm.allow_short else 0.0
         pos = ops.nan_to_num(pos)
         pos = pos.clamp(lo, 1.0) if ops.is_torch(pos) else np.clip(pos, lo, 1.0)

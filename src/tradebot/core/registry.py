@@ -18,7 +18,7 @@ import inspect
 import logging
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import KW_ONLY, dataclass
 from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Generic, Iterator, TypeVar
@@ -34,8 +34,9 @@ class Param:
     default: float
     low: float
     high: float
-    integer: bool = False
     description: str = ""
+    _: KW_ONLY
+    integer: bool = False  #: keyword-only, so a positional description can never turn a float param into an int
 
     def clip(self, value: float) -> float:
         value = min(max(value, self.low), self.high)

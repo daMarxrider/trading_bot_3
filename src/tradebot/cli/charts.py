@@ -61,7 +61,7 @@ def render_chart(
                                     "low": df["low"].tolist(), "close": df["close"].tolist()}))
     for ind in indicators:
         if ind.overlay:
-            _draw_frame(main, dates, computed[id(ind)])
+            _draw_frame(main, dates, computed[id(ind)], ind)
     if positions is not None:
         change = np.diff(np.r_[0.0, positions.to_numpy()])
         closes = df["close"].to_numpy()
@@ -74,7 +74,7 @@ def render_chart(
 
     for n, ind in enumerate(panes, start=2):
         pane = _pane(fig, n, rows)
-        _draw_frame(pane, dates, computed[id(ind)])
+        _draw_frame(pane, dates, computed[id(ind)], ind)
         for level in ind.levels:
             pane.line(level, pixel="gray")
         pane.title(ind.label)
@@ -92,8 +92,22 @@ def _pane(fig, row: int, rows: int):
     return pane
 
 
-def _draw_frame(pane, dates, frame: pd.DataFrame) -> None:
+def _draw_frame(pane, dates, frame: pd.DataFrame, ind: BaseIndicator) -> None:
     for name, series in frame.items():
         mask = series.notna().to_numpy()
-        if mask.any():
+        if not mask.any():
+            continue
+        if ind.is_line(name):
             pane.draw(pane.signal([d for d, m in zip(dates, mask) if m], series[mask].tolist()).lines().label(name))
+            continue
+        texts = ind.labels.get(ind.output_of(name))
+        if not texts:
+            continue  # hidden output
+        anchor_col = f"{ind.name}_{ind.label_anchor}" if ind.label_anchor else None
+        anchor = frame[anchor_col] if anchor_col in frame else None
+        idx = np.flatnonzero(mask)
+        ys = [float(anchor.iloc[i]) if anchor is not None else float("nan") for i in idx]
+        keep = [k for k, y in enumerate(ys) if np.isfinite(y)]
+        if keep:  # one-character labels (wave numbers) drawn as the point markers themselves
+            markers = [plt.marker(texts.get(float(series.iloc[idx[k]]), "?")[:1], pixel="yellow") for k in keep]
+            pane.draw(pane.signal([dates[idx[k]] for k in keep], [ys[k] for k in keep], marker=markers))

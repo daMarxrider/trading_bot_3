@@ -266,6 +266,9 @@ class ChartView(QWidget):
                     target.addItem(pg.InfiniteLine(level, angle=0, pen=pg.mkPen(qcolor(t.muted), style=Qt.PenStyle.DotLine)))
                 self.panes.append(target)
             for col in frame.columns:
+                if not ind.is_line(col):
+                    self._draw_labels(target, ind, frame, col, x, c, t)
+                    continue
                 y = frame[col].to_numpy()
                 ok = ~np.isnan(y)
                 color = next(series_colors)
@@ -284,6 +287,25 @@ class ChartView(QWidget):
         self.info.setText("   ".join(f"<span style='color:{c}'>■</span> {n}" for c, n in legend_items))
         if autorange:
             self.reset_view()
+
+    def _draw_labels(self, target, ind, frame, col, x, close, t):
+        """Text labels of an indicator output (e.g. Elliott wave numbers) at its anchor values."""
+        texts = ind.labels.get(ind.output_of(col))
+        if not texts:
+            return  # hidden output
+        anchor_col = f"{ind.name}_{ind.label_anchor}" if ind.label_anchor else None
+        anchor = frame[anchor_col].to_numpy() if anchor_col in frame else close
+        codes = frame[col].to_numpy()
+        for i in np.flatnonzero(~np.isnan(codes)):
+            # label above swing highs (local maximum of the anchor line), below swing lows
+            neighbours = anchor[max(i - 1, 0): i + 2]
+            is_high = anchor[i] >= np.nanmax(neighbours)
+            item = pg.TextItem(texts.get(float(codes[i]), "?"), color=t.text, anchor=(0.5, 1.15 if is_high else -0.15))
+            font = item.textItem.font()
+            font.setBold(True)
+            item.setFont(font)
+            item.setPos(x[i], anchor[i])
+            target.addItem(item)
 
     # -- crosshair & drawing tools ---------------------------------------------------------------
     def _mouse_moved(self, pos):
