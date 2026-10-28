@@ -13,12 +13,17 @@ Warm-up periods are filled with NaN, matching pandas' rolling semantics.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
-try:  # torch is an optional dependency (``tradebot[gpu]``)
-    import torch
-except ImportError:  # pragma: no cover - exercised only without torch
+if os.environ.get("_TRADEBOT_COMPLETE"):  # shell completion never computes: skip torch's ~1 s import per TAB
     torch = None
+else:
+    try:  # torch is an optional dependency (``tradebot[gpu]``)
+        import torch
+    except ImportError:  # pragma: no cover - exercised only without torch
+        torch = None
 
 NAN = float("nan")
 

@@ -71,6 +71,15 @@ def os_config_dir() -> Path:
     return Path(base).expanduser() / "tradebot"
 
 
+def os_cache_dir() -> Path:
+    """The OS's per-user cache folder for tradebot (safe to delete; it's rebuilt on demand)."""
+    if sys.platform == "win32":
+        return Path(os.environ.get("LOCALAPPDATA") or "~/AppData/Local").expanduser() / "tradebot" / "Cache"
+    if sys.platform == "darwin":
+        return Path("~/Library/Caches/tradebot").expanduser()
+    return Path(os.environ.get("XDG_CACHE_HOME") or "~/.cache").expanduser() / "tradebot"
+
+
 class Settings:
     """Persistent UI state, saved as JSON on every change.
 
