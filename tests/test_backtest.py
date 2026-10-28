@@ -18,11 +18,10 @@ def frame(closes, freq="D"):
 
 
 class Fixed(BaseAlgorithm):
-    """Test helper: replays a fixed position vector."""
-
-    name = "_fixed_test"
+    """Test helper: replays a fixed position vector (unregistered: no class-level name)."""
 
     def __init__(self, pos):
+        self.name = "fixed"
         self.pos = np.asarray(pos, float)
         super().__init__()
 
@@ -83,7 +82,7 @@ def test_builtin_algorithms_run(ohlc, name):
     res = backtest(ohlc, build_algorithm(name))
     assert res.positions.between(0, 1).all()
     assert np.isfinite(res.equity).all()
-    assert "_fixed_test" in ALGORITHMS
+    assert "fixed" not in ALGORITHMS
 
 
 def test_range_trader():

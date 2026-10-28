@@ -50,7 +50,9 @@ def fetch_news(symbols: list[str], limit: int = 50) -> list[NewsItem]:
 
     def one(sym):
         try:
-            return [n for n in (parse_yf_item(sym, it) for it in yf.Ticker(yf_symbol(sym)).news or []) if n]
+            # Ticker.news is sometimes empty server-side; the search endpoint is a reliable fallback
+            raw = yf.Ticker(yf_symbol(sym)).news or yf.Search(yf_symbol(sym), news_count=20).news or []
+            return [n for n in (parse_yf_item(sym, it) for it in raw) if n]
         except Exception as exc:
             log.warning("news failed for %s: %s", sym, exc)
             return []

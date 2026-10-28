@@ -19,9 +19,8 @@ from .test_brokers_data import FakeExchange
 
 
 class Scripted(BaseAlgorithm):
-    name = "_scripted_test"
-
     def __init__(self):
+        self.name = "scripted"
         self.next = 0.0
         super().__init__()
 
