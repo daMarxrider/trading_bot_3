@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Runs the test suite on every pull request and on pushes to main.
+# Runs the test suite on every pull request and on pushes to main; release.yml reuses it.
 # The `pytest` job is a required status check for merging into main.
 name: tests
 
@@ -7,9 +7,10 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_call:
 
 concurrency:
-  group: tests-${{ github.ref }}
+  group: tests-${{ github.workflow }}-${{ github.ref }}  # workflow = the caller's when reused
   cancel-in-progress: true
 
 jobs:

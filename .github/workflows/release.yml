@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Builds standalone binaries with PyInstaller (packaging/tradebot.spec) after the test suite passes.
+# A v* tag publishes them to the GitHub Release for that tag; a manual run from a branch
+# ("Run workflow") only uploads them as workflow artifacts.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:  # tag.yml dispatches this for its tags: tags pushed with GITHUB_TOKEN trigger no push event
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
+
+  build-linux:
+    needs: tests
+    runs-on: ubuntu-22.04  # oldest available runner: a binary built against an old glibc also runs on newer distros
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.3.2  # setup-uv publishes no moving major tags
+        with:
+          enable-cache: true
+
+      - name: Qt runtime libraries (PyInstaller inspects them; also needed for the smoke test)
+        run: sudo apt-get update -q && sudo apt-get install -y -q libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
+
+      - name: Install
+        run: uv sync --extra gui --group build --python 3.14
+
+      - name: Build
+        run: uv run pyinstaller --noconfirm packaging/tradebot.spec
+
+      - name: Smoke test
+        working-directory: dist/tradebot
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          ./tradebot --help
+          ./tradebot list algorithms
+          timeout 20 ./tradebot gui || [ $? -eq 124 ]  # still running after 20 s = started fine
+
+      - name: Package
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then version=$GITHUB_REF_NAME; else version=dev-${GITHUB_SHA::7}; fi
+          asset=tradebot-$version-linux-x86_64.tar.gz
+          tar -czf "$asset" -C dist tradebot  # tar keeps the executable bit, which artifact zips would drop
+          sha256sum "$asset" > "$asset.sha256"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-x86_64
+          path: tradebot-*-linux-x86_64.tar.gz*
+          if-no-files-found: error
+
+  release:
+    needs: [build-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes \
+            --notes "Standalone builds, no Python needed; see the README's \"Download / run the binary\" section. The binaries are unsigned."
+          gh release upload "$GITHUB_REF_NAME" assets/* --clobber
