@@ -18,6 +18,36 @@ uv run tradebot gui
 Extras: `gui` (PyQt6, pyqtgraph), `gpu` (PyTorch), `traderepublic` (pytr).
 The core (CLI, backtests, CPU optimizer) needs none of them.
 
+## Download / run the binary
+
+Every release on the [Releases page](https://github.com/daMarxrider/trading_bot_3/releases)
+has standalone builds that need no Python. One binary is both the CLI and the
+desktop app (`tradebot gui`). The builds are CPU-only (no `gpu` extra) and
+**unsigned**. Each archive has a `.sha256` checksum next to it.
+
+**Linux (x86_64).** Built on Ubuntu 22.04, so it runs on that and newer
+distributions (glibc 2.35+).
+
+```sh
+sha256sum -c tradebot-v1.0.0-linux-x86_64.tar.gz.sha256
+tar -xzf tradebot-v1.0.0-linux-x86_64.tar.gz
+./tradebot/tradebot --help
+./tradebot/tradebot gui
+```
+
+The GUI needs a few system libraries that desktop installs usually already
+have. On Debian/Ubuntu:
+
+```sh
+sudo apt install libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libdbus-1-3 libxcb-cursor0
+```
+
+**Plugins in the binary.** Plugin files from `~/.config/tradebot/plugins/` (or
+`$TRADEBOT_PLUGIN_DIR`) load as usual and can import any `tradebot` module and
+the bundled libraries. Entry-point plugins from installed packages are not
+found by the binary, because it cannot see your Python's packages; use the
+plugin directory, or install tradebot from source.
+
 **GPU backends.** The optimizer uses PyTorch, which drives NVIDIA (CUDA) and AMD
 (ROCm) GPUs through the same API, so there is no vendor-specific code. For AMD,
 install a ROCm build of torch, for example

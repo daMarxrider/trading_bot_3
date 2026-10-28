@@ -28,6 +28,9 @@ all = ["tradebot[gui,gpu,traderepublic]"]
 tradebot = "tradebot.cli.main:app"
 
 [dependency-groups]
+build = [
+    "pyinstaller>=6.22.3",
+]
 dev = [
     "pytest>=8",
 ]
