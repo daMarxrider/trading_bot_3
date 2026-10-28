@@ -38,8 +38,8 @@ from PyQt6.QtWidgets import (
 from tradebot.algorithms import ALGORITHMS, build_algorithm
 from tradebot.backtest.metrics import fmt
 from tradebot.brokers import BROKERS, create_broker
-from tradebot.core.timeframes import TIMEFRAMES, to_timedelta
-from tradebot.gui.common import DataFrameModel, Kpi, card, epoch_seconds, pct, run_async
+from tradebot.core.timeframes import TIMEFRAMES
+from tradebot.gui.common import DataFrameModel, DateRange, Kpi, card, epoch_seconds, pct, run_async, shortfall
 from tradebot.gui.params import ParamForm
 from tradebot.gui.theme import ThemeManager, qcolor
 from tradebot.gui.touch import PlotTouchHandler, TouchController, enable_kinetic_scroll
@@ -371,6 +371,7 @@ class BacktestView(QWidget):
         self.bars = QSpinBox()
         self.bars.setRange(100, 20000)
         self.bars.setValue(1500)
+        self.dates = DateRange()
         self.fee = QDoubleSpinBox()
         self.fee.setDecimals(4)
         self.fee.setRange(0, 0.05)
@@ -404,8 +405,8 @@ class BacktestView(QWidget):
         self.progress.hide()
 
         form = QFormLayout()
-        for label, w in (("Symbol", self.symbol), ("Timeframe", self.tf), ("Candles", self.bars), ("Fee / side", self.fee),
-                         ("Algorithm", self.algo)):
+        for label, w in (("Symbol", self.symbol), ("Timeframe", self.tf), ("Candles", self.bars), ("Dates", self.dates),
+                         ("Fee / side", self.fee), ("Algorithm", self.algo)):
             form.addRow(label, w)
         opt_form = QFormLayout()
         for label, w in (("Method", self.method), ("Population / swarm", self.population),
@@ -482,9 +483,13 @@ class BacktestView(QWidget):
         return build_algorithm(self.algo.currentText()).with_params(**self.params.values())
 
     def _data(self):
-        tf = self.tf.currentText()
-        end = pd.Timestamp.now(tz="UTC")
-        return self.engine.get_ohlc(self.symbol.text().strip(), tf, start=end - self.bars.value() * to_timedelta(tf), end=end)
+        """Runs in the worker thread: the last N candles, or the From/To range when set."""
+        symbol, bars = self.symbol.text().strip(), self.bars.value()
+        start, end = self.dates.range()
+        df = self.engine.get_ohlc(symbol, self.tf.currentText(), start=start, end=end, bars=bars)
+        if note := shortfall(df, bars, start):
+            self.status.emit(f"{symbol}:{note}")
+        return df
 
     def _busy(self, on: bool, maximum: int = 0):
         self.progress.setRange(0, maximum)

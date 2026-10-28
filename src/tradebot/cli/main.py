@@ -54,14 +54,11 @@ def parse_indicator(spec: str):
 
 
 def load_data(symbol: str, tf: str, start: str | None, end: str | None, bars: int | None = None) -> pd.DataFrame:
+    """``start``/``end`` select a date range; without ``start``, the last ``bars`` candles before ``end``."""
     from tradebot.data import MarketDataEngine
-    from tradebot.core.timeframes import to_timedelta
 
-    if start is None and bars:
-        end_ts = pd.Timestamp(end, tz="UTC") if end else pd.Timestamp.now(tz="UTC")
-        start = str(end_ts - bars * to_timedelta(tf))
-    with console.status(f"fetching {symbol} {tf} ..."):
-        return MarketDataEngine().get_ohlc(symbol, tf, start, end)
+    with console.status(f"fetching {symbol} {tf} ..."):  # a short history is logged as a warning by the engine
+        return MarketDataEngine().get_ohlc(symbol, tf, start, end, bars=bars)
 
 
 def make_algo(name: str, params: list[str], members: str | None):
@@ -126,7 +123,7 @@ def backtest(
     tf: TF = "1d",
     start: Annotated[Optional[str], typer.Option(help="ISO date")] = None,
     end: Annotated[Optional[str], typer.Option(help="ISO date")] = None,
-    bars: int = 1000,
+    bars: Annotated[int, typer.Option(help="Number of candles (ignored with --start)")] = 1000,
     param: Params = [],
     members: Members = None,
     fee: Annotated[float, typer.Option(help="Fee per side, fraction")] = 0.001,
@@ -155,7 +152,7 @@ def optimize(
     tf: TF = "1d",
     start: Optional[str] = None,
     end: Optional[str] = None,
-    bars: int = 2000,
+    bars: Annotated[int, typer.Option(help="Number of candles (ignored with --start)")] = 2000,
     members: Members = None,
     fix: Annotated[list[str], typer.Option(help="Keep a parameter fixed, e.g. --fix period=14")] = [],
     method: Annotated[str, typer.Option(help="ga | pso | both (run both and compare them)")] = "ga",

@@ -101,6 +101,13 @@ tradebot screen -f "rsi < 35" -f "close > sma200"
 tradebot news AAPL NVDA BTC/USDT
 ```
 
+`--bars N` returns exactly N candles, also for stocks, whose markets close on
+weekends and overnight. `--start`/`--end` select a date range instead. Yahoo serves
+only limited intraday history (1m: 7 days, 5m–30m: 60 days, 1h/4h: 730 days); a
+request reaching further back returns what exists and prints a warning. In the
+GUI, the chart and the Backtest lab have optional From/To dates that override the
+candle count.
+
 Charts are rendered with plotext, so they work in fish, bash and zsh.
 `optimize` evolves parameters on the first 70 % of the data and reports the
 remaining 30 % out-of-sample. Candidates with fewer than `--min-trades` round

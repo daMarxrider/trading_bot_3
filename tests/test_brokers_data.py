@@ -142,6 +142,81 @@ def test_engine_raises_when_no_data():
         MarketDataEngine([FakeProvider("x", fail=True)]).get_ohlc("AAPL", start="2024-01-01", end="2024-02-01")
 
 
+# -- bars=N: exact candle counts ---------------------------------------------------------------------
+NOW = pd.Timestamp("2026-06-01", tz="UTC")
+
+
+def frame(index) -> pd.DataFrame:
+    n = len(index)
+    return pd.DataFrame({"open": range(n), "high": range(1, n + 1), "low": range(n), "close": range(n),
+                         "volume": [1.0] * n}, index=index, dtype=float)
+
+
+def weekdays(days=4000):
+    idx = pd.date_range(end=NOW - pd.Timedelta(days=1), periods=days, freq="D", tz="UTC")
+    return frame(idx[idx.day_of_week < 5])  # no weekends
+
+
+def trading_hours(days=1000):
+    idx = pd.date_range(end=NOW - pd.Timedelta(hours=1), periods=days * 24, freq="h", tz="UTC")
+    return frame(idx[(idx.day_of_week < 5) & (idx.hour >= 14) & (idx.hour < 21)])  # 7 bars per weekday
+
+
+class StockProvider(FakeProvider):
+    timeframes = frozenset({"1d", "1h"})
+
+    def __init__(self, df, limit=None):
+        super().__init__("stocks", df)
+        self.limit = limit
+
+    def history_limit(self, timeframe):
+        return self.limit
+
+
+@pytest.mark.parametrize("tf, df", [("1d", weekdays()), ("1h", trading_hours())])
+def test_bars_returns_exactly_n_candles(tf, df):
+    eng = MarketDataEngine([StockProvider(df)])
+    out = eng.get_ohlc("AAPL", tf, end=NOW, bars=2000)
+    assert len(out) == 2000  # a calendar span of 2000 x interval holds only ~1430 (1d) / ~420 (1h)
+    pd.testing.assert_frame_equal(out, df.iloc[-2000:], check_freq=False)
+
+
+def test_bars_reaches_over_a_weekend():
+    df = weekdays()
+    sunday = df.index[-1] + pd.Timedelta(days=3)  # data ends on a Friday
+    out = MarketDataEngine([StockProvider(df)]).get_ohlc("AAPL", "1d", end=sunday, bars=1)
+    assert len(out) == 1 and out.index[0] == df.index[-1]  # only the weekend in the first guess
+
+
+def test_bars_warns_when_history_runs_out(caplog):
+    df = weekdays(300)  # a recent listing: ~214 candles exist
+    out = MarketDataEngine([StockProvider(df)]).get_ohlc("AAPL", "1d", end=NOW, bars=1000)
+    assert len(out) == len(df)
+    assert "only %d of 1000" % len(df) in caplog.text
+
+
+def test_provider_history_limit_is_respected(caplog, monkeypatch):
+    monkeypatch.setattr(pd.Timestamp, "now", classmethod(lambda cls, tz=None: NOW))
+    df = trading_hours(1000)
+    prov = StockProvider(df, limit=pd.Timedelta(days=60))
+    out = MarketDataEngine([prov]).get_ohlc("AAPL", "1h", end=NOW, bars=2000)
+    assert all(start >= NOW - pd.Timedelta(days=60) for start, _ in prov.calls)  # never asked beyond it
+    assert out.index[0] >= NOW - pd.Timedelta(days=60) and len(out) < 2000
+    assert "only %d of 2000" % len(out) in caplog.text
+
+
+def test_start_overrides_bars():
+    df = weekdays()
+    out = MarketDataEngine([StockProvider(df)]).get_ohlc("AAPL", "1d", start="2026-01-01", end=NOW, bars=5)
+    assert out.index[0] >= pd.Timestamp("2026-01-01", tz="UTC") and len(out) > 5
+
+
+def test_yfinance_intraday_history_limits():
+    y = YFinanceProvider()
+    assert y.history_limit("1m") < pd.Timedelta(days=7) and y.history_limit("1h") < pd.Timedelta(days=730)
+    assert y.history_limit("1d") is None
+
+
 def test_ccxt_provider_paginates():
     day = 86_400_000
     candles = [[i * day, 1, 2, 0.5, 1.5, 10] for i in range(25)]

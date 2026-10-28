@@ -7,6 +7,11 @@ different providers can be stitched together. The engine asks providers in
 order of preference and only requests the *missing* head/tail ranges from
 the next provider - e.g. Binance supplies recent BTC/USDT candles, Yahoo
 fills in the years before the Binance listing.
+
+Requests are either a date range or a candle count (``bars=N``). A count is
+exact: markets that don't trade around the clock (weekends, trading hours)
+have far fewer candles than ``N x interval`` suggests, so the engine widens
+the range until it has N candles or the history runs out.
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ from tradebot.data.providers import (
 )
 
 log = logging.getLogger(__name__)
+MAX_BAR_ROUNDS = 6  #: widening steps for a ``bars=N`` request before settling for what exists
 
 
 def default_providers() -> list[BaseDataProvider]:
@@ -53,12 +59,20 @@ class MarketDataEngine:
         start: pd.Timestamp | str | None = None,
         end: pd.Timestamp | str | None = None,
         asset_class: AssetClass | None = None,
+        bars: int | None = None,
     ) -> pd.DataFrame:
-        """OHLC candles for ``[start, end)``; defaults to the last 500 bars."""
+        """OHLC candles for ``[start, end)``, or the last ``bars`` candles before ``end`` when no
+        ``start`` is given (default: 500). ``start`` wins over ``bars``.
+
+        A ``bars`` request returns fewer candles only when no more history exists (provider limit
+        or listing date); that is logged as a warning.
+        """
         step = to_timedelta(timeframe)
         end = _utc(end) if end is not None else pd.Timestamp.now(tz="UTC")
-        start = _utc(start) if start is not None else end - 500 * step
         asset_class = asset_class or guess_asset_class(symbol)
+        if start is None:
+            return self._last_bars(symbol, timeframe, bars or 500, end, asset_class)
+        start = _utc(start)
         key = (symbol, timeframe, start, end.floor(step))
         if self._cache is not None and key in self._cache:
             return self._cache[key]
@@ -71,7 +85,13 @@ class MarketDataEngine:
             gaps = _missing_ranges(result, start, end, step)
             if not gaps:
                 break
+            limit = provider.history_limit(timeframe)
+            earliest = pd.Timestamp.now(tz="UTC") - limit if limit is not None else None
             for gap_start, gap_end in gaps:
+                if earliest is not None:  # ask only for what the provider can serve, instead of failing
+                    if gap_end <= earliest:
+                        continue
+                    gap_start = max(gap_start, earliest)
                 try:
                     part = provider.fetch(symbol, timeframe, gap_start, gap_end)
                 except Exception as exc:
@@ -87,6 +107,31 @@ class MarketDataEngine:
         if self._cache is not None:
             self._cache[key] = result
         return result
+
+    def _last_bars(self, symbol, timeframe, bars, end, asset_class) -> pd.DataFrame:
+        step = to_timedelta(timeframe)
+        span = bars * step  # exact for 24/7 markets, too short for everything else
+        best: pd.DataFrame | None = None
+        error: DataUnavailable | None = None
+        for _ in range(MAX_BAR_ROUNDS):
+            try:
+                df = self.get_ohlc(symbol, timeframe, start=end - span, end=end, asset_class=asset_class)
+            except DataUnavailable as exc:  # e.g. only a weekend in range: look further back
+                if best is not None:
+                    break  # a wider range found less than a narrower one: past the provider's history
+                error, span = exc, span * 4
+                continue
+            if len(df) >= bars:
+                return df.iloc[-bars:]
+            if best is not None and len(df) <= len(best):
+                break  # widening found nothing older: the history ends here
+            best = df
+            span *= min(max(1.5, 1.2 * bars / len(df)), 50.0)  # scale by the observed candle density
+        if best is None:
+            raise error or DataUnavailable(f"no data for {symbol} {timeframe}")
+        log.warning("only %d of %d %s candles available for %s (provider history limit or listing date)",
+                    len(best), bars, timeframe, symbol)
+        return best
 
     def latest_price(self, symbol: str) -> float:
         return float(self.get_ohlc(symbol, "1d", start=pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=10))["close"].iloc[-1])

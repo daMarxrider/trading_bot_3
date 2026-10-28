@@ -10,6 +10,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PyQt6")
 pytest.importorskip("pyqtgraph")
 
+import pandas as pd  # noqa: E402
+from PyQt6.QtCore import QThreadPool  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from tradebot.algorithms import build_algorithm  # noqa: E402
@@ -133,3 +135,53 @@ def test_param_dialog_uses_theme_background(app, key, tmp_path):
     # the glass theme's near-white text invisible
     assert img.pixelColor(1, 1).name() == qcolor(t.bg).name()
     dlg.close()
+
+
+class RecordingEngine:
+    def __init__(self, df):
+        self.df, self.calls = df, []
+
+    def get_ohlc(self, symbol, timeframe="1d", start=None, end=None, asset_class=None, bars=None):
+        self.calls.append({"start": start, "end": end, "bars": bars})
+        return self.df
+
+
+def test_date_range_widget(app):
+    from PyQt6.QtCore import QDate
+
+    from tradebot.gui.common import DateRange
+
+    dr = DateRange()
+    assert dr.range() == (None, None)  # unset: candle count, up to now
+    assert dr.start.text() == "from: auto"
+    dr.start.setDate(QDate(2024, 3, 1))
+    dr.end.setDate(QDate(2024, 6, 30))
+    start, end = dr.range()
+    assert start == pd.Timestamp("2024-03-01", tz="UTC")
+    assert end == pd.Timestamp("2024-07-01", tz="UTC")  # exclusive end: June 30 is included
+    dr.clear()
+    assert dr.range() == (None, None)
+
+
+def test_chart_and_lab_request_a_candle_count_or_the_date_range(app, tmp_path):
+    from PyQt6.QtCore import QDate
+
+    themes = ThemeManager(user_dir=tmp_path)
+    themes.apply("dark")
+    engine = RecordingEngine(make_ohlc(300))
+    chart = ChartView(engine, themes, ["TEST"])
+    lab = BacktestView(engine, themes, ["TEST"])
+    messages = []
+    chart.status.connect(messages.append)
+
+    chart.bars.setCurrentText("1000")  # triggers a load
+    QThreadPool.globalInstance().waitForDone()
+    app.processEvents()
+    assert engine.calls[-1] == {"start": None, "end": None, "bars": 1000}  # a count, not a calendar span
+    assert "only 300 of 1000 candles available" in messages[-1]
+
+    lab._data()
+    assert engine.calls[-1] == {"start": None, "end": None, "bars": 1500}
+    lab.dates.start.setDate(QDate(2020, 1, 1))
+    lab._data()
+    assert engine.calls[-1]["start"] == pd.Timestamp("2020-01-01", tz="UTC")  # the dates win over the count
