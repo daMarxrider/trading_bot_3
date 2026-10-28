@@ -93,7 +93,7 @@ QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit {{
     selection-background-color: {selection};
 }}
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus {{ border-color: {accent}; }}
-QComboBox QAbstractItemView, QMenu {{ background: {menu_bg}; border: 1px solid {panel_border}; selection-background-color: {selection}; }}
+QComboBox QAbstractItemView, QMenu, QAbstractItemView#SymbolPopup {{ background: {menu_bg}; border: 1px solid {panel_border}; selection-background-color: {selection}; }}
 QMenu::item {{ padding: 5px 22px; }}
 QMenu::item:selected {{ background: {selection}; }}
 QTableView, QListWidget {{ background: {panel}; border: 1px solid {panel_border}; border-radius: {radius}px;
@@ -117,7 +117,7 @@ QPushButton, QToolButton {{ min-height: 30px; padding: 8px 16px; }}
 QPushButton#Nav {{ min-height: 34px; padding: 12px 16px; }}
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{ min-height: 30px; }}
 QSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{ width: 28px; }}
-QComboBox QAbstractItemView::item, QMenu::item {{ min-height: 36px; padding: 6px 24px; }}
+QComboBox QAbstractItemView::item, QMenu::item, QAbstractItemView#SymbolPopup::item {{ min-height: 36px; padding: 6px 24px; }}
 QCheckBox::indicator {{ width: 24px; height: 24px; }}
 QTableView {{ font-size: 14px; }}
 QHeaderView::section {{ padding: 10px 6px; }}

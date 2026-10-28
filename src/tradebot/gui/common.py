@@ -9,9 +9,32 @@ from typing import Callable
 
 import numpy as np
 import pandas as pd
-from PyQt6.QtCore import QAbstractTableModel, QDate, QModelIndex, QObject, QRunnable, Qt, QThreadPool, pyqtSignal
-from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import QCalendarWidget, QDateEdit, QFrame, QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
+from PyQt6.QtCore import (
+    QAbstractTableModel,
+    QDate,
+    QModelIndex,
+    QObject,
+    QRunnable,
+    Qt,
+    QThreadPool,
+    QTimer,
+    pyqtSignal,
+)
+from PyQt6.QtGui import QColor, QStandardItem, QStandardItemModel
+from PyQt6.QtWidgets import (
+    QCalendarWidget,
+    QCompleter,
+    QDateEdit,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from tradebot.symbols import SymbolSearch
 
 
 class _Signals(QObject):
@@ -175,6 +198,72 @@ class DateRange(QWidget):
 
         start, end = day(self.start), day(self.end)
         return start, end + pd.Timedelta(days=1) if end is not None else None
+
+
+class SymbolCompleter(QObject):
+    """Autocompletion for a symbol field: local matches while typing, network matches after a pause.
+
+    The popup lists ``symbol — name · exchange · type``; choosing a row inserts the plain
+    symbol and emits :attr:`chosen`.
+    """
+
+    chosen = pyqtSignal(str)
+    SYMBOL_ROLE = Qt.ItemDataRole.UserRole + 1
+    DEBOUNCE_MS = 250
+    MIN_REMOTE_CHARS = 2
+
+    def __init__(self, edit: QLineEdit, search: SymbolSearch):
+        super().__init__(edit)
+        self.edit, self.search = edit, search
+        self.model = QStandardItemModel(self)
+        self.completer = QCompleter(self.model, self)
+        # the search already filters and ranks, so show the rows as they are
+        self.completer.setCompletionMode(QCompleter.CompletionMode.UnfilteredPopupCompletion)
+        self.completer.setCompletionRole(self.SYMBOL_ROLE)  # what gets inserted: the plain symbol
+        self.completer.popup().setObjectName("SymbolPopup")
+        self.completer.popup().setMinimumWidth(440)
+        self.completer.activated[str].connect(self._chosen)
+        edit.setCompleter(self.completer)
+        self._timer = QTimer(self, singleShot=True, interval=self.DEBOUNCE_MS, timeout=self._search_remote)
+        self._pending: str | None = None  # query of the network search whose results are still wanted
+        edit.textEdited.connect(self._edited)
+        edit.editingFinished.connect(self._cancel)  # Enter or leaving the field: no late popup
+
+    def _edited(self, text: str):
+        self._show(self.search.local(text))  # instant and offline
+        if len(text.strip()) >= self.MIN_REMOTE_CHARS:
+            self._timer.start()  # restarts while typing: one network search per pause
+        else:
+            self._timer.stop()
+
+    def _search_remote(self):
+        query = self._pending = self.edit.text()
+        run_async(lambda: self.search.search(query), lambda found: self._remote_done(query, found))
+
+    def _remote_done(self, query: str, found):
+        if query == self._pending == self.edit.text():  # drop results for text already changed or done
+            self._show(found)
+
+    def _cancel(self):
+        self._timer.stop()
+        self._pending = None
+
+    def _chosen(self, symbol: str):
+        self._cancel()
+        self.edit.setText(symbol)  # this slot runs before QLineEdit's own one, so the field still holds the query
+        self.chosen.emit(symbol)
+
+    def _show(self, matches):
+        self.model.clear()
+        for m in matches:
+            item = QStandardItem(m.label)
+            item.setData(m.symbol, self.SYMBOL_ROLE)
+            item.setToolTip(m.label)
+            self.model.appendRow(item)
+        if matches:
+            self.completer.complete()
+        else:
+            self.completer.popup().hide()
 
 
 def shortfall(df: pd.DataFrame, bars: int, start) -> str:

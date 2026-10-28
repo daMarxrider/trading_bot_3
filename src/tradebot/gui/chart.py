@@ -13,7 +13,6 @@ from PyQt6.QtCore import QEvent, QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QPainter, QPicture
 from PyQt6.QtWidgets import (
     QComboBox,
-    QCompleter,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -27,11 +26,12 @@ from PyQt6.QtWidgets import (
 from tradebot.algorithms import ALGORITHMS, build_algorithm
 from tradebot.config import Settings
 from tradebot.core.timeframes import TIMEFRAMES
-from tradebot.gui.common import DateRange, epoch_seconds, run_async, shortfall
+from tradebot.gui.common import DateRange, SymbolCompleter, epoch_seconds, run_async, shortfall
 from tradebot.gui.params import ParamDialog
 from tradebot.gui.theme import Theme, ThemeManager, qcolor
 from tradebot.gui.touch import PlotTouchHandler, TouchController
 from tradebot.indicators import INDICATORS
+from tradebot.symbols import SymbolSearch
 
 pg.setConfigOptions(antialias=True)
 FIT_PADDING = 0.05  #: auto-fit margin above and below the visible data, as a fraction of its span
@@ -85,7 +85,8 @@ class CandlestickItem(pg.GraphicsObject):
 class ChartView(QWidget):
     status = pyqtSignal(str)
 
-    def __init__(self, engine, themes: ThemeManager, watchlist: list[str], settings: Settings | None = None):
+    def __init__(self, engine, themes: ThemeManager, watchlist: list[str], settings: Settings | None = None,
+                 symbol_search: SymbolSearch | None = None):
         super().__init__()
         self.engine, self.themes, self.settings = engine, themes, settings
         self.df: pd.DataFrame | None = None
@@ -99,7 +100,8 @@ class ChartView(QWidget):
 
         # -- toolbar -----------------------------------------------------------------------------
         self.symbol = QLineEdit(watchlist[0] if watchlist else "BTC/USDT")
-        self.symbol.setCompleter(QCompleter(watchlist))
+        self.symbols = SymbolCompleter(self.symbol, symbol_search or SymbolSearch(lambda: watchlist))
+        self.symbols.chosen.connect(lambda _: self.load())
         self.symbol.setFixedWidth(150)
         self.symbol.returnPressed.connect(self.load)
         self.tf = QComboBox()
