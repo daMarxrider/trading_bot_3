@@ -47,6 +47,24 @@ def test_ensemble_is_optimizable():
     assert "rsi_threshold.lower" in res.best_params
 
 
+def test_ensemble_is_vectorized_only_if_all_members_are():
+    assert build_algorithm("vote", members=["rsi_threshold", "macd_cross"]).vectorized
+    mixed = build_algorithm("vote", members=["elliott_wave", "rsi_threshold"])
+    assert not mixed.vectorized
+    assert not mixed.with_params(threshold=0.6).vectorized
+
+
+@pytest.mark.parametrize("method", ["ga", "pso"])
+def test_ensemble_with_loop_based_member_is_optimizable(method):
+    # regression (#20): a loop-based member used to receive batched [group, 1] parameter arrays and crash
+    df = make_ohlc(500, seed=5)
+    algo = build_algorithm("vote", members=["elliott_wave", "rsi_threshold"])
+    fixed = {"elliott_wave.atr_period": 14, "elliott_wave.trade_wave5": 1, "rsi_threshold.period": 14}
+    res = OPTIMIZERS[method](algo, df, backend="auto", population=16, generations=2, seed=0, min_trades=0,
+                             fixed=fixed).run()
+    assert res.best_params["elliott_wave.atr_period"] == 14 and "rsi_threshold.lower" in res.best_params
+
+
 def test_backend_selection():
     assert select_backend("numpy").kind == "numpy"
     b = select_backend("auto")
