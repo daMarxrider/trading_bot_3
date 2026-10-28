@@ -29,12 +29,13 @@ from tradebot.config import Settings
 from tradebot.core.timeframes import TIMEFRAMES
 from tradebot.gui.common import DateRange, SymbolCompleter, epoch_seconds, run_async, shortfall
 from tradebot.gui.params import ParamDialog
-from tradebot.gui.theme import Theme, ThemeManager, qcolor
+from tradebot.gui.theme import Theme, ThemeManager, qcolor, resolve_color
 from tradebot.gui.touch import PlotTouchHandler, TouchController
-from tradebot.indicators import INDICATORS
+from tradebot.indicators import INDICATORS, Style
 from tradebot.symbols import SymbolSearch, symbol_name
 
 pg.setConfigOptions(antialias=True)
+DASHES = {"dash": Qt.PenStyle.DashLine, "dot": Qt.PenStyle.DotLine}  #: Style.dash -> Qt pen style
 FIT_PADDING = 0.05  #: auto-fit margin above and below the visible data, as a fraction of its span
 
 
@@ -126,6 +127,8 @@ class ChartView(QWidget):
         self._rows: dict = {}  # plot -> [(label, [(values, colour), …])] for the value lines (#45)
         self._legend: dict = {}  # plot -> LabelItem in its top-left corner
         self._positions = None  # the signal's target position per bar
+        self._slots: dict[int, int] = {}  # id(indicator) -> first palette index of its outputs
+        self._next_slot = 0
 
         # -- toolbar -----------------------------------------------------------------------------
         self.symbol = QLineEdit(watchlist[0] if watchlist else "BTC/USDT")
@@ -389,7 +392,6 @@ class ChartView(QWidget):
             candles.set_data(x, o, h, l, c, width, qcolor(t.up), qcolor(t.down))
             self.price.addItem(candles)
 
-        series_colors = iter(t.series * 4)
         for ind in self.indicators:
             frame = ind(df)
             target = self.price
@@ -410,19 +412,24 @@ class ChartView(QWidget):
                 self.panes.append(target)
             values = []  # this indicator's drawn outputs for the value line
             self._rows.setdefault(target, []).append((_spaced_label(ind.name, ind.values), values))
-            for col in frame.columns:
+            slot = self._palette_slot(ind)
+            for k, col in enumerate(frame.columns):
                 if not ind.is_line(col):
                     self._draw_labels(target, ind, frame, col, x, c, t)
                     continue
                 y = frame[col].to_numpy()
                 ok = ~np.isnan(y)
-                color = next(series_colors)
-                if col.endswith("_hist"):
-                    color = t.muted
-                    target.addItem(pg.BarGraphItem(x=x[ok], height=y[ok], width=width, brush=pg.mkBrush(qcolor(color))))
+                style = ind.styles.get(ind.output_of(col), Style())
+                hist = col.endswith("_hist")
+                default = t.muted if hist else t.series[(slot + k) % len(t.series)]
+                color = qcolor(resolve_color(t, style.color) if style.color else default)
+                if hist:
+                    target.addItem(pg.BarGraphItem(x=x[ok], height=y[ok], width=width, brush=pg.mkBrush(color)))
                     self._fit_series.setdefault(target, []).append(np.zeros_like(y))  # bars grow from 0
                 else:
-                    target.plot(x[ok], y[ok], pen=pg.mkPen(color, width=1.6), name=col)
+                    pen = pg.mkPen(color, width=style.width or 1.6, style=DASHES.get(style.dash, Qt.PenStyle.SolidLine))
+                    target.plot(x[ok], y[ok], pen=pen, name=col)
+                color = color.name()  # "#rrggbb" for the value line's rich text
                 self._fit_series.setdefault(target, []).append(y)
                 values.append((y, color))
         if self.algorithm is not None:
@@ -439,6 +446,14 @@ class ChartView(QWidget):
             self.reset_view()
         else:
             self.fit_y()
+
+    def _palette_slot(self, ind) -> int:
+        """Where an indicator's outputs start in the theme palette, fixed when it's first drawn: removing or
+        adding other indicators doesn't recolour it."""
+        if id(ind) not in self._slots:
+            self._slots[id(ind)] = self._next_slot
+            self._next_slot += len(ind.outputs)
+        return self._slots[id(ind)]
 
     def _draw_labels(self, target, ind, frame, col, x, close, t):
         """Text labels of an indicator output (e.g. Elliott wave numbers) at its anchor values."""
