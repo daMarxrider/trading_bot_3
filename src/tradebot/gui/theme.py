@@ -148,6 +148,16 @@ def stylesheet(t: Theme, touch: bool = False) -> str:
     )
 
 
+THEME_COLORS = ("up", "down", "accent", "muted", "text", "grid", "panel_border", "selection")
+
+
+def resolve_color(t: Theme, spec: str) -> str:
+    """A style colour for theme ``t``: theme tokens (``"up"``, ``"series[2]"``, …) or a literal CSS colour."""
+    if spec.startswith("series[") and spec.endswith("]"):
+        return t.series[int(spec[7:-1]) % len(t.series)]
+    return getattr(t, spec) if spec in THEME_COLORS else spec
+
+
 def qcolor(css: str) -> QColor:
     """Parse ``#rrggbb`` or ``rgba(r, g, b, a)`` (a in 0..1)."""
     if css.startswith("rgba"):

@@ -9,7 +9,7 @@ It registers one indicator and one algorithm; both immediately appear in
 from tradebot.algorithms.base import BaseAlgorithm
 from tradebot.core import ops
 from tradebot.core.registry import IntParam, Param
-from tradebot.indicators.base import BaseIndicator
+from tradebot.indicators.base import BaseIndicator, Style
 from tradebot.indicators.builtin import ATR, Donchian
 
 
@@ -19,6 +19,7 @@ class RateOfChange(BaseIndicator):
     params = {"period": IntParam(10, 1, 200)}
     overlay = False
     levels = (0.0,)
+    styles = {"value": Style(color="accent", width=2)}  # optional: colour, width and dash per output
 
     @classmethod
     def compute(cls, o, period):
