@@ -13,6 +13,7 @@ concurrency:
 
 permissions:
   contents: write
+  actions: write  # dispatch release.yml
 
 jobs:
   tag:
@@ -37,3 +38,9 @@ jobs:
           git tag "$next"
           git push origin "$next"
           echo "Tagged $next"
+          # a tag pushed with GITHUB_TOKEN starts no other workflow, so start the release build explicitly
+          if [ -f .github/workflows/release.yml ]; then
+            gh workflow run release.yml --ref "$next"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
