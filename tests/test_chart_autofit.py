@@ -132,28 +132,69 @@ class FakeWheel:
     def accept(self):
         pass
 
+    def ignore(self):  # a locked axis passes the wheel on
+        pass
 
-def test_wheel_on_chart_keeps_fit_but_wheel_on_price_axis_turns_it_off(chart):
+
+def test_wheel_zooms_time_only_and_the_price_axis_is_locked(chart):
     vb = chart.price.vb
     center = vb.boundingRect().center()
-    vb.wheelEvent(FakeWheel(center))  # wheel over the chart zooms time (and price, which gets refit)
+    vb.wheelEvent(FakeWheel(center))  # wheel over the chart zooms time; the price axis refits
     (x0, x1), _ = vb.viewRange()
     i0, i1 = np.searchsorted(chart._x, x0), np.searchsorted(chart._x, x1, "right") - 1
     v = visible(chart, i0, i1)
-    assert chart.fit_btn.isChecked()
     assert_fits(chart.price, v.low.min(), v.high.max())
 
-    before = vb.viewRange()[1]
+    fitted = vb.viewRange()[1]
     vb.wheelEvent(FakeWheel(center), axis=1)  # what scrolling over the price axis does
-    assert not chart.fit_btn.isChecked()  # the user's manual y zoom wins
-    assert vb.viewRange()[1] != pytest.approx(before)
-    manual = vb.viewRange()[1]
-    chart.price.setXRange(chart._x[0], chart._x[30], padding=0)
-    assert vb.viewRange()[1] == pytest.approx(manual)  # stays manual while auto-fit is off
+    assert vb.viewRange()[1] == pytest.approx(fitted)  # locked: nothing happens
+    assert chart.fit_btn.isChecked()  # only the toggle switches auto-fit off
 
-    chart.fit_btn.setChecked(True)  # turning it back on refits right away
+
+def test_cannot_pan_past_the_data(chart):
+    x = chart._x
+    span = x[50] - x[0]
+    chart.price.setXRange(x[0] - 10 * span, x[0] - 9 * span, padding=0)  # far before the first candle
+    x0, x1 = chart.price.vb.viewRange()[0]
+    assert x0 >= x[0] - (x[1] - x[0]) * 1.01 and x1 > x[0]  # clamped: candles stay in view
+    chart.price.setXRange(x[-1] + 9 * span, x[-1] + 10 * span, padding=0)  # far after the last one
+    x0, x1 = chart.price.vb.viewRange()[0]
+    assert x1 <= x[-1] + (x[1] - x[0]) * 1.01 and x0 < x[-1]
+
+
+def test_toggle_off_unlocks_and_keeps_the_range(chart):
+    vb = chart.price.vb
+    chart.price.setXRange(chart._x[0], chart._x[30], padding=0)
+    chart.fit_btn.setChecked(False)
+    assert vb.state["mouseEnabled"] == [True, True]
+    fitted = vb.viewRange()[1]
+    assert vb.viewRange()[1] == pytest.approx(fitted)  # switching off doesn't jump
+    vb.wheelEvent(FakeWheel(vb.boundingRect().center()), axis=1)
+    assert vb.viewRange()[1] != pytest.approx(fitted)  # now the price axis is free
+    chart.price.setXRange(chart._x[-1] + 1e9, chart._x[-1] + 2e9, padding=0)
+    assert vb.viewRange()[0][0] > chart._x[-1]  # and time can be panned past the data
+
+    chart.fit_btn.setChecked(True)  # back on: refits and locks again right away
+    assert vb.state["mouseEnabled"] == [True, False]
+    chart.price.setXRange(chart._x[0], chart._x[30], padding=0)
     v = visible(chart, 0, 30)
     assert_fits(chart.price, v.low.min(), v.high.max())
+
+
+def test_touch_vertical_moves_leave_the_price_axis_alone(chart):
+    vp = chart.canvas.viewport()
+    c = vp.rect().center()
+    fitted = chart.price.vb.viewRange()[1]
+    touch(vp, QEvent.Type.TouchBegin, [(0, QPoint(c.x(), c.y() - 50), S.Pressed), (1, QPoint(c.x(), c.y() + 50), S.Pressed)])
+    touch(vp, QEvent.Type.TouchUpdate, [(0, QPoint(c.x(), c.y() - 150), S.Updated),
+                                        (1, QPoint(c.x(), c.y() + 150), S.Updated)])  # vertical spread
+    touch(vp, QEvent.Type.TouchEnd, [(0, QPoint(c.x(), c.y() - 150), S.Released),
+                                     (1, QPoint(c.x(), c.y() + 150), S.Released)])
+    touch(vp, QEvent.Type.TouchBegin, [(0, c, S.Pressed)])
+    touch(vp, QEvent.Type.TouchUpdate, [(0, QPoint(c.x(), c.y() + 200), S.Updated)])  # vertical drag
+    touch(vp, QEvent.Type.TouchEnd, [(0, QPoint(c.x(), c.y() + 200), S.Released)])
+    assert chart.price.vb.viewRange()[1] == pytest.approx(fitted)
+    assert chart.fit_btn.isChecked()
 
 
 def test_touch_pinch_and_reset_keep_the_fit(chart):

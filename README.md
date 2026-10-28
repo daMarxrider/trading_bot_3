@@ -131,8 +131,10 @@ of sample. The GUI's Backtest lab offers the same options.
   buy/sell markers for any algorithm, a crosshair with an OHLC readout, and
   drawing tools (trendline, support/resistance level, zone rectangle). The ↕
   button in the bottom-left corner (on by default) fits the price axis and
-  indicator panes to the candles in view while you scroll or zoom. Scaling the
-  price axis by hand turns it off. The app remembers the setting between sessions.
+  indicator panes to the candles in view while you scroll or zoom. While it is on,
+  dragging, scrolling and pinching only move the time axis, and not past the
+  first or last candle, so the chart always stays in view. Switch it off to move
+  the price axis freely. The app remembers the setting between sessions.
 * **Screener**: filter any universe by technicals, volume and market cap using
   expressions or presets. Double-click a row to open it in the chart.
 * **Backtest lab**: parameter forms generated from each algorithm, equity vs.

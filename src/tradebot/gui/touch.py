@@ -244,13 +244,15 @@ class PlotTouchHandler(GestureHandler):
         vb = self._plot.vb
         a = vb.mapSceneToView(self._scene(x - dx, y - dy))
         b = vb.mapSceneToView(self._scene(x, y))
-        vb.translateBy(x=a.x() - b.x(), y=a.y() - b.y())  # content follows the finger
+        mx, my = vb.state["mouseEnabled"]  # touch honours the same axis locks as the mouse
+        vb.translateBy(x=(a.x() - b.x()) * mx, y=(a.y() - b.y()) * my)  # content follows the finger
 
     def on_pinch(self, cx, cy, sx, sy):
         if self._plot is None:
             return
         vb = self._plot.vb
-        vb.scaleBy(s=(1 / sx, 1 / sy), center=vb.mapSceneToView(self._scene(cx, cy)))
+        mx, my = vb.state["mouseEnabled"]
+        vb.scaleBy(s=(1 / sx if mx else 1, 1 / sy if my else 1), center=vb.mapSceneToView(self._scene(cx, cy)))
 
     def on_double_tap(self, x, y):
         if self.reset_cb:

@@ -321,6 +321,7 @@ class ChartView(QWidget):
                                                           brush=pg.mkBrush(color), pen=pg.mkPen(None)))
         self._style(t)
         self.info.setText("   ".join(f"<span style='color:{c}'>■</span> {n}" for c, n in legend_items))
+        self._lock_view()
         if autorange:
             self.reset_view()
         else:
@@ -440,17 +441,25 @@ class ChartView(QWidget):
         finally:
             self._adjusting = False
 
-    def _range_changed(self, vb, _ranges, changed):
-        if self._adjusting or not self.autofit:
-            return
-        if changed[0]:
+    def _range_changed(self, _vb, _ranges, changed):
+        if changed[0] and self.autofit and not self._adjusting:
             self.fit_y()  # scrolled or zoomed in time
-        elif changed[1] and not vb.state["autoRange"][1]:
-            self.fit_btn.setChecked(False)  # the user scaled the price axis: respect it
+
+    def _lock_view(self):
+        """While auto-fit is on, mouse and touch move only the time axis, and not past the data."""
+        on = self.autofit and len(self._x) > 0
+        margin = float(np.median(np.diff(self._x))) if len(self._x) > 1 else 86400.0  # keep the edge candles whole
+        for plot in [self.price, *self.panes]:
+            plot.vb.setMouseEnabled(x=True, y=not on)
+            if on:
+                plot.vb.setLimits(xMin=self._x[0] - margin, xMax=self._x[-1] + margin)
+            else:
+                plot.vb.setLimits(xMin=None, xMax=None)
 
     def _autofit_toggled(self, on):
         if self.settings:
             self.settings.set("chart.autofit", on)
+        self._lock_view()
         if on:
             self.fit_y()
         else:

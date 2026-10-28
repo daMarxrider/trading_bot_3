@@ -209,6 +209,7 @@ def test_pinch_zooms_time_axis(chart):
 
 
 def test_drag_pans_and_double_tap_resets(chart):
+    chart.fit_btn.setChecked(False)  # free panning; auto-fit would stop the view at the first candle
     vp = chart.canvas.viewport()
     c = vp.rect().center()
     chart.reset_view()
