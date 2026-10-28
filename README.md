@@ -61,6 +61,19 @@ trips are rejected.
 * **News**: headlines for watchlist and portfolio symbols, auto-refreshed
   every 5 minutes.
 
+**Touchscreens.** The charts support the common touch gestures:
+
+| Gesture | Action |
+|---|---|
+| Pinch / spread | Zoom around your fingers. A horizontal pinch zooms the time axis, a vertical pinch zooms the price axis. |
+| One- or two-finger drag | Pan |
+| Flick | Pan with momentum |
+| Tap | Crosshair and OHLC readout; also places drawing points |
+| Double-tap | Reset the view |
+| Long press | Context menu (also on right-click): reset zoom, add a level at the touched price, drawing tools, candles/line |
+
+Lists and tables scroll with a kinetic flick. With a touchscreen present, controls automatically get finger-sized hit targets. Override this with `touch_mode = "on"` or `"off"` in the config.
+
 Themes: **Glass** (translucent frosted panels over a soft gradient backdrop),
 **Modern Dark** and **Light**. You can add your own by placing JSON files in
 `~/.config/tradebot/themes/`:
