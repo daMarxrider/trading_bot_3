@@ -24,6 +24,7 @@ import logging
 import threading
 import time
 from dataclasses import astuple, dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -97,6 +98,42 @@ def _yahoo_matches(quotes: list[dict]) -> list[SymbolMatch]:
         name = q.get("longname") or q.get("shortname") or ""
         out.append(SymbolMatch(symbol, name, q.get("exchDisp", ""), kind))
     return out
+
+
+#: Names of common quote currencies, as charting platforms show them ("Bitcoin / TetherUS")
+QUOTE_NAMES = {"USD": "U.S. Dollar", "USDT": "TetherUS", "USDC": "USD Coin", "EUR": "Euro", "GBP": "British Pound",
+               "JPY": "Japanese Yen", "CHF": "Swiss Franc", "BTC": "Bitcoin", "ETH": "Ethereum", "BNB": "BNB"}
+
+
+@lru_cache(maxsize=256)
+def symbol_name(symbol: str, search: Callable[[str], list[SymbolMatch]] | None = None) -> str | None:
+    """Full name for a chart title: ``AAPL`` -> ``Apple Inc.``, ``BTC/USDT`` -> ``Bitcoin / TetherUS``.
+
+    None when Yahoo doesn't know it (or is unreachable); callers then keep showing the ticker. Slow: network.
+    """
+    search = search or yahoo_search_http
+    if "/" not in symbol:
+        return _exact_name(symbol, search)
+    base, _, quote = symbol.partition("/")
+    base_name = _crypto_name(base, search)
+    if base_name is None:
+        return None
+    return f"{base_name} / {QUOTE_NAMES.get(quote) or _crypto_name(quote, search) or quote}"
+
+
+def _exact_name(ticker: str, search) -> str | None:
+    try:
+        matches = search(ticker)
+    except Exception as exc:  # offline: no name, not an error
+        log.debug("name lookup for %s failed: %s", ticker, exc)
+        return None
+    return next((m.name for m in matches if m.symbol.upper() == ticker.upper() and m.name), None)
+
+
+def _crypto_name(asset: str, search) -> str | None:
+    """Yahoo lists coins as ``BTC-USD`` named ``Bitcoin USD``; the coin's name is the part before `` USD``."""
+    name = _exact_name(f"{asset}/USD", lambda q: search(q.replace("/", "-")))
+    return name.removesuffix(" USD").strip() or None if name else None
 
 
 class CryptoPairs:
