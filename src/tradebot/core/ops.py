@@ -151,7 +151,19 @@ def ewm(x, alpha):
     """Exponential moving average, ``adjust=False`` semantics, seeded at the first non-NaN value.
 
     ``alpha`` may be a scalar or broadcastable array (e.g. one value per population member).
+    Scalar ``alpha`` with at most leading NaNs (the common case) uses a chunked
+    parallel scan; anything else falls back to a per-bar loop.
     """
+    if isinstance(alpha, (int, float)):
+        valid = ~isnan(x)
+        n_valid = cumsum(valid.to(x.dtype) if is_torch(x) else valid.astype(x.dtype))
+        started = n_valid > 0
+        if not bool((started & ~valid).any()):
+            # seeding y[t0] = x[t0] equals feeding x[t0]/alpha into the recurrence from a zero state
+            first = valid & (n_valid == 1)
+            x0 = where(valid, x, 0.0)
+            x0 = where(first, x0 / alpha, x0)
+            return where(started, _linear_scan(alpha * x0, 1.0 - alpha), NAN)
     out = []
     state = None
     for t in range(x.shape[-1]):
@@ -165,6 +177,28 @@ def ewm(x, alpha):
     if is_torch(x):
         return torch.stack(out, dim=-1)
     return np.stack(out, axis=-1) if out else x.copy()
+
+
+def _linear_scan(u, b: float, chunk: int = 64):
+    """``y[t] = b * y[t-1] + u[t]`` with ``y[-1] = 0``, via block matmuls instead of a per-bar loop."""
+    T = u.shape[-1]
+    n_chunks = -(-T // chunk)
+    pad = n_chunks * chunk - T
+    if pad:
+        u = concat([u, full((*u.shape[:-1], pad), 0.0, u)])
+    blocks = u.reshape(*u.shape[:-1], n_chunks, chunk)
+    k = np.arange(chunk)
+    powers = b ** np.clip(k[:, None] - k[None, :], 0, None) * (k[:, None] >= k[None, :])  # L[k, j] = b^(k-j)
+    decay = b ** (k + 1)  # weight of the previous chunk's last value
+    powers, decay = asarray(powers, u), asarray(decay, u)
+    local = blocks @ powers.T  # within-chunk response from a zero start
+    carry = None
+    outs = []
+    for c in range(n_chunks):
+        y = local[..., c, :] if carry is None else local[..., c, :] + carry[..., None] * decay
+        carry = y[..., -1]
+        outs.append(y)
+    return concat(outs)[..., :T]
 
 
 def ema(x, n: int):
