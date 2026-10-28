@@ -25,6 +25,7 @@ from tradebot import __version__
 from tradebot.config import load_config, watchlist
 from tradebot.core.registry import load_plugins
 from tradebot.data import MarketDataEngine
+from tradebot.data.providers import quiet_yfinance
 from tradebot.gui.chart import ChartView
 from tradebot.gui.theme import GlassBackdrop, ThemeManager
 from tradebot.gui.touch import has_touchscreen
@@ -113,6 +114,7 @@ class MainWindow(QMainWindow):
 
 
 def main(argv: list[str] | None = None) -> int:
+    quiet_yfinance()
     load_plugins()
     app = QApplication(argv if argv is not None else sys.argv)
     app.setApplicationName("tradebot")

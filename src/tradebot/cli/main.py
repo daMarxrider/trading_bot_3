@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import logging
-import warnings
 from typing import Annotated, Optional
 
 import pandas as pd
@@ -30,7 +29,9 @@ TF = Annotated[str, typer.Option("--tf", help="Timeframe: 1m 5m 15m 30m 1h 4h 1d
 
 @app.callback()
 def _main(verbose: Annotated[bool, typer.Option("-v", "--verbose")] = False):
-    warnings.filterwarnings("ignore", module="yfinance")
+    from tradebot.data.providers import quiet_yfinance
+
+    quiet_yfinance()
     logging.basicConfig(level=logging.INFO if verbose else logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     load_plugins()
 
@@ -157,8 +158,9 @@ def optimize(
     bars: int = 2000,
     members: Members = None,
     fix: Annotated[list[str], typer.Option(help="Keep a parameter fixed, e.g. --fix period=14")] = [],
-    population: int = 256,
-    generations: int = 30,
+    method: Annotated[str, typer.Option(help="ga | pso | both (run both and compare them)")] = "ga",
+    population: Annotated[int, typer.Option(help="Population (GA) / swarm size (PSO)")] = 256,
+    generations: Annotated[int, typer.Option(help="Generations (GA) / iterations (PSO)")] = 30,
     objective: Annotated[str, typer.Option(help="sharpe | return | calmar")] = "sharpe",
     train: Annotated[float, typer.Option(help="Fraction of data used for training")] = 0.7,
     backend: Annotated[str, typer.Option(help="auto | gpu | cpu | numpy")] = "auto",
@@ -166,25 +168,40 @@ def optimize(
     min_trades: Annotated[int, typer.Option(help="Reject parameter sets with fewer round trips")] = 4,
     seed: Optional[int] = None,
 ):
-    """Evolve algorithm parameters (GPU accelerated when available), report out-of-sample results."""
+    """Optimize algorithm parameters with a genetic algorithm and/or particle swarm (GPU accelerated
+    when available) and report out-of-sample results. ``--method both`` also measures how much the two
+    methods disagree - large disagreement means a fragile optimum."""
     from rich.progress import Progress
 
-    from tradebot.optimize import GeneticOptimizer
+    from tradebot.optimize import OPTIMIZERS, run_comparison, select_backend
 
+    if method not in (*OPTIMIZERS, "both"):
+        raise typer.BadParameter("method must be ga, pso or both")
     algorithm = make_algo(algo, [], members)
     df = load_data(symbol, tf, start, end, bars)
-    opt = GeneticOptimizer(algorithm, df, population=population, generations=generations, objective=objective,
-                           train_fraction=train, backend=backend, fee=fee, seed=seed, fixed=parse_kv(fix),
-                           min_trades=min_trades)
-    console.print(f"backend: [bold]{opt.backend.description}[/] · {len(df)} candles · {len(opt.keys)} genes")
+    kwargs = dict(population=population, generations=generations, objective=objective, train_fraction=train,
+                  backend=select_backend(backend), fee=fee, seed=seed, fixed=parse_kv(fix), min_trades=min_trades)
+    n_genes = len([k for k in algorithm.param_space() if k not in kwargs["fixed"]])
+    console.print(f"backend: [bold]{kwargs['backend'].description}[/] · {len(df)} candles · {n_genes} parameters")
     with Progress(console=console) as progress:
-        task = progress.add_task("evolving", total=generations)
+        task = progress.add_task("optimizing", total=generations)
+        label = {"name": method.upper()}
 
-        def report(gen, best, params):
-            progress.update(task, advance=1, description=f"gen {gen + 1} best {objective}={best:.3f}")
+        def phase(name):
+            label["name"] = name.upper()
+            progress.reset(task, total=generations)
 
-        res = opt.run(report)
-    t = Table(title="best parameters")
+        def report(step, best, params):
+            progress.update(task, advance=1, description=f"{label['name']} step {step + 1} best {objective}={best:.3f}")
+
+        if method == "both":
+            cmp = run_comparison(algorithm, df, progress=report, on_phase=phase, **kwargs)
+        else:
+            res = OPTIMIZERS[method](algorithm, df, **kwargs).run(report)
+    if method == "both":
+        _print_comparison(cmp, symbol, algo)
+        return
+    t = Table(title=f"best parameters ({method.upper()})")
     t.add_column("param")
     t.add_column("value")
     for k, v in res.best_params.items():
@@ -195,6 +212,34 @@ def optimize(
         console.print(metrics_table("out-of-sample", res.test.metrics))
     flags = " ".join(f"-p {k}={v:g}" for k, v in res.best_params.items())
     console.print(f"{res.evaluations} evaluations · reuse with: [cyan]tradebot backtest {symbol} {algo} {flags}[/]")
+
+
+def _print_comparison(cmp, symbol: str, algo: str) -> None:
+    from tradebot.backtest.metrics import fmt
+
+    t = Table(title="GA vs PSO: parameters")
+    for col in ("param", "GA", "PSO", "difference (% of range)"):
+        t.add_column(col, justify="left" if col == "param" else "right")
+    for k, d in cmp.param_diff.items():
+        color = "green" if d <= 0.10 else "yellow" if d <= 0.25 else "red"
+        t.add_row(k, f"{cmp.ga.best_params[k]:g}", f"{cmp.pso.best_params[k]:g}", f"[{color}]{d:.0%}[/]")
+    console.print(t)
+    m = Table(title="GA vs PSO: results")
+    for col in ("metric", "GA in-sample", "PSO in-sample", "GA out-of-sample", "PSO out-of-sample"):
+        m.add_column(col, justify="left" if col == "metric" else "right")
+    for key in cmp.ga.train.metrics:
+        cells = [fmt(key, r.metrics[key]) if r is not None else "–"
+                 for r in (cmp.ga.train, cmp.pso.train, cmp.ga.test, cmp.pso.test)]
+        m.add_row(key.replace("_", " "), *cells)
+    m.add_row("evaluations", str(cmp.ga.evaluations), str(cmp.pso.evaluations), "", "")
+    console.print(m)
+    color = {"consistent": "green", "fragile": "yellow", "divergent": "red"}[cmp.verdict]
+    console.print(f"agreement [bold]{cmp.agreement:.0%}[/] · max parameter difference {cmp.max_param_diff:.0%} · "
+                  f"in-sample {cmp.objective} gap {cmp.fitness_gap:.1%}")
+    console.print(f"verdict: [bold {color}]{cmp.verdict.upper()}[/] - {cmp.explanation()}")
+    best = cmp.better
+    flags = " ".join(f"-p {k}={v:g}" for k, v in best.best_params.items())
+    console.print(f"better in-sample: {best.method.upper()} · reuse with: [cyan]tradebot backtest {symbol} {algo} {flags}[/]")
 
 
 @bot_app.command("run")
