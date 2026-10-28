@@ -124,6 +124,8 @@ class OrderIntent:
     type: OrderType
     price: float | None
     created: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    #: Broker-specific data, e.g. a pre-trade preview and its confirmation id.
+    details: dict = field(default_factory=dict, repr=False)
 
     def describe(self) -> str:
         at = f" @ {self.price}" if self.price else " at market"
@@ -162,3 +164,11 @@ class ManualExecutionBroker(BaseBroker):
 
     def cancel_order(self, order_id, symbol=None) -> bool:
         return self.pending.pop(order_id, None) is not None
+
+    def confirm(self, intent_id: str, **kwargs) -> Order:
+        """Submit a pending intent after the user explicitly approved it.
+
+        Must only be called from a direct user action (CLI prompt, GUI button),
+        never automatically. Brokers without any submission API cannot do this.
+        """
+        raise NotImplementedError(f"{self.name} has no order API; execute {intent_id} manually")

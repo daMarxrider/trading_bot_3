@@ -35,6 +35,7 @@ tradebot optimize BTC/USDT rsi_threshold --population 1024 --generations 40 --ob
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50          # dry run
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50 --live   # real orders
 tradebot positions --broker kucoin
+tradebot trade buy AAPL 2 --broker scalable    # preview → full disclosure → explicit confirm
 tradebot portfolio --broker scalable --broker binance
 tradebot screen -f "rsi < 35" -f "close > sma200"
 tradebot news AAPL NVDA BTC/USDT
@@ -86,8 +87,12 @@ api_key = "..."
 secret = "..."
 password = "..."            # KuCoin API passphrase
 
-[brokers.scalable]
-holdings_csv = "~/finance/scalable.csv"   # columns: symbol,quantity,avg_cost
+[brokers.scalable]                 # uses the official Scalable CLI (`sc`)
+portfolio_id = "..."               # only needed with several portfolios
+# holdings_csv = "~/finance/scalable.csv"   # fallback without `sc` (symbol,quantity,avg_cost)
+
+[brokers.scalable.symbols]         # optional ticker -> ISIN overrides
+AAPL = "US0378331005"
 ```
 
 Secrets can also come from the environment as `TRADEBOT_<BROKER>_<KEY>`, for
@@ -132,9 +137,17 @@ listed on Binance.
 mode:
 
 * `live`: orders go to the venue's API. All crypto venues use ccxt.
-* `semi_auto`: there is no trading API (Scalable Capital, Trade Republic).
-  Orders become `OrderIntent`s for you to execute by hand, and holdings are
-  read from a CSV.
+* `semi_auto`: orders need a human in the loop and become `OrderIntent`s.
+  * **Scalable Capital** goes through Scalable's official
+    [CLI](https://github.com/ScalableCapital/scalable-cli). It syncs holdings
+    (including FIFO cost basis), cash and quotes. An order first requests
+    Scalable's binding pre-trade preview. tradebot shows you every field of it
+    and submits only after you explicitly confirm, as Scalable requires. For
+    setup, enable *Profile → Security → Agentic Investing*, install `sc` and
+    run `sc login`; a login lasts up to 7 days. Use
+    `tradebot trade buy AAPL 2 --broker scalable`, or
+    `tradebot bot run ... --broker scalable --live`, which asks before each order.
+  * **Trade Republic** reads holdings from a CSV; you execute its orders by hand.
 * `read_only`: tracking only.
 
 ## Extending

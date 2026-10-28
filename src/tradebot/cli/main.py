@@ -15,6 +15,7 @@ from rich.table import Table
 
 from tradebot.algorithms import ALGORITHMS, build_algorithm
 from tradebot.brokers import BROKERS, create_broker
+from tradebot.core.models import ExecutionMode
 from tradebot.core.registry import load_plugins
 from tradebot.indicators import INDICATORS
 
@@ -214,6 +215,8 @@ def bot_run(
     from tradebot.live import TradingBot
 
     kwargs = {"sandbox": True} if sandbox else {}
+    if BROKERS.get(broker).execution_mode is ExecutionMode.SEMI_AUTO:
+        kwargs = {"on_intent": lambda intent: _review_intent(b, intent)}
     b = create_broker(broker, **kwargs)
     if live and not b.can_trade:
         raise typer.BadParameter(f"{broker} is read-only")
@@ -229,6 +232,59 @@ def bot_run(
         bot.run(max_steps=1 if once else None)
     except KeyboardInterrupt:
         console.print("stopped")
+
+
+def _review_intent(broker, intent) -> None:
+    """Show a semi-automated order (incl. every disclosure of a broker preview) and ask the user."""
+    from tradebot.brokers.scalable import format_preview
+
+    console.rule(f"[bold yellow]order needs your confirmation · {intent.broker}")
+    console.print(intent.describe())
+    if intent.details.get("presentation") or intent.details.get("raw"):
+        console.print(format_preview(intent.details), markup=False, highlight=False)
+    try:
+        if not typer.confirm("Submit this order?", default=False):
+            broker.cancel_order(intent.id)
+            console.print("[yellow]discarded[/]")
+            return
+        ack = False
+        if intent.details.get("requires_appropriateness_ack"):
+            ack = typer.confirm("This order requires acknowledging the appropriateness warning shown above. "
+                                "Do you understand the risks and want to proceed?", default=False)
+            if not ack:
+                broker.cancel_order(intent.id)
+                return
+        order = broker.confirm(intent.id, acknowledge_appropriateness_warning=ack) if ack else broker.confirm(intent.id)
+        console.print(f"[green]submitted[/] order {order.id} ({order.status.value})")
+    except NotImplementedError:
+        console.print("[yellow]this broker has no order API - execute the order manually[/]")
+
+
+@app.command()
+def trade(
+    side: Annotated[str, typer.Argument(help="buy | sell")],
+    symbol: Annotated[str, typer.Argument(help="Ticker, ISIN (Scalable) or pair (crypto)")],
+    quantity: Annotated[float, typer.Argument(help="Units / shares")],
+    broker: Annotated[str, typer.Option(help="Registered broker name")] = "scalable",
+    limit: Annotated[Optional[float], typer.Option(help="Limit price (default: market order)")] = None,
+):
+    """Place a single order. Always shows the order (and any broker preview) and asks before submitting."""
+    from tradebot.core.models import OrderType
+
+    if side not in ("buy", "sell"):
+        raise typer.BadParameter("side must be buy or sell")
+    order_type = OrderType.LIMIT if limit is not None else OrderType.MARKET
+    if BROKERS.get(broker).execution_mode is ExecutionMode.SEMI_AUTO:
+        b = create_broker(broker, on_intent=lambda intent: _review_intent(b, intent))
+        b.place_order(symbol, side, quantity, order_type, limit)
+        return
+    b = create_broker(broker)
+    if not b.can_trade:
+        raise typer.BadParameter(f"{broker} is read-only")
+    at = f"limit {limit:g}" if limit is not None else "market"
+    if typer.confirm(f"{side.upper()} {quantity:g} {symbol} on {broker} ({at})?", default=False):
+        order = b.place_order(symbol, side, quantity, order_type, limit)
+        console.print(f"[green]placed[/] order {order.id} ({order.status.value})")
 
 
 @app.command()

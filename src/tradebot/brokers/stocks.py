@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 daMarxrider
-"""Neo-brokers without an official trading API (semi-automated execution).
+"""Neo-brokers without a usable trading API (semi-automated execution).
 
-Holdings come from a CSV file (``symbol,quantity,avg_cost[,currency]``,
+Scalable Capital lives in :mod:`tradebot.brokers.scalable` (official CLI).
+Holdings here come from a CSV file (``symbol,quantity,avg_cost[,currency]``,
 e.g. converted from the broker's own export); market data comes from the
 shared data engine; orders become manual :class:`OrderIntent` objects.
 """
@@ -44,13 +45,6 @@ class HoldingsFileBroker(ManualExecutionBroker):
 
     def get_balance(self) -> dict[str, Balance]:
         return {p.symbol: Balance(p.symbol, p.quantity) for p in self.get_positions()}
-
-
-class ScalableCapitalBroker(HoldingsFileBroker):
-    """Scalable Capital: no public trading API -> tracking + manual order intents."""
-
-    name = "scalable"
-    asset_classes = frozenset({AssetClass.STOCK})
 
 
 class TradeRepublicBroker(HoldingsFileBroker):
