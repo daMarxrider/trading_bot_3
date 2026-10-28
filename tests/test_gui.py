@@ -98,3 +98,21 @@ def test_backtest_view_shows_ga_pso_comparison(app, tmp_path):
     assert list(view.metrics.df.columns)[1:] == ["GA in-sample", "GA out-of-sample", "PSO in-sample", "PSO out-of-sample"]
     view._show((df, {"backtest": cmp.ga.train}))  # a plain backtest hides the verdict again
     assert view.verdict_card.isHidden()
+
+
+def test_chart_draws_elliott_wave_labels(app, tmp_path):
+    import pyqtgraph as pg
+
+    from tradebot.indicators.elliott import ElliottWaves
+
+    from .test_elliott import path
+
+    themes = ThemeManager(user_dir=tmp_path)
+    themes.apply("dark")
+    chart = ChartView(None, themes, ["TEST"])
+    chart.df = path()
+    chart.indicators = [ElliottWaves()]
+    chart.redraw(autorange=True)
+    texts = sorted(i.toPlainText() for i in chart.price.items if isinstance(i, pg.TextItem))
+    assert texts == sorted("012345ABC")
+    assert not chart.panes  # the hidden causal state is not drawn as a pane or line

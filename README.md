@@ -131,9 +131,11 @@ example `TRADEBOT_BINANCE_SECRET`. The optional data providers read
 ```
 src/tradebot/
   core/        ops (NumPy/torch time-series primitives), OHLC container, registry + plugin loader, models
-  indicators/  BaseIndicator + built-ins (SMA, EMA, RSI, MACD, Bollinger, ATR, Stochastic, Donchian, Ichimoku)
+  indicators/  BaseIndicator + built-ins (SMA, EMA, RSI, MACD, Bollinger, ATR, Stochastic, Donchian, Ichimoku,
+               Elliott waves)
   algorithms/  BaseAlgorithm + built-ins (rsi_threshold, macd_cross, ichimoku_cloud, sma_cross,
-               bollinger_reversion, range, vote ensemble)
+               bollinger_reversion, range, vote ensemble, elliott_wave)
+  analysis/    loop-based pattern detection (Elliott waves)
   data/        providers (ccxt exchanges, yfinance, Alpha Vantage, FMP) + MarketDataEngine (fallback/stitching)
   brokers/     BaseBroker; ccxt live brokers (Binance, KuCoin, Pionex); semi-automated Scalable / Trade Republic
   backtest/    vectorized engine + metrics (Sharpe, Sortino, max drawdown, win rate, profit factor, CAGR)
@@ -168,6 +170,31 @@ mode:
   Orders become `OrderIntent`s for you to execute by hand, and holdings are
   read from a CSV.
 * `read_only`: tracking only.
+
+## Elliott waves
+
+**Indicator `elliott`.** It finds swings with an ATR-based zigzag (`swing_atr` sets the minimum swing size). It then checks every swing sequence against the hard Elliott rules:
+- wave 2 never retraces more than 100% of wave 1;
+- wave 3 is never the shortest of waves 1, 3 and 5;
+- wave 4 doesn't overlap wave 1;
+- in a correction, C extends beyond A.
+
+Each match gets a Fibonacci conformity score from 0 to 1. Charts draw the zigzag with labels 0–5 and A–C. These labels are a **hindsight** view, so the indicator also provides a **causal** `state` output for trading and screening:
+- `3`, `4`, `5`: that wave is in progress;
+- `10`: the impulse is complete;
+- `11`–`13`: waves A–C of the correction;
+- negative values: the same for a bearish structure.
+
+`state` only uses swings that were already confirmed at each bar, for example `tradebot screen -f "elliott_state == 3"` after adding it as an extra screener column.
+
+**Strategy `elliott_wave`** (long-only):
+- **Wave-3 setup:** after a valid wave 1–2 whose wave-2 retracement lies within `wave2_min`–`wave2_max`, it buys the breakout above the wave-1 high.
+  - stop: below the wave-2 low, minus `stop_atr` × ATR
+  - target: `target_ext` × wave 1
+  - also exits when the wave-3 top gets confirmed
+- **Wave-5 setup** (`trade_wave5`): the same logic after a valid wave 1–4.
+- **Optimization:** all parameters can be tuned with `tradebot optimize … elliott_wave --method both`.
+- **Speed:** the strategy needs a loop over the bars, so the optimizer evaluates it on the CPU (about 3.5 ms per candidate for 1,500 candles).
 
 ## Extending
 

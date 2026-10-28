@@ -22,6 +22,10 @@ Writing a new algorithm is one small class::
             rsi = RSI.compute(o, period=p["period"])["value"]
             return ops.latch(rsi < p["level"], rsi > 50)
 
+Event-driven logic that needs a Python loop over bars is fine too: set
+``vectorized = False`` and write ``signals`` for NumPy arrays and scalar
+parameters (see ``tradebot.algorithms.elliott``).
+
 Rules that keep it GPU-optimizable for free:
 
 * use only :mod:`tradebot.core.ops` / arithmetic on the arrays (no ``np.`` calls
@@ -49,6 +53,9 @@ class BaseAlgorithm(ABC):
     description: ClassVar[str] = ""
     params: ClassVar[dict[str, Param]] = {}
     allow_short: ClassVar[bool] = False
+    #: False for loop-based algorithms that cannot take ``[population, 1]`` parameter arrays;
+    #: the optimizer then evaluates candidates one by one on the CPU.
+    vectorized: ClassVar[bool] = True
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
