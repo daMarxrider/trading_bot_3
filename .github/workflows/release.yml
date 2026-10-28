@@ -73,6 +73,10 @@ jobs:
           ./tradebot --help
           ./tradebot list algorithms | grep donchian_breakout  # built-ins plus a directory plugin
           find "$GITHUB_WORKSPACE/dist" -path '*/plotext/_kernel/cpp/kernel.*' | grep .  # the terminal charts need plotext's C++ kernel
+          if [[ "$RUNNER_OS" == macOS ]]; then  # opening the .app must start the GUI, not the CLI
+            /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' ../Info.plist | grep -x tradebot-gui
+            codesign --verify --deep --strict ../..  # the ad-hoc signature Apple Silicon requires
+          fi
           ${{ matrix.gui }} & pid=$!
           sleep 20
           kill -0 $pid  # still running after 20 s = the GUI started fine

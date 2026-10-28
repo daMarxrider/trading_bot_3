@@ -27,9 +27,7 @@ parts = [exe, a.binaries, a.datas]
 if sys.platform in ("win32", "darwin"):
     g = Analysis(["gui_entry.py"], **options)
     gui_exe = EXE(PYZ(g.pure), g.scripts, [], exclude_binaries=True, name="tradebot-gui", console=False)
-    gui_parts = [gui_exe, g.binaries, g.datas]
-    # COLLECT drops the files both builds share; the .app launches the first EXE, so the GUI goes first there
-    parts = gui_parts + parts if sys.platform == "darwin" else parts + gui_parts
+    parts += [gui_exe, g.binaries, g.datas]  # COLLECT drops the files both builds share
 
 coll = COLLECT(*parts, name="tradebot")
 
@@ -38,5 +36,5 @@ if sys.platform == "darwin":
         coll,
         name="tradebot.app",
         bundle_identifier="io.github.damarxrider.tradebot",
-        info_plist={"NSHighResolutionCapable": True},
+        info_plist={"CFBundleExecutable": "tradebot-gui", "NSHighResolutionCapable": True},  # opening the app starts the GUI
     )
