@@ -30,6 +30,7 @@ from tradebot.gui.chart import ChartView
 from tradebot.gui.theme import GlassBackdrop, ThemeManager
 from tradebot.gui.touch import has_touchscreen
 from tradebot.gui.views import BacktestView, NewsView, PortfolioView, ScreenerView
+from tradebot.symbols import SymbolSearch
 
 
 class MainWindow(QMainWindow):
@@ -42,11 +43,12 @@ class MainWindow(QMainWindow):
         symbols = watchlist()
         self.portfolio_symbols: list[str] = []
 
-        self.chart = ChartView(engine, themes, symbols, settings)
+        search = SymbolSearch(lambda: symbols + self.portfolio_symbols)  # own symbols first, then the network
+        self.chart = ChartView(engine, themes, symbols, settings, search)
         self.screener = ScreenerView(engine, themes, symbols)
         self.news = NewsView(themes, lambda: list(dict.fromkeys(symbols + self.portfolio_symbols)))
         self.portfolio = PortfolioView(engine, themes)
-        self.lab = BacktestView(engine, themes, symbols)
+        self.lab = BacktestView(engine, themes, symbols, search)
         pages = [("Chart", "📈", self.chart), ("Screener", "🔎", self.screener), ("Backtest", "🧪", self.lab),
                  ("Portfolio", "💼", self.portfolio), ("News", "📰", self.news)]
 

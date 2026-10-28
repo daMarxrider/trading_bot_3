@@ -134,7 +134,11 @@ of sample. The GUI's Backtest lab offers the same options.
 
 `tradebot gui` opens these pages:
 
-* **Chart**: candles or line, any indicator as an overlay or in its own pane,
+* **Chart**: the symbol field suggests matches while you type: your watchlist and
+  portfolio first, then stocks, ETFs and indices by ticker or company name (Yahoo
+  search), and crypto pairs from the exchange (e.g. `sol` → `SOL/USDT`). Pick one
+  to load it. The Backtest lab's symbol field works the same way. Candles or line,
+  any indicator as an overlay or in its own pane,
   buy/sell markers for any algorithm, a crosshair with an OHLC readout, and
   drawing tools (trendline, support/resistance level, zone rectangle). The ↕
   button in the bottom-left corner (on by default) fits the price axis and

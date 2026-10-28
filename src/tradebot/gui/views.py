@@ -39,10 +39,21 @@ from tradebot.algorithms import ALGORITHMS, build_algorithm
 from tradebot.backtest.metrics import fmt
 from tradebot.brokers import BROKERS, create_broker
 from tradebot.core.timeframes import TIMEFRAMES
-from tradebot.gui.common import DataFrameModel, DateRange, Kpi, card, epoch_seconds, pct, run_async, shortfall
+from tradebot.gui.common import (
+    DataFrameModel,
+    DateRange,
+    Kpi,
+    SymbolCompleter,
+    card,
+    epoch_seconds,
+    pct,
+    run_async,
+    shortfall,
+)
 from tradebot.gui.params import ParamForm
 from tradebot.gui.theme import ThemeManager, qcolor
 from tradebot.gui.touch import PlotTouchHandler, TouchController, enable_kinetic_scroll
+from tradebot.symbols import SymbolSearch
 
 
 def _title(text: str) -> QLabel:
@@ -361,10 +372,11 @@ class BacktestView(QWidget):
     show_on_chart = pyqtSignal(str, object)
     generation = pyqtSignal(int, float)  # emitted from the worker thread, delivered queued
 
-    def __init__(self, engine, themes: ThemeManager, watchlist: list[str]):
+    def __init__(self, engine, themes: ThemeManager, watchlist: list[str], symbol_search: SymbolSearch | None = None):
         super().__init__()
         self.engine, self.themes = engine, themes
         self.symbol = QLineEdit(watchlist[0] if watchlist else "BTC/USDT")
+        self.symbols = SymbolCompleter(self.symbol, symbol_search or SymbolSearch(lambda: watchlist))
         self.tf = QComboBox()
         self.tf.addItems(list(TIMEFRAMES))
         self.tf.setCurrentText("1d")
