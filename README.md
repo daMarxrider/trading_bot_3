@@ -129,7 +129,12 @@ of sample. The GUI's Backtest lab offers the same options.
 
 * **Chart**: candles or line, any indicator as an overlay or in its own pane,
   buy/sell markers for any algorithm, a crosshair with an OHLC readout, and
-  drawing tools (trendline, support/resistance level, zone rectangle).
+  drawing tools (trendline, support/resistance level, zone rectangle). The ↕
+  button in the bottom-left corner (on by default) fits the price axis and
+  indicator panes to the candles in view while you scroll or zoom. While it is on,
+  dragging, scrolling and pinching only move the time axis, and not past the
+  first or last candle, so the chart always stays in view. Switch it off to move
+  the price axis freely. The app remembers the setting between sessions.
 * **Screener**: filter any universe by technicals, volume and market cap using
   expressions or presets. Double-click a row to open it in the chart.
 * **Backtest lab**: parameter forms generated from each algorithm, equity vs.
@@ -180,6 +185,12 @@ password = "..."            # KuCoin API passphrase
 [brokers.scalable]
 holdings_csv = "~/finance/scalable.csv"   # columns: symbol,quantity,avg_cost
 ```
+
+Settings the app remembers by itself (such as the chart's auto-fit toggle) are
+saved in `settings.json` in the OS config folder, not in `config.toml`:
+`$XDG_CONFIG_HOME/tradebot/` (usually `~/.config/tradebot/`) on Linux,
+`~/Library/Application Support/tradebot/` on macOS and `%APPDATA%\tradebot\` on
+Windows. Delete the file to reset them.
 
 Secrets can also come from the environment as `TRADEBOT_<BROKER>_<KEY>`, for
 example `TRADEBOT_BINANCE_SECRET`. The optional data providers read
