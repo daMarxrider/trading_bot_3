@@ -13,6 +13,10 @@ data, split, budget and seed:
   in a weaker local optimum (``divergent``). Prefer the better one, but check
   it out-of-sample.
 
+With member selection (the ``pool``, #21) the ``use.<member>`` genes count
+like parameters (0 = same choice, 1 = different), and a member's parameters
+are only compared when both methods use it.
+
 Independently of that, if the in-sample winner is the *worse* of the two
 out-of-sample, the report flags likely overfitting.
 """
@@ -80,6 +84,12 @@ class ComparisonResult:
         return 1.0 - self.mean_param_diff
 
     @property
+    def members(self) -> dict[str, tuple[bool, bool]]:
+        """Pool member -> (used by GA, used by PSO); empty without member selection."""
+        return {k[4:]: (bool(self.ga.best_params[k]), bool(self.pso.best_params[k]))
+                for k in self.ga.best_params if k.startswith("use.")}
+
+    @property
     def better(self) -> OptimizationResult:
         return self.ga if self.ga.best_fitness >= self.pso.best_fitness else self.pso
 
@@ -100,6 +110,9 @@ def compare(ga: OptimizationResult, pso: OptimizationResult, space: dict, object
     """Quantify the difference between two optimization results over the same parameter ``space``."""
     diffs = {}
     for key, spec in space.items():
+        use = f"use.{key.partition('.')[0]}"
+        if use in space and use != key and not (ga.best_params[use] and pso.best_params[use]):
+            continue  # a member's parameters only matter when both methods use it
         span = (spec.high - spec.low) or 1.0
         diffs[key] = abs(ga.best_params[key] - pso.best_params[key]) / span
     a, b = ga.best_fitness, pso.best_fitness

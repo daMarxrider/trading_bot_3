@@ -107,6 +107,7 @@ class RangeTrader(BaseAlgorithm):
     """Legacy binance-trader range mode: absolute buy/sell prices plus optional stop price."""
 
     name = "range"
+    poolable = False  # absolute prices have no meaningful default or search range
     description = "Buy at or below `buy_price`, sell at or above `sell_price` (or below `stop_price`)"
     params = {
         "buy_price": Param(0.0, 0.0, 1e9, "Buy when the price falls to this or lower."),
@@ -130,10 +131,12 @@ class VotingEnsemble(BaseAlgorithm):
 
     name = "vote"
     description = "Majority vote over several algorithms"
+    poolable = False
     params = {"threshold": Param(0.7, 0.5, 1.0, "The share of member strategies that must agree before "
                                                  "buying or selling: 0.7 means 70%.")}
 
-    def __init__(self, members: list[BaseAlgorithm] | None = None, **params):
+    def __init__(self, members: list[BaseAlgorithm | str] | None = None, **params):
+        members = [ALGORITHMS.get(m)() if isinstance(m, str) else m for m in members or ()]
         self.members = members or [RsiThreshold(), MacdCross(), IchimokuCloud()]
         super().__init__(**params)
 
@@ -161,9 +164,9 @@ class VotingEnsemble(BaseAlgorithm):
 
 
 def build_algorithm(name: str, params: dict | None = None, members: list[str] | None = None) -> BaseAlgorithm:
-    """Instantiate a registered algorithm by name (``members`` only applies to ``vote``)."""
+    """Instantiate a registered algorithm by name (``members`` only applies to ``vote`` and ``pool``)."""
     cls = ALGORITHMS.get(name)
     params = params or {}
-    if cls is VotingEnsemble:
-        return VotingEnsemble([ALGORITHMS.get(m)() for m in members] if members else None, **params)
+    if issubclass(cls, VotingEnsemble):
+        return cls(members or None, **params)
     return cls(**params)
