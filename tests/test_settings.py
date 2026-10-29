@@ -130,12 +130,18 @@ def test_choosing_a_theme_saves_it_but_starting_up_doesnt(config_file, monkeypat
     config_file.parent.mkdir()
     config_file.write_text(USER_CONFIG)
     themes = ThemeManager(user_dir=config_file.parent / "themes")
-    # "dark" isn't the box's first entry, so selecting it at startup changes the box: that must not save
+    monkeypatch.setattr(gui.SettingsDialog, "exec", lambda self: None)  # opened, not blocking
     window = gui.MainWindow(themes, "dark", Settings(config_file.parent / "settings.json"))
     assert config_file.read_text() == USER_CONFIG  # opening the app with the configured theme writes nothing
     assert themes.current.name == "Modern Dark"
-    window.theme_box.setCurrentIndex(window.theme_box.findData("light"))  # the user picks Light
+    window.show_settings()  # the gear button
+    box = window._settings_dialog.theme_box
+    assert box.currentData() == "dark"  # opening the dialog with the current theme writes nothing either
+    assert config_file.read_text() == USER_CONFIG
+    box.setCurrentIndex(box.findData("light"))  # the user picks Light
     assert themes.current.name == "Light" and load_config()["theme"] == "light"
+    window.show_settings()  # opened again: shows the theme picked last time
+    assert window._settings_dialog.theme_box.currentData() == "light"
     assert "# set by hand once" in config_file.read_text() and "# keep these" in config_file.read_text()
     window.close()
 
@@ -152,8 +158,10 @@ def test_unknown_configured_theme_falls_back_to_glass(config_file, monkeypatch):
 
     app = App.instance() or App([])  # keep a reference: a collected QApplication crashes Qt
     monkeypatch.setattr(gui.ChartView, "load", lambda self: None)
+    monkeypatch.setattr(gui.SettingsDialog, "exec", lambda self: None)
     themes = ThemeManager(user_dir=config_file.parent / "themes")
     window = gui.MainWindow(themes, "deleted-user-theme", Settings(config_file.parent / "settings.json"))
-    assert themes.current.name == "Glass" and window.theme_box.currentData() == "glass"
+    window.show_settings()
+    assert themes.current.name == "Glass" and window._settings_dialog.theme_box.currentData() == "glass"
     assert not config_file.exists()  # and nothing written
     window.close()
