@@ -89,6 +89,14 @@ QToolButton {{ background: {input_bg}; border: 1px solid {panel_border}; border-
 QToolButton:checked {{ background: {accent}; color: #ffffff; }}
 QToolButton::menu-indicator {{ image: none; }}
 QToolButton#ChartCorner {{ padding: 0; min-height: 0; }}
+QFrame#ChartSidebar {{ background: {panel}; border: 1px solid {panel_border}; border-radius: {radius}px; }}
+QFrame#ChartSidebar QToolButton#SidebarToggle, QFrame#ChartSidebar QToolButton#SidebarTab {{
+    background: transparent; border: none; border-radius: {radius_sm}px; padding: 0; min-height: 0; font-size: 16px; }}
+QFrame#ChartSidebar QToolButton#SidebarToggle:hover, QFrame#ChartSidebar QToolButton#SidebarTab:hover {{ background: {selection}; }}
+QFrame#ChartSidebar QToolButton#SidebarTab:checked {{ background: {selection}; color: {text}; }}
+QLabel#SidebarTitle {{ font-weight: 600; font-size: 14px; }}
+QListWidget#SidebarNews {{ background: transparent; border: none; }}
+QListWidget#SidebarNews::item:hover {{ background: {selection}; border-radius: {radius_sm}px; }}
 QLineEdit, QComboBox, QAbstractSpinBox, QPlainTextEdit {{
     background: {input_bg}; border: 1px solid {panel_border}; border-radius: {radius_sm}px; padding: 5px 8px;
     selection-background-color: {selection};
