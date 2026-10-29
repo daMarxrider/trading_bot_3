@@ -12,16 +12,24 @@ Requests are either a date range or a candle count (``bars=N``). A count is
 exact: markets that don't trade around the clock (weekends, trading hours)
 have far fewer candles than ``N x interval`` suggests, so the engine widens
 the range until it has N candles or the history runs out.
+
+With a :class:`~tradebot.data.cache.DiskCache` (#63), candles also survive restarts: a request reads the
+cached series and asks the providers only for what's missing, plus the last two cached candles again (the
+newest may have been incomplete; the one before shows whether a stock's history was split- or
+dividend-adjusted since, which makes the engine fetch it again in full). Offline, the cached candles are
+returned with ``df.attrs["offline"] = True``.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 
 import pandas as pd
 
 from tradebot.core.models import AssetClass, guess_asset_class
 from tradebot.core.timeframes import to_timedelta
+from tradebot.data.cache import DiskCache
 from tradebot.data.providers import (
     AlphaVantageProvider,
     BaseDataProvider,
@@ -33,6 +41,8 @@ from tradebot.data.providers import (
 
 log = logging.getLogger(__name__)
 MAX_BAR_ROUNDS = 6  #: widening steps for a ``bars=N`` request before settling for what exists
+ADJUSTED = 0.005  #: a re-fetched complete candle differing from the cached one by more: history was adjusted
+FRESH_FOR = 60.0  #: seconds a series counts as just refreshed, so its last candles aren't fetched again
 
 
 def default_providers() -> list[BaseDataProvider]:
@@ -48,9 +58,29 @@ def default_providers() -> list[BaseDataProvider]:
 
 
 class MarketDataEngine:
-    def __init__(self, providers: list[BaseDataProvider] | None = None, cache: bool = True):
+    def __init__(self, providers: list[BaseDataProvider] | None = None, cache: bool = True,
+                 disk: DiskCache | bool | None = True):
+        """``disk``: True = the cache as config.toml sets it up, False/None = memory only."""
         self.providers = providers if providers is not None else default_providers()
         self._cache: dict[tuple, pd.DataFrame] | None = {} if cache else None
+        self.disk = DiskCache.from_config() if disk is True else (disk or None)
+        self._refreshed: dict[tuple[str, str], float] = {}  # series -> when its newest candles were fetched
+
+    def clear_memory(self) -> None:
+        """Forget the candles held in memory, e.g. after the disk cache was cleared."""
+        if self._cache is not None:
+            self._cache.clear()
+
+    def peek(self, symbol: str, timeframe: str = "1d", start=None, end=None, bars: int | None = None) -> pd.DataFrame | None:
+        """What the disk cache has for a request, without any network: for showing a chart right away."""
+        stored = self.disk.load(symbol, timeframe) if self.disk else None
+        if stored is None:
+            return None
+        df = stored[0]
+        if end is not None:
+            df = df[df.index < _utc(end)]
+        df = df[df.index >= _utc(start)] if start is not None else df.iloc[-(bars or 500):]
+        return df if not df.empty else None
 
     def get_ohlc(
         self,
@@ -77,12 +107,52 @@ class MarketDataEngine:
         if self._cache is not None and key in self._cache:
             return self._cache[key]
 
+        stored = self.disk.load(symbol, timeframe) if self.disk else None
+        cached, listed = stored if stored is not None else (None, None)
+        fresh = time.monotonic() - self._refreshed.get((symbol, timeframe), -FRESH_FOR) < FRESH_FOR
+        result, errors, fetched = self._fetch(symbol, timeframe, asset_class, start, end, step, cached, listed, fresh)
+        if cached is not None and _adjusted(cached, result):
+            log.info("%s %s history changed (split or dividend adjustment): fetching it again", symbol, timeframe)
+            cached = listed = None
+            result, errors, fetched = self._fetch(symbol, timeframe, asset_class, start, end, step, None, None, False)
+        if errors and cached is not None:  # offline or failing: fill in what the cache has
+            part = cached[(cached.index >= start) & (cached.index < end)]
+            result = part if result is None else result.combine_first(part)
+        if result is None or result.empty:
+            raise DataUnavailable(f"no data for {symbol} {timeframe}: " + "; ".join(errors or ["no provider"]))
+        if self.disk is not None and fetched:
+            self._store(symbol, timeframe, result, cached, listed, start, step, errors)
+            if not errors and end - result.index[-1] <= _slack(step):
+                self._refreshed[symbol, timeframe] = time.monotonic()
+        if errors and cached is not None:
+            result = result.copy()
+            result.attrs["offline"] = True
+        if self._cache is not None and not errors:
+            self._cache[key] = result
+        return result
+
+    def _fetch(self, symbol, timeframe, asset_class, start, end, step, cached, listed, fresh):
+        """``(candles, errors, fetched)`` for ``[start, end)``: the cached candles except the last two (all of
+        them if ``fresh``: just refreshed), plus the missing head and tail from the providers. Not before
+        ``listed``, where the history begins."""
         result: pd.DataFrame | None = None
+        refresh_from = None  # where the re-fetched last two cached candles start, if the request covers them
+        if cached is not None and len(cached) > 2:
+            known = cached if fresh else cached.iloc[:-2]
+            known = known[(known.index >= start) & (known.index < end)]
+            result = known if not known.empty else None
+            if not fresh and start <= cached.index[-2] < end:
+                refresh_from = cached.index[-2]
+        fetch_from = max(start, listed) if listed is not None else start
         errors: list[str] = []
+        fetched = False
         for provider in self.providers:
             if not provider.supports(asset_class, timeframe):
                 continue
-            gaps = _missing_ranges(result, start, end, step)
+            gaps = _missing_ranges(result, fetch_from, end, step)
+            if refresh_from is not None and (result is None or result.index[-1] < refresh_from) \
+                    and not any(gap_end >= end for _, gap_end in gaps):
+                gaps.append((refresh_from, end))  # within the slack, but they must come back
             if not gaps:
                 break
             limit = provider.history_limit(timeframe)
@@ -100,13 +170,24 @@ class MarketDataEngine:
                     break
                 part = part[(part.index >= start) & (part.index < end)]
                 if not part.empty:
+                    fetched = True
                     # earlier providers win on overlapping bars
                     result = part if result is None else result.combine_first(part)
-        if result is None or result.empty:
-            raise DataUnavailable(f"no data for {symbol} {timeframe}: " + "; ".join(errors or ["no provider"]))
-        if self._cache is not None:
-            self._cache[key] = result
-        return result
+        return result, errors, fetched
+
+    def _store(self, symbol, timeframe, result, cached, listed, start, step, errors):
+        """Merge new candles into the cached series. The series stays one contiguous run: new candles that
+        don't touch it replace it, so a hole in the middle never needs filling."""
+        series = result
+        slack = _slack(step)
+        if cached is not None and not cached.empty and (
+                result.index[0] <= cached.index[-1] + slack and result.index[-1] >= cached.index[0] - slack):
+            series = result.combine_first(cached)  # new candles win
+        else:
+            listed = None
+        if not errors and result.index[0] - start > slack:  # asked for older candles, none exist
+            listed = result.index[0] if listed is None else min(listed, result.index[0])
+        self.disk.save(symbol, timeframe, series, listed)
 
     def _last_bars(self, symbol, timeframe, bars, end, asset_class) -> pd.DataFrame:
         step = to_timedelta(timeframe)
@@ -147,9 +228,24 @@ def _missing_ranges(df: pd.DataFrame | None, start, end, step) -> list[tuple[pd.
     if df is None or df.empty:
         return [(start, end)]
     gaps = []
-    slack = max(step * 3, pd.Timedelta(days=4))
+    slack = _slack(step)
     if df.index[0] - start > slack:
         gaps.append((start, df.index[0]))
     if end - df.index[-1] > slack:
         gaps.append((df.index[-1] + step, end))
     return gaps
+
+
+def _slack(step) -> pd.Timedelta:
+    return max(step * 3, pd.Timedelta(days=4))
+
+
+def _adjusted(cached: pd.DataFrame, fresh: pd.DataFrame | None) -> bool:
+    """Whether the providers now report a different close for the last complete cached candle."""
+    if fresh is None or len(cached) < 2:
+        return False
+    t = cached.index[-2]
+    if t not in fresh.index:
+        return False
+    old, new = float(cached["close"].iloc[-2]), float(fresh.loc[t, "close"])
+    return old > 0 and abs(new / old - 1) > ADJUSTED

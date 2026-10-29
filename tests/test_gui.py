@@ -145,6 +145,9 @@ class RecordingEngine:
         self.calls.append({"start": start, "end": end, "bars": bars})
         return self.df
 
+    def peek(self, *args, **kwargs):  # nothing on disk
+        return None
+
 
 def test_date_range_widget(app):
     from PyQt6.QtCore import QDate

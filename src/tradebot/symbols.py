@@ -13,8 +13,9 @@ Remote sources are slow, so :meth:`SymbolSearch.local` answers immediately and
 so search degrades to local suggestions when offline.
 
 Shell completion starts a new process for every TAB, so it can't keep anything in
-memory: it uses :func:`yahoo_search_http` (no yfinance import), and keeps the
-crypto pairs and recent queries in on-disk caches (see ``cache`` arguments).
+memory: it uses :func:`yahoo_search_http` (no yfinance import). The CLI and the GUI keep
+the crypto pairs, recent queries and instrument names in on-disk caches in the cache
+folder's ``symbols/`` (#63, see :func:`disk_symbol_search`).
 """
 
 from __future__ import annotations
@@ -105,13 +106,30 @@ QUOTE_NAMES = {"USD": "U.S. Dollar", "USDT": "TetherUS", "USDC": "USD Coin", "EU
                "JPY": "Japanese Yen", "CHF": "Swiss Franc", "BTC": "Bitcoin", "ETH": "Ethereum", "BNB": "BNB"}
 
 
+NAME_MAX_AGE = 30 * 86400.0  #: instrument names rarely change
+
+
 @lru_cache(maxsize=256)
 def symbol_name(symbol: str, search: Callable[[str], list[SymbolMatch]] | None = None) -> str | None:
     """Full name for a chart title: ``AAPL`` -> ``Apple Inc.``, ``BTC/USDT`` -> ``Bitcoin / TetherUS``.
 
-    None when Yahoo doesn't know it (or is unreachable); callers then keep showing the ticker. Slow: network.
+    None when Yahoo doesn't know it (or is unreachable); callers then keep showing the ticker. Slow: network,
+    unless the disk cache has it (found names only, for 30 days).
     """
-    search = search or yahoo_search_http
+    cache = _symbols_dir()
+    names = _read_json(cache / "names.json") if cache else {}
+    hit = names.get(symbol)
+    if hit and time.time() - hit[0] <= NAME_MAX_AGE:
+        return hit[1]
+    name = _lookup_name(symbol, search or yahoo_search_http)
+    if name and cache:
+        names = _read_json(cache / "names.json")  # re-read: another lookup may have written meanwhile
+        names[symbol] = [time.time(), name]
+        _write_json(cache / "names.json", names)
+    return name
+
+
+def _lookup_name(symbol: str, search) -> str | None:
     if "/" not in symbol:
         return _exact_name(symbol, search)
     base, _, quote = symbol.partition("/")
@@ -152,20 +170,29 @@ class CryptoPairs:
     def load(self) -> list[SymbolMatch]:
         with self._lock:  # one download even if several searches start at once
             if self._pairs is None:
-                self._pairs = self._read_cache()
+                self._pairs, stale = self._read_cache()
+                if self._pairs is not None and stale:  # answer from the old list, refresh it meanwhile
+                    threading.Thread(target=self._refresh, daemon=True).start()
             if self._pairs is None:
-                self._pairs = self._fetch()
-                if self._pairs:  # don't cache an outage
-                    _write_json(self.cache, [astuple(m) for m in self._pairs])
+                self._pairs = self._refresh()
             return self._pairs
 
-    def _read_cache(self) -> list[SymbolMatch] | None:
-        if self.cache is None or not self.cache.is_file() or time.time() - self.cache.stat().st_mtime > self.max_age:
-            return None
+    def _refresh(self) -> list[SymbolMatch]:
+        pairs = self._fetch()
+        if pairs:  # don't cache an outage
+            _write_json(self.cache, [astuple(m) for m in pairs])  # saved before it's used, so both agree
+            self._pairs = pairs
+        return pairs
+
+    def _read_cache(self) -> tuple[list[SymbolMatch] | None, bool]:
+        """``(pairs, stale)``: a cache older than ``max_age`` still answers, but should be refreshed."""
+        if self.cache is None or not self.cache.is_file():
+            return None, False
         try:
-            return [SymbolMatch(*row) for row in json.loads(self.cache.read_text())]
+            stale = time.time() - self.cache.stat().st_mtime > self.max_age
+            return [SymbolMatch(*row) for row in json.loads(self.cache.read_text())], stale
         except (OSError, ValueError, TypeError):
-            return None
+            return None, False
 
     def _fetch(self) -> list[SymbolMatch]:
         import ccxt
@@ -219,7 +246,7 @@ def _crypto_source(cache: Path | None = None) -> Callable[[str], list[SymbolMatc
 
 
 def cached_queries(source: Callable[[str], list[SymbolMatch]], cache: Path, max_age: float = 7 * 86400.0,
-                   keep: int = 300) -> Callable[[str], list[SymbolMatch]]:
+                   keep: int = 5000) -> Callable[[str], list[SymbolMatch]]:
     """Wrap a search source with a JSON cache of recent queries (failures aren't cached)."""
 
     def search(query: str) -> list[SymbolMatch]:
@@ -240,10 +267,35 @@ def cached_queries(source: Callable[[str], list[SymbolMatch]], cache: Path, max_
     return search
 
 
-def cli_symbol_search(local: Callable[[], Iterable[str]], cache_dir: Path) -> SymbolSearch:
-    """The search for shell completion: everything that can come from disk does."""
+def disk_symbol_search(local: Callable[[], Iterable[str]], cache_dir: Path | None,
+                       yahoo: Callable[[str], list[SymbolMatch]] = yahoo_search_http) -> SymbolSearch:
+    """Symbol search whose crypto pairs and Yahoo results come from the disk cache when they can.
+
+    Shell completion and the GUI share the files in ``cache_dir`` (the cache folder's ``symbols/``);
+    ``cache_dir=None`` (cache switched off) searches online every time.
+    """
+    if cache_dir is None:
+        return SymbolSearch(local, remote=[_crypto_source(), yahoo])
     return SymbolSearch(local, remote=[_crypto_source(cache_dir / "crypto_pairs.json"),
-                                       cached_queries(yahoo_search_http, cache_dir / "symbol_search.json")])
+                                       cached_queries(yahoo, cache_dir / "yahoo_search.json")])
+
+
+cli_symbol_search = disk_symbol_search  # the shell completion's name for it
+
+
+def _symbols_dir() -> Path | None:
+    from tradebot.data.cache import DiskCache
+
+    cache = DiskCache.from_config()
+    return cache.symbols_dir if cache else None
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def _write_json(path: Path | None, data) -> None:
