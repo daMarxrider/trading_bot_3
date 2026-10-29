@@ -208,6 +208,13 @@ of sample. The GUI's Backtest lab offers the same options.
   have equal height. Use it for assets that rose a lot, like Bitcoin. The axis still shows prices, and
   overlays, markers and drawings stay at their prices. Indicator panes stay linear. The app remembers this
   setting too. Data with prices at or below 0 is shown on a linear scale.
+* **Chart sidebar**: a panel at the right of the chart with one page per category. The topmost button
+  collapses it to a narrow strip (») and expands it again («). The category buttons below it switch
+  pages, and also open a collapsed sidebar. The app remembers whether it was open and which category
+  was shown.
+  * **📰 News**: headlines for the symbol on the chart, for stocks and crypto pairs alike (Yahoo Finance).
+    They follow the chart when you switch symbols and refresh every 5 minutes. They load only while the
+    sidebar shows them. Click a headline to open it in the browser.
 * **Screener**: filter any universe by technicals, volume and market cap using
   expressions or presets. Double-click a row to open it in the chart.
 * **Backtest lab**: parameter forms generated from each algorithm, equity vs.

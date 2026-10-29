@@ -70,3 +70,11 @@ def _no_warm_up(monkeypatch):
     except ImportError:  # no PyQt6
         return
     monkeypatch.setattr(tradebot.gui.app, "warm_up", lambda engine, symbols: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_news_downloads(monkeypatch):
+    """The chart's sidebar fetches news for the charted symbol (#41); tests stay offline."""
+    import tradebot.news
+
+    monkeypatch.setattr(tradebot.news, "fetch_news", lambda symbols, limit=50: [])

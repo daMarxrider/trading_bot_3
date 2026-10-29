@@ -4,14 +4,13 @@
 
 from __future__ import annotations
 
-import html
 import math
 
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
-from PyQt6.QtCore import QRectF, QSize, Qt, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QColor, QDesktopServices, QPainter, QPen
+from PyQt6.QtCore import QRectF, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -24,7 +23,6 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
-    QListWidgetItem,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
@@ -50,6 +48,7 @@ from tradebot.gui.common import (
     run_async,
     shortfall,
 )
+from tradebot.gui.news import fill_news_list, open_link
 from tradebot.gui.params import ParamForm
 from tradebot.gui.theme import ThemeManager, qcolor
 from tradebot.gui.touch import PlotTouchHandler, TouchController, enable_kinetic_scroll
@@ -176,7 +175,7 @@ class NewsView(QWidget):
         self.list.setWordWrap(True)
         self.list.setSpacing(4)
         enable_kinetic_scroll(self.list)
-        self.list.itemActivated.connect(lambda it: QDesktopServices.openUrl(QUrl(it.data(Qt.ItemDataRole.UserRole))))
+        self.list.itemActivated.connect(open_link)
         self.filter = QLineEdit()
         self.filter.setPlaceholderText("filter headlines …")
         self.filter.textChanged.connect(self._render)
@@ -226,27 +225,9 @@ class NewsView(QWidget):
         self.status.emit(f"{len(items)} headlines")
 
     def _render(self):
-        t = self.themes.current
         needle = self.filter.text().lower()
-        self.list.clear()
-        for n in self.items:
-            if needle and needle not in (n.title + n.summary + n.symbol).lower():
-                continue
-            label = QLabel(
-                f"<span style='color:{t.accent}; font-weight:600'>{html.escape(n.symbol)}</span>"
-                f"&nbsp;&nbsp;<span style='color:{t.muted}'>{n.published:%Y-%m-%d %H:%M} · {html.escape(n.publisher)}</span>"
-                f"<br><span style='font-size:15px; font-weight:600'>{html.escape(n.title)}</span>"
-                + (f"<br><span style='color:{t.muted}'>{html.escape(n.summary[:240])}</span>" if n.summary else "")
-            )
-            label.setWordWrap(True)
-            label.setContentsMargins(10, 8, 10, 8)
-            label.setStyleSheet("background: transparent;")
-            item = QListWidgetItem()
-            item.setData(Qt.ItemDataRole.UserRole, n.url)
-            width = max(200, self.list.viewport().width() - 12)
-            item.setSizeHint(QSize(width, label.heightForWidth(width) + 4))
-            self.list.addItem(item)
-            self.list.setItemWidget(item, label)
+        items = [n for n in self.items if not needle or needle in (n.title + n.summary + n.symbol).lower()]
+        fill_news_list(self.list, items, self.themes)
 
 
 # -- portfolio --------------------------------------------------------------------------------------------

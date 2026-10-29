@@ -39,7 +39,9 @@ from tradebot.gui.common import (
     shortfall,
     toolbar_group,
 )
+from tradebot.gui.news import NewsPanel
 from tradebot.gui.params import ParamDialog
+from tradebot.gui.sidebar import ChartSidebar
 from tradebot.gui.theme import Theme, ThemeManager, qcolor, resolve_color
 from tradebot.gui.touch import PlotTouchHandler, TouchController
 from tradebot.indicators import INDICATORS, Style
@@ -286,10 +288,21 @@ class ChartView(QWidget):
         self.log_btn.toggled.connect(self._log_toggled)
         self.canvas.installEventFilter(self)  # keeps the button in the bottom-left corner
 
+        # -- sidebar at the right (#41): news for the charted symbol, more categories to come ----------
+        self.sidebar = ChartSidebar(settings, touch=themes.touch)
+        self.news = NewsPanel(themes)
+        self.sidebar.add_category("news", "📰", "News", self.news)
+        self.sidebar.shown.connect(self._sidebar_shown)
+        self.sidebar.toggle.clicked.connect(self._sidebar_toggled)
+
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 16, 16, 16)
         lay.addLayout(bar)
-        lay.addWidget(self.canvas, 1)
+        body = QHBoxLayout()
+        body.setSpacing(10)
+        body.addWidget(self.canvas, 1)
+        body.addWidget(self.sidebar)
+        lay.addLayout(body, 1)
         self.touch = TouchController(self.canvas.viewport(), PlotTouchHandler(
             self.canvas, self._plot_at, on_tap=self._tap, on_long_press=self._context_menu, on_reset=self.reset_view))
         themes.changed.connect(lambda _: self.redraw())
@@ -325,6 +338,7 @@ class ChartView(QWidget):
         tf = self.tf.currentText()
         self._title = f"{symbol} · {tf}"  # the ticker until the full name arrives
         self._hover = None
+        self.news.set_symbol(symbol)
         run_async(lambda: symbol_name(symbol), lambda name: self._named(symbol, tf, name))
         self.status.emit(f"{symbol}: {len(df)} candles {df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d %H:%M}{note}")
         self.redraw(autorange=not refresh)
@@ -334,6 +348,24 @@ class ChartView(QWidget):
         if name and self._title == f"{symbol} · {tf}":
             self._title = f"{name} · {tf}"
             self._show_values()
+            self.news.set_symbol(symbol, name)
+
+    # -- sidebar ---------------------------------------------------------------------------------
+    def _sidebar_shown(self, key: str):
+        self.news.set_visible(key == "news")
+
+    def _sidebar_toggled(self):
+        if not self.sidebar.is_open:
+            self.news.set_visible(False)  # collapsed: no fetching in the background
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.sidebar.is_open and self.sidebar.current:
+            self._sidebar_shown(self.sidebar.current)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.news.set_visible(False)  # another page of the app is open
 
     # -- indicators & algorithms -----------------------------------------------------------------
     def _fill_indicator_menu(self):
