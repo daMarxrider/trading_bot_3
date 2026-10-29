@@ -79,6 +79,8 @@ TERMS = {
     "fee": "The cost of each buy and each sell, as a fraction: 0.001 is 0.1%. A full trade (in and out) pays it "
            "twice.",
     "algorithm": "The trading strategy: the rules that decide when to buy and when to sell.",
+    "members": "The strategies that vote. Each one says buy or sell, and the vote acts when enough of them "
+               "agree (the threshold). All checks every known strategy.",
     "parameters": "The strategy's settings, such as how many days an average covers. Run backtest uses these "
                   "values; Optimize searches for good ones and fills them in.",
     "method": "How the optimizer searches for good parameters.",
