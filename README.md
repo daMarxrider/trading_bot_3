@@ -133,6 +133,7 @@ tradebot positions --broker kucoin
 tradebot portfolio --broker scalable --broker binance
 tradebot screen -f "rsi < 35" -f "close > sma200"
 tradebot news AAPL NVDA BTC/USDT
+tradebot news --watchlist Crypto   # without symbols: one watchlist (default: all of them)
 tradebot cache info                 # cache folder, size, number of cached series
 tradebot cache clear [--ohlc|--symbols]
 ```
@@ -156,7 +157,7 @@ tradebot --show-completion      # print the script instead, to install it by han
 TAB then completes commands and options, algorithm and indicator names (plugins
 included), `-p`/`--fix` parameters of the chosen algorithm with defaults and ranges,
 `-i name:param=`, `--members`, brokers, timeframes and fixed choices. Symbols
-complete by ticker, case-insensitively: your watchlist first, then crypto pairs
+complete by ticker, case-insensitively: your watchlists first, then crypto pairs
 (`sol` → `SOL/USDT`) and stocks/ETFs from Yahoo (`nvd` → `NVDA`, …). Shells match
 suggestions against what you typed, so unlike the GUI you can't find a ticker by
 company name here. The `tradebot` command must be on your `PATH` (an activated
@@ -222,7 +223,7 @@ same members. Agreement there is a good sign that the selection is real and not 
 
 `tradebot gui` opens these pages:
 
-* **Chart**: the symbol field suggests matches while you type: your watchlist and
+* **Chart**: the symbol field suggests matches while you type: your watchlists and
   portfolio first, then stocks, ETFs and indices by ticker or company name (Yahoo
   search), and crypto pairs from the exchange (e.g. `sol` → `SOL/USDT`). Pick one
   to load it. The Backtest lab's symbol field works the same way. Candles or line,
@@ -249,6 +250,15 @@ same members. Agreement there is a good sign that the selection is real and not 
   * **📰 News**: headlines for the symbol on the chart, for stocks and crypto pairs alike (Yahoo Finance).
     They follow the chart when you switch symbols and refresh every 5 minutes. They load only while the
     sidebar shows them. Click a headline to open it in the browser.
+  * **⭐ Watchlists**: one or more named lists of symbols, each with its full name, last price and the
+    day's change. Pick a list in the box at the top; ＋ creates one, ✎ renames it, 🗑 deletes it (after
+    asking; the last list stays). Add symbols with the field (same suggestions as the chart's), with
+    **Add current symbol**, or from the chart's right-click menu (**Add to watchlist**). Click a row to
+    chart it; the charted symbol is highlighted. Remove a row with its ✕ (shown on hover) or the Delete
+    key; reorder by drag and drop. Right-click a row (long press on a touchscreen) for Move up/down and
+    Remove. Prices come from the cache first, then refresh every minute while the list is shown. The
+    lists are saved in `config.toml` (see [Configuration](#configuration)), the shown list in the app's
+    settings.
 * **Screener**: filter any universe by technicals, volume and market cap using
   expressions or presets. Double-click a row to open it in the chart.
 * **Backtest lab**: parameter forms generated from each algorithm, equity vs.
@@ -259,7 +269,7 @@ same members. Agreement there is a good sign that the selection is real and not 
   members were used or dropped, and whether GA and PSO agree.
 * **Portfolio & dividends**: total equity, allocation donuts, and per-holding
   and total current dividend yield, trailing annual yield and yield on cost.
-* **News**: headlines for watchlist and portfolio symbols, auto-refreshed
+* **News**: headlines for the watchlists' and portfolio symbols, auto-refreshed
   every 5 minutes.
 
 **Touchscreens.** The charts support the common touch gestures:
@@ -304,8 +314,11 @@ Themes: **Glass** (translucent frosted panels over a soft gradient backdrop),
 `~/.config/tradebot/config.toml` (override the path with `$TRADEBOT_CONFIG`):
 
 ```toml
-watchlist = ["AAPL", "MSFT", "SAP.DE", "BTC/USDT", "ETH/USDT"]
 theme = "glass"
+
+[watchlists]                # edited in the chart sidebar, or here by hand
+Main = ["AAPL", "MSFT", "SAP.DE", "BTC/USDT", "ETH/USDT"]
+"Long term" = ["SAP.DE", "ETH/USDT"]   # quote names with spaces
 
 [brokers.binance]
 api_key = "..."
@@ -327,6 +340,11 @@ The settings dialog writes `theme`, the `[tools]` paths and the broker keys to t
 starts with them next time. Only those lines change; your comments and other
 settings stay as they are, and a missing file is created. An empty field
 removes its line.
+
+Watchlists work the same way. An older config's top-level `watchlist = [...]` still works: it shows up
+as the list "Main" and moves to `[watchlists]` the first time you change a watchlist in the app.
+Suggestions, the screener's default symbols, the News page, the CLI's `screen`/`news` defaults and the
+cache warm-up at startup use the symbols of all lists.
 
 **Cache.** Candles and symbol lists are kept on disk, so the app and the CLI start without waiting for the
 network:

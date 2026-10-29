@@ -97,6 +97,10 @@ QFrame#ChartSidebar QToolButton#SidebarTab:checked {{ background: {selection}; c
 QLabel#SidebarTitle {{ font-weight: 600; font-size: 14px; }}
 QListWidget#SidebarNews {{ background: transparent; border: none; }}
 QListWidget#SidebarNews::item:hover {{ background: {selection}; border-radius: {radius_sm}px; }}
+QListWidget#Watchlist {{ background: transparent; border: none; }}
+QListWidget#Watchlist::item:hover, QListWidget#Watchlist::item:selected {{ background: {selection}; border-radius: {radius_sm}px; }}
+QToolButton#WatchlistRemove {{ background: transparent; border: none; color: {muted}; }}
+QToolButton#WatchlistRemove:hover {{ color: {down}; }}
 QLineEdit, QComboBox, QAbstractSpinBox, QPlainTextEdit {{
     background: {input_bg}; border: 1px solid {panel_border}; border-radius: {radius_sm}px; padding: 5px 8px;
     selection-background-color: {selection};
