@@ -159,6 +159,10 @@ of sample. The GUI's Backtest lab offers the same options.
   search), and crypto pairs from the exchange (e.g. `sol` → `SOL/USDT`). Pick one
   to load it. The Backtest lab's symbol field works the same way. Candles or line,
   any indicator as an overlay or in its own pane,
+  **Loadouts ▾** (top right) saves the current indicators and signal under a name
+  you choose and applies a saved set in one click (✕ deletes one after asking).
+  The chart also reopens with the symbol, timeframe, indicators and signal you
+  had when you closed it, saved or not.
   buy/sell markers for any algorithm, a crosshair with an OHLC readout, and
   drawing tools (trendline, support/resistance level, zone rectangle). The ↕
   button in the bottom-left corner (on by default) fits the price axis and

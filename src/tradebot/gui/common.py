@@ -14,7 +14,10 @@ from PyQt6.QtCore import (
     QDate,
     QModelIndex,
     QObject,
+    QPoint,
+    QRect,
     QRunnable,
+    QSize,
     Qt,
     QThreadPool,
     QTimer,
@@ -28,6 +31,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
     QToolButton,
     QVBoxLayout,
@@ -150,6 +154,79 @@ class Kpi(QFrame):
 
     def set(self, text: str):
         self.value.setText(text)
+
+
+class FlowLayout(QLayout):
+    """Lays items out left to right and wraps to a new row when the width runs out (Qt's flow layout).
+
+    With ``last_right``, the last item sits flush with the right edge of its row (e.g. a toolbar's tools).
+    """
+
+    def __init__(self, parent=None, spacing: int = 6, last_right: bool = False):
+        super().__init__(parent)
+        self.last_right = last_right
+        self._items: list = []
+        self.setSpacing(spacing)
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):  # noqa: N802 (Qt API)
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):  # noqa: N802
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):  # noqa: N802
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):  # noqa: N802
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):  # noqa: N802
+        return True
+
+    def heightForWidth(self, width):  # noqa: N802
+        return self._arrange(QRect(0, 0, width, 0), move=False)
+
+    def setGeometry(self, rect):  # noqa: N802
+        super().setGeometry(rect)
+        self._arrange(rect, move=True)
+
+    def sizeHint(self):  # noqa: N802
+        return self.minimumSize()
+
+    def minimumSize(self):  # noqa: N802
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        return size
+
+    def _arrange(self, rect, move: bool) -> int:
+        x, y, row_height, gap = rect.x(), rect.y(), 0, self.spacing()
+        for n, item in enumerate(self._items):
+            hint = item.sizeHint()
+            if x > rect.x() and x + hint.width() > rect.right() + 1:  # doesn't fit: next row
+                x, y, row_height = rect.x(), y + row_height + gap, 0
+            if move:
+                left = x
+                if self.last_right and n == len(self._items) - 1:
+                    left = max(x, rect.right() + 1 - hint.width())
+                item.setGeometry(QRect(QPoint(left, y), hint))
+            x += hint.width() + gap
+            row_height = max(row_height, hint.height())
+        return y + row_height - rect.y()
+
+
+def toolbar_group(*widgets) -> QWidget:
+    """Widgets in one row that a :class:`FlowLayout` moves as a unit."""
+    group = QWidget()
+    lay = QHBoxLayout(group)
+    lay.setContentsMargins(0, 0, 0, 0)
+    for w in widgets:
+        lay.addWidget(w)
+    return group
 
 
 class _Calendar(QCalendarWidget):

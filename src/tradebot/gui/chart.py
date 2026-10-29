@@ -16,22 +16,34 @@ from PyQt6.QtGui import QPainter, QPicture
 from PyQt6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
+    QInputDialog,
     QLineEdit,
     QMenu,
+    QMessageBox,
     QPushButton,
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 from tradebot.algorithms import ALGORITHMS, build_algorithm
 from tradebot.config import Settings
 from tradebot.core.timeframes import TIMEFRAMES
-from tradebot.gui.common import DateRange, SymbolCompleter, epoch_seconds, run_async, shortfall
+from tradebot.gui.common import (
+    DateRange,
+    FlowLayout,
+    SymbolCompleter,
+    epoch_seconds,
+    run_async,
+    shortfall,
+    toolbar_group,
+)
 from tradebot.gui.params import ParamDialog
 from tradebot.gui.theme import Theme, ThemeManager, qcolor, resolve_color
 from tradebot.gui.touch import PlotTouchHandler, TouchController
 from tradebot.indicators import INDICATORS, Style
+from tradebot.loadouts import LoadoutStore, capture, restore
 from tradebot.symbols import SymbolSearch, symbol_name
 
 pg.setConfigOptions(antialias=True)
@@ -131,6 +143,8 @@ class ChartView(QWidget):
         self._positions = None  # the signal's target position per bar
         self._slots: dict[int, int] = {}  # id(indicator) -> first palette index of its outputs
         self._next_slot = 0
+        self._loaded_symbol = ""  # the symbol of self.df, remembered for the next start
+        self._pending_note = ""  # a message from restoring the last session, shown with the first load
 
         # -- toolbar -----------------------------------------------------------------------------
         self.symbol = QLineEdit(watchlist[0] if watchlist else "BTC/USDT")
@@ -175,14 +189,18 @@ class ChartView(QWidget):
             tool_group.append(btn)
         clear = QToolButton(text="✕ Clear", toolTip="Remove all drawings")
         clear.clicked.connect(self.clear_drawings)
+        self.loadouts = LoadoutStore(settings)
+        self.loadout_btn = QToolButton(text="Loadouts ▾", toolTip="Saved sets of indicators and a signal")
+        self.loadout_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.loadout_menu = QMenu(self)
+        self.loadout_menu.aboutToShow.connect(self._fill_loadout_menu)
+        self.loadout_btn.setMenu(self.loadout_menu)
 
-        bar = QHBoxLayout()
-        for w in (self.symbol, self.tf, self.bars, self.dates, load, self.style_btn, self.ind_btn, self.algo_box):
-            bar.addWidget(w)
-        bar.addSpacing(12)
-        for w in (*tool_group, clear):
-            bar.addWidget(w)
-        bar.addStretch()
+        # three groups that wrap onto a second row on narrow windows; the tools (… Clear, Loadouts) stay top right
+        bar = FlowLayout(spacing=12, last_right=True)
+        for group in ((self.symbol, self.tf, self.bars, self.dates, load), (self.style_btn, self.ind_btn, self.algo_box),
+                      (*tool_group, clear, self.loadout_btn)):
+            bar.addWidget(toolbar_group(*group))
 
         # -- plot area ---------------------------------------------------------------------------
         self.canvas = pg.GraphicsLayoutWidget()
@@ -216,6 +234,7 @@ class ChartView(QWidget):
         self.touch = TouchController(self.canvas.viewport(), PlotTouchHandler(
             self.canvas, self._plot_at, on_tap=self._tap, on_long_press=self._context_menu, on_reset=self.reset_view))
         themes.changed.connect(lambda _: self.redraw())
+        self._restore_session()
 
     # -- data ------------------------------------------------------------------------------------
     def open_symbol(self, symbol: str):
@@ -234,6 +253,8 @@ class ChartView(QWidget):
 
     def _loaded(self, symbol, df, note=""):
         self.df = df
+        self._loaded_symbol = symbol
+        note, self._pending_note = note + self._pending_note, ""
         tf = self.tf.currentText()
         self._title = f"{symbol} · {tf}"  # the ticker until the full name arrives
         self._hover = None
@@ -443,6 +464,7 @@ class ChartView(QWidget):
                                                           brush=pg.mkBrush(color), pen=pg.mkPen(None)))
         self._style(t)
         self._show_values()
+        self._remember_session()
         self._lock_view()
         if autorange:
             self.reset_view()
@@ -649,7 +671,110 @@ class ChartView(QWidget):
         self.tools[tool].setChecked(False)
         self.status.emit(f"{tool} added — drag to adjust, ✕ Clear to remove")
 
+    # -- loadouts and the remembered session (#54) ------------------------------------------------
+    SESSION_KEY = "chart.session"
+
+    def _fill_loadout_menu(self):
+        """One row per saved loadout (click: apply, ✕: delete after confirming), then "Save Current"."""
+        menu = self.loadout_menu
+        menu.clear()
+        saved = self.loadouts.all()
+        if not saved:
+            menu.addAction("No saved loadouts").setEnabled(False)
+        for name in saved:
+            row = QWidget()
+            lay = QHBoxLayout(row)
+            lay.setContentsMargins(0, 0, 4, 0)
+            lay.setSpacing(0)
+            apply_btn = QPushButton(name, objectName="LoadoutName", toolTip=_describe(saved[name]))
+            apply_btn.clicked.connect(lambda _, n=name: (menu.close(), self.apply_loadout(n)))
+            delete = QToolButton(text="✕", objectName="LoadoutDelete", toolTip=f"Delete \u201c{name}\u201d")
+            delete.clicked.connect(lambda _, n=name: (menu.close(), self.delete_loadout(n)))
+            lay.addWidget(apply_btn, 1)
+            lay.addWidget(delete)
+            action = QWidgetAction(menu)
+            action.setDefaultWidget(row)
+            menu.addAction(action)
+        menu.addSeparator()
+        menu.addAction("Save Current", self.save_current_loadout)
+
+    def save_current_loadout(self):
+        saved = self.loadouts.all()
+        suggestion = next(f"Loadout {i}" for i in range(1, len(saved) + 2) if f"Loadout {i}" not in saved)
+        name, ok = QInputDialog.getText(self, "Save loadout", "Name for the current indicators and signal:",
+                                        QLineEdit.EchoMode.Normal, suggestion)
+        name = name.strip()
+        if not ok or not name:
+            return
+        if name in self.loadouts.all() and not _confirm(self, "Replace loadout",
+                                                        f"A loadout \u201c{name}\u201d exists. Replace it?"):
+            return
+        self.loadouts.save(name, capture(self.indicators, self.algorithm, self.style_btn.isChecked()))
+        self.status.emit(f"loadout \u201c{name}\u201d saved")
+
+    def delete_loadout(self, name: str):
+        if _confirm(self, "Delete loadout", f"Delete the loadout \u201c{name}\u201d?"):
+            self.loadouts.delete(name)
+            self.status.emit(f"loadout \u201c{name}\u201d deleted")
+
+    def apply_loadout(self, name: str):
+        data = self.loadouts.all().get(name)
+        if data is not None:
+            note = self._apply_setup(data)
+            self.status.emit(f"loadout \u201c{name}\u201d applied{note}")
+
+    def _apply_setup(self, data: dict) -> str:
+        """Replace the indicators, signal and chart style in one redraw; returns a note on what was skipped."""
+        self.indicators, self.algorithm, line, skipped = restore(data)
+        self._slots.clear()  # colours as when the loadout was made: palette from the start, in its order
+        self._next_slot = 0
+        for widget, set_value in ((self.algo_box, lambda: self.algo_box.setCurrentText(
+                                       self.algorithm.name if self.algorithm else "No signals")),
+                                  (self.style_btn, lambda: self.style_btn.setChecked(line))):
+            widget.blockSignals(True)  # no parameter dialog, no extra redraw
+            set_value()
+            widget.blockSignals(False)
+        self.redraw()
+        return f" (skipped, not installed: {', '.join(skipped)})" if skipped else ""
+
+    def _remember_session(self):
+        """The current symbol and setup become the default for the next start, saved or not."""
+        if self.settings is None or not self._loaded_symbol:
+            return
+        session = capture(self.indicators, self.algorithm, self.style_btn.isChecked())
+        session.update(symbol=self._loaded_symbol, tf=self.tf.currentText(), bars=self.bars.currentText())
+        if self.settings.get(self.SESSION_KEY) != session:
+            self.settings.set(self.SESSION_KEY, session)
+
+    def _restore_session(self):
+        session = self.settings.get(self.SESSION_KEY) if self.settings is not None else None
+        if not session:
+            return
+        for widget, value in ((self.tf, session.get("tf")), (self.bars, session.get("bars"))):
+            if value and widget.findText(value) >= 0:
+                widget.blockSignals(True)  # no load yet: the app loads once everything is set
+                widget.setCurrentText(value)
+                widget.blockSignals(False)
+        if session.get("symbol"):
+            self.symbol.setText(session["symbol"])
+        self._pending_note = self._apply_setup(session)
+
     def clear_drawings(self):
         for item in self.drawings:
             self.price.removeItem(item)
         self.drawings.clear()
+
+
+def _confirm(parent, title: str, question: str) -> bool:
+    answer = QMessageBox.question(parent, title, question,
+                                  QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                  QMessageBox.StandardButton.No)
+    return answer == QMessageBox.StandardButton.Yes
+
+
+def _describe(loadout: dict) -> str:
+    """Tooltip: what a loadout contains."""
+    parts = [" ".join([i["name"], *(f"{v:g}" for v in i.get("params", {}).values())]) for i in loadout["indicators"]]
+    if loadout.get("signal"):
+        parts.append(f"signal: {loadout['signal']['name']}")
+    return ", ".join(parts) or "no indicators"
