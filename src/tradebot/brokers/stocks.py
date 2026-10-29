@@ -50,6 +50,7 @@ class ScalableCapitalBroker(HoldingsFileBroker):
     """Scalable Capital: no public trading API -> tracking + manual order intents."""
 
     name = "scalable"
+    title = "Scalable Capital"
     asset_classes = frozenset({AssetClass.STOCK})
 
 
@@ -62,6 +63,7 @@ class TradeRepublicBroker(HoldingsFileBroker):
     """
 
     name = "traderepublic"
+    title = "Trade Republic"
     asset_classes = frozenset({AssetClass.STOCK, AssetClass.CRYPTO})
     credential_keys = ("phone_no", "pin", "holdings_csv")
 

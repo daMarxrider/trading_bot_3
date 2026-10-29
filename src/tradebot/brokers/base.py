@@ -57,6 +57,7 @@ class ReadOnlyBrokerError(RuntimeError):
 
 class BaseBroker(ABC):
     name: ClassVar[str]
+    title: ClassVar[str] = ""  #: display name, e.g. "KuCoin" (default: ``name`` capitalised)
     execution_mode: ClassVar[ExecutionMode] = ExecutionMode.LIVE
     asset_classes: ClassVar[frozenset[AssetClass]] = frozenset({AssetClass.CRYPTO})
     #: Credential keys this broker understands (documentation + config validation).

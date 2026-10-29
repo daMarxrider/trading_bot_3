@@ -47,6 +47,7 @@ apply:
 | Tool | Needed for | Get it |
 |---|---|---|
 | `pytr` | Trade Republic login | `uv sync --extra traderepublic` (source install only; the binaries don't contain it) |
+| `sc` | Scalable Capital (official CLI) | [Scalable CLI releases](https://github.com/ScalableCapital/scalable-cli/releases); set its path in ⚙ Settings if it isn't on `PATH` |
 
 ## Download / run the binary
 
@@ -227,6 +228,19 @@ of sample. The GUI's Backtest lab offers the same options.
 
 Lists and tables scroll with a kinetic flick. With a touchscreen present, controls automatically get finger-sized hit targets. Override this with `touch_mode = "on"` or `"off"` in the config.
 
+**⚙ Settings** (bottom left of the sidebar) opens the settings, with the categories on the left:
+* **Appearance**: the theme. It applies right away.
+* **Integrations**:
+  * *Third-party tools*: the path to each external tool tradebot can use, such as the Scalable Capital
+    CLI (`sc`). Leave it empty to find the tool on `PATH`. Each tool shows whether it was found, and a
+    download link if it wasn't.
+  * *Broker API keys*: the credentials of every broker (API key, secret, passphrase, holdings CSV, …),
+    saved under `[brokers.<name>]`. They're stored in plain text. A key set as an environment variable
+    (`TRADEBOT_<BROKER>_<KEY>`) takes precedence and is shown greyed out. Use API keys without
+    withdrawal rights.
+
+Changes are saved to `config.toml` right away.
+
 Themes: **Glass** (translucent frosted panels over a soft gradient backdrop),
 **Modern Dark** and **Light**. You can add your own by placing JSON files in
 `~/.config/tradebot/themes/`:
@@ -254,11 +268,15 @@ password = "..."            # KuCoin API passphrase
 
 [brokers.scalable]
 holdings_csv = "~/finance/scalable.csv"   # columns: symbol,quantity,avg_cost
+
+[tools]
+sc = "/opt/scalable/sc"     # optional; default: found on PATH
 ```
 
-Choosing a theme in the app saves it as `theme` in this file, so the app starts
-with it next time. Only that line changes; your comments and other settings stay
-as they are, and a missing file is created.
+The settings dialog writes `theme`, the `[tools]` paths and the broker keys to this file, so the app
+starts with them next time. Only those lines change; your comments and other
+settings stay as they are, and a missing file is created. An empty field
+removes its line.
 
 Settings the app remembers by itself (such as the chart's auto-fit toggle) are
 saved in `settings.json` in the OS config folder, not in `config.toml`:

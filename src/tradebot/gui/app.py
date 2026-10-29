@@ -10,7 +10,6 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QApplication,
     QButtonGroup,
-    QComboBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -28,6 +27,7 @@ from tradebot.core.registry import load_plugins
 from tradebot.data import MarketDataEngine
 from tradebot.data.providers import quiet_yfinance
 from tradebot.gui.chart import ChartView
+from tradebot.gui.settings import SettingsDialog
 from tradebot.legal import NOT_AFFILIATED, NO_WARRANTY
 from tradebot.gui.theme import GlassBackdrop, ThemeManager
 from tradebot.gui.touch import has_touchscreen
@@ -80,12 +80,9 @@ class MainWindow(QMainWindow):
         about = QPushButton("ⓘ  About", objectName="Nav")  # disclaimers and licence (#58)
         about.clicked.connect(self.show_about)
         side.addWidget(about)
-        side.addWidget(QLabel("Theme", objectName="Muted"))
-        self.theme_box = QComboBox()
-        for key, theme in themes.themes.items():
-            self.theme_box.addItem(theme.name, key)
-        self.theme_box.currentIndexChanged.connect(lambda _: self._theme_chosen(self.theme_box.currentData()))
-        side.addWidget(self.theme_box)
+        self.settings_btn = QPushButton("⚙  Settings", objectName="Nav", toolTip="Theme, third-party tools")  # #59
+        self.settings_btn.clicked.connect(self.show_settings)
+        side.addWidget(self.settings_btn)
 
         # cross-page navigation
         def chart_symbol(sym):
@@ -114,11 +111,8 @@ class MainWindow(QMainWindow):
         for page in pages:
             page[2].status.connect(self.statusBar().showMessage)
 
-        idx = self.theme_box.findData(theme_key if theme_key in themes.themes else "glass")  # e.g. a deleted user theme
-        self.theme_box.blockSignals(True)  # starting with the configured theme isn't a choice to save
-        self.theme_box.setCurrentIndex(idx)
-        self.theme_box.blockSignals(False)
-        themes.apply(self.theme_box.currentData())
+        self.theme_key = theme_key if theme_key in themes.themes else "glass"  # e.g. a deleted user theme
+        themes.apply(self.theme_key)  # starting with the configured theme isn't a choice to save
         self.chart.load()
 
     def show_about(self):
@@ -128,8 +122,16 @@ class MainWindow(QMainWindow):
                           "THIRD_PARTY_NOTICES.txt next to the program. Source code: "
                           "<a href='https://github.com/daMarxrider/trading_bot_3'>github.com/daMarxrider/trading_bot_3</a></p>")
 
+    def show_settings(self):
+        dialog = SettingsDialog(self.themes, self.theme_key, self)
+        dialog.theme_chosen.connect(self._theme_chosen)
+        dialog.message.connect(lambda text: self.statusBar().showMessage(text, 8000))
+        self._settings_dialog = dialog  # for tests
+        dialog.exec()
+
     def _theme_chosen(self, key: str):
-        """Apply a theme picked in the sidebar and remember it as ``theme`` in the config file (#49)."""
+        """Apply a theme picked in the settings and remember it as ``theme`` in the config file (#49)."""
+        self.theme_key = key
         self.themes.apply(key)
         if not save_config_value("theme", key):
             self.statusBar().showMessage(f"theme not saved: couldn't write {config_path()}", 8000)

@@ -92,6 +92,7 @@ class BinanceBroker(CcxtBroker):
 
 class KucoinBroker(CcxtBroker):
     name = "kucoin"
+    title = "KuCoin"
     exchange_id = "kucoin"
     credential_keys = ("api_key", "secret", "password")  # KuCoin API passphrase
 
