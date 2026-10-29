@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import traceback
+from html import escape
 from typing import Callable
 
 import numpy as np
@@ -77,13 +78,19 @@ def run_async(fn: Callable[[], object], on_done: Callable[[object], None], on_er
 
 
 class DataFrameModel(QAbstractTableModel):
-    """Read-only, sortable view of a DataFrame with per-column formatters."""
+    """Read-only, sortable view of a DataFrame with per-column formatters.
+
+    ``row_tips(row)`` gives a tooltip for every cell of a row, ``header_tips(column)`` one for a column's
+    header; either may return None (#70)."""
 
     def __init__(self, df: pd.DataFrame | None = None, formats: dict[str, Callable] | None = None,
-                 colors: Callable[[str, object], QColor | None] | None = None):
+                 colors: Callable[[str, object], QColor | None] | None = None,
+                 row_tips: Callable[[pd.Series], str | None] | None = None,
+                 header_tips: Callable[[str], str | None] | None = None):
         super().__init__()
         self.df = df if df is not None else pd.DataFrame()
         self.formats, self.colors = formats or {}, colors
+        self.row_tips, self.header_tips = row_tips, header_tips
 
     def set_frame(self, df: pd.DataFrame):
         self.beginResetModel()
@@ -110,11 +117,17 @@ class DataFrameModel(QAbstractTableModel):
             return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         if role == Qt.ItemDataRole.UserRole:
             return value
+        if role == Qt.ItemDataRole.ToolTipRole and self.row_tips:
+            return self.row_tips(self.df.iloc[index.row()]) or None
         return None
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
-        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
+        if orientation != Qt.Orientation.Horizontal:
+            return None
+        if role == Qt.ItemDataRole.DisplayRole:
             return str(self.df.columns[section]).replace("_", " ")
+        if role == Qt.ItemDataRole.ToolTipRole and self.header_tips:
+            return self.header_tips(str(self.df.columns[section])) or None
         return None
 
     def sort(self, column, order=Qt.SortOrder.AscendingOrder):
@@ -360,6 +373,11 @@ def shortfall(df: pd.DataFrame, bars: int, start) -> str:
 def epoch_seconds(index: pd.DatetimeIndex) -> np.ndarray:
     """Unix seconds for chart x-axes, independent of the index's datetime unit."""
     return index.as_unit("ns").asi8 / 1e9
+
+
+def tooltip(text: str) -> str:
+    """A tooltip as rich text, so Qt wraps a long explanation instead of showing one very wide line."""
+    return f"<qt>{escape(text, quote=False)}</qt>" if text else ""
 
 
 def pct(v) -> str:

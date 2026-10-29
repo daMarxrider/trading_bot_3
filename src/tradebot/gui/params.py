@@ -7,6 +7,7 @@ from __future__ import annotations
 from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QSpinBox, QVBoxLayout, QWidget
 
 from tradebot.core.registry import Param
+from tradebot.gui.common import tooltip
 
 
 class ParamForm(QWidget):
@@ -34,10 +35,11 @@ class ParamForm(QWidget):
                 box.setRange(spec.low, spec.high)
                 box.setSingleStep((spec.high - spec.low) / 100 or 0.1)
             box.setValue(values.get(key, spec.default))
-            if spec.description:
-                box.setToolTip(spec.description)
             self.editors[key] = box
             self.form.addRow(key.replace("_", " "), box)
+            if spec.description:
+                for widget in (box, self.form.labelForField(box)):
+                    widget.setToolTip(tooltip(spec.description))
 
     def values(self) -> dict:
         return {k: box.value() for k, box in self.editors.items()}

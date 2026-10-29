@@ -174,7 +174,12 @@ class Ichimoku(BaseIndicator):
 
     name = "ichimoku"
     description = "Ichimoku Kinko Hyo (conversion, base, span A/B)"
-    params = {"conversion": IntParam(9, 2, 60), "base": IntParam(26, 5, 120), "span_b": IntParam(52, 10, 240)}
+    params = {
+        "conversion": IntParam(9, 2, 60, "Candles for the fast midpoint line (highest high plus lowest low, halved)."),
+        "base": IntParam(26, 5, 120, "Candles for the slower midpoint line. Span A, one edge of the cloud, is the "
+                                     "average of the two."),
+        "span_b": IntParam(52, 10, 240, "Candles for span B, the cloud's slowest edge."),
+    }
     outputs = ("conversion", "base", "span_a", "span_b")
 
     @classmethod
