@@ -253,7 +253,10 @@ same members. Agreement there is a good sign that the selection is real and not 
   expressions or presets. Double-click a row to open it in the chart.
 * **Backtest lab**: parameter forms generated from each algorithm, equity vs.
   buy & hold and monthly investing, metrics with both baselines, and the GA
-  optimizer with live progress.
+  optimizer with live progress. With the **pool** algorithm, the optimizer also
+  picks the members: All (default) or your own choice of strategies and
+  indicator filters, with min/max members. A selection card then shows which
+  members were used or dropped, and whether GA and PSO agree.
 * **Portfolio & dividends**: total equity, allocation donuts, and per-holding
   and total current dividend yield, trailing annual yield and yield on cost.
 * **News**: headlines for watchlist and portfolio symbols, auto-refreshed

@@ -34,8 +34,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from tradebot.algorithms import ALGORITHMS, build_algorithm
+from tradebot.algorithms import ALGORITHMS, algorithm_names, build_algorithm
 from tradebot.algorithms.builtin import VotingEnsemble
+from tradebot.algorithms.pool import RULES, PoolEnsemble, default_pool
 from tradebot.backtest.baselines import BUY_HOLD, MONTHLY, baselines, buy_and_hold, monthly_investing
 from tradebot.backtest.metrics import fmt
 from tradebot.config import Settings
@@ -120,28 +121,35 @@ def _signed_color(themes: ThemeManager, cols: set[str]):
 
 # -- screener -----------------------------------------------------------------------------------------
 class MemberPicker(QWidget):
-    """Checkboxes for the vote ensemble's members (#78): every registered algorithm but the vote itself, plus All.
+    """Checkboxes for ensemble members plus All: by default the vote's (#78), every registered algorithm but the
+    ensembles themselves.
 
-    Starts with the ensemble's default members; unchecking All goes back to them. One member always stays checked.
+    ``choices`` maps name -> (label, tooltip). Starts with ``default``; unchecking All goes back to it. At least one
+    of ``required`` (default: any member) always stays checked.
     """
 
     changed = pyqtSignal()
 
-    def __init__(self):
+    def __init__(self, choices: dict[str, tuple[str, str]] | None = None, default: list[str] | None = None,
+                 required: list[str] | None = None, all_tip: str = "Use every known strategy, plugins included."):
         super().__init__()
-        self.default = [m.name for m in VotingEnsemble().members]
+        if choices is None:
+            choices = {name: (name, STRATEGIES.get(name) or ALGORITHMS.get(name).description)
+                       for name in ALGORITHMS.names()
+                       if not issubclass(ALGORITHMS.get(name), VotingEnsemble)}  # vote and pool can't be members
+            default = [m.name for m in VotingEnsemble().members]
+        self.default = default or list(choices)
+        self.required = set(required or choices)
         self.all = QCheckBox("All")
-        self.all.setToolTip(tooltip("Use every known strategy, plugins included."))
+        self.all.setToolTip(tooltip(all_tip))
         self.all.clicked.connect(self._all_clicked)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.all)
         self.boxes: dict[str, QCheckBox] = {}
-        for name in ALGORITHMS.names():
-            if issubclass(ALGORITHMS.get(name), VotingEnsemble):  # vote and pool can't be members
-                continue
-            box = self.boxes[name] = QCheckBox(name)
-            box.setToolTip(tooltip(STRATEGIES.get(name) or ALGORITHMS.get(name).description))
+        for name, (label, tip) in choices.items():
+            box = self.boxes[name] = QCheckBox(label)
+            box.setToolTip(tooltip(tip))
             box.toggled.connect(lambda on, b=box: self._toggled(b, on))
             lay.addWidget(box)
         self.set_selected(self.default)
@@ -161,14 +169,24 @@ class MemberPicker(QWidget):
         self.set_selected(list(self.boxes) if on else self.default)
 
     def _toggled(self, box, on):
-        if not on and not self.selected():
-            box.setChecked(True)  # the vote needs at least one member
+        if not on and not self.required & set(self.selected()):
+            box.setChecked(True)  # the vote needs at least one member, the pool at least one strategy
             return
         self._sync_all()
         self.changed.emit()
 
     def _sync_all(self):
         self.all.setChecked(all(box.isChecked() for box in self.boxes.values()))
+
+
+def pool_picker() -> MemberPicker:
+    """The pool's candidates (#21): every poolable strategy and every indicator with a default rule, all checked."""
+    members, _ = default_pool()
+    strategies = [n for n in members if n in ALGORITHMS]
+    choices = {n: (n, STRATEGIES.get(n) or ALGORITHMS.get(n).description) if n in strategies
+               else (f"{n} · filter", RULES[n].description) for n in members}
+    return MemberPicker(choices, members, strategies,
+                        "Let the optimizer pick from every strategy and indicator, plugins included.")
 
 
 class ScreenerView(QWidget):
@@ -467,11 +485,19 @@ class BacktestView(QWidget):
         self.dca_amount.setDecimals(2)
         self.dca_amount.setSpecialValueText("auto")
         self.algo = QComboBox()
-        self.algo.addItems(ALGORITHMS.names())
+        self.algo.addItems(algorithm_names())
         self.algo.currentTextChanged.connect(self._algo_changed)
         self.params = ParamForm({})
         self.members = MemberPicker()
         self.members.changed.connect(self._members_changed)
+        self.pool = pool_picker()
+        self.pool.changed.connect(self._members_changed)
+        self.min_members, self.max_members = QSpinBox(), QSpinBox()
+        self.min_members.setRange(1, len(self.pool.boxes))
+        self.max_members.setRange(0, len(self.pool.boxes))
+        self.max_members.setSpecialValueText("no limit")
+        for box in (self.min_members, self.max_members):
+            box.valueChanged.connect(self._members_changed)
         self.population = QSpinBox()
         self.population.setRange(16, 20000)
         self.population.setValue(512)
@@ -526,6 +552,14 @@ class BacktestView(QWidget):
         members_title.setToolTip(tooltip(explain("members")))
         self.members_card = card(members_title, self.members)
         left.addWidget(self.members_card)
+        pool_title = QLabel("Pool")
+        pool_title.setToolTip(tooltip(explain("pool")))
+        pool_form = QFormLayout()
+        _explained_row(pool_form, "Min members", self.min_members, "min_members")
+        _explained_row(pool_form, "Max members", self.max_members, "max_members")
+        self.pool_card = card(pool_title, self.pool)
+        self.pool_card.layout().addLayout(pool_form)
+        left.addWidget(self.pool_card)
         params_title = QLabel("Parameters")
         params_title.setToolTip(tooltip(explain("parameters")))
         params_card = card(params_title, self.params)
@@ -581,6 +615,13 @@ class BacktestView(QWidget):
         self.baseline_note.hide()
         right.addWidget(self.baseline_note)
         right.addWidget(metrics_view, 2)
+        self.selection = QLabel()  # which pool members the optimizer kept (#21)
+        self.selection.setWordWrap(True)
+        self.selection.setTextFormat(Qt.TextFormat.RichText)
+        self.selection.setToolTip(tooltip(explain("selection")))
+        self.selection_card = card(self.selection)
+        self.selection_card.hide()
+        right.addWidget(self.selection_card)
         self.verdict = QLabel()
         self.verdict.setWordWrap(True)
         self.verdict.setTextFormat(Qt.TextFormat.RichText)
@@ -609,6 +650,7 @@ class BacktestView(QWidget):
 
     def _algo_changed(self, name):
         self.members_card.setVisible(ALGORITHMS.get(name) is VotingEnsemble)
+        self.pool_card.setVisible(ALGORITHMS.get(name) is PoolEnsemble)
         algo = self._build()
         self.params.set_space(algo.param_space(), algo.values)
 
@@ -617,8 +659,11 @@ class BacktestView(QWidget):
         self.params.set_space(algo.param_space(), {**algo.values, **self.params.values()})  # keep what was set
 
     def _build(self):
-        """The selected algorithm with default parameters; a vote with the checked members."""
+        """The selected algorithm with default parameters; a vote or a pool with the checked members."""
         name = self.algo.currentText()
+        if ALGORITHMS.get(name) is PoolEnsemble:
+            lo, hi = self.min_members.value(), self.max_members.value()
+            return PoolEnsemble(self.pool.selected(), min_members=lo, max_members=max(lo, hi) if hi else None)
         return build_algorithm(name, members=self.members.selected() if ALGORITHMS.get(name) is VotingEnsemble else None)
 
     def _algorithm(self):
@@ -685,13 +730,14 @@ class BacktestView(QWidget):
                 return df, {"GA in-sample": cmp.ga.train, "GA out-of-sample": cmp.ga.test,
                             "PSO in-sample": cmp.pso.train, "PSO out-of-sample": cmp.pso.test,
                             "_params": cmp.better.best_params, "_comparison": cmp, "_plot_baselines": plot,
+                            "_selection": (algo, {"GA": cmp.ga.best_params, "PSO": cmp.pso.best_params}),
                             "_baselines": {f"{r.method.upper()} {period}": getattr(r, f"{attr}_baselines")
                                            for period, attr in (("in-sample", "train"), ("out-of-sample", "test"))
                                            for r in (cmp.ga, cmp.pso)}}
             res = OPTIMIZERS[method](algo, df, **kwargs).run(report)
             return df, {"in-sample": res.train, "out-of-sample": res.test, "_params": res.best_params,
                         "_baselines": {"in-sample": res.train_baselines, "out-of-sample": res.test_baselines},
-                        "_plot_baselines": plot}
+                        "_plot_baselines": plot, "_selection": (algo, {method.upper(): res.best_params})}
 
         run_async(work, self._show, self._fail)
 
@@ -708,6 +754,8 @@ class BacktestView(QWidget):
         self._busy(False)
         params = results.pop("_params", None)
         comparison = results.pop("_comparison", None)
+        selection_algo, selection = results.pop("_selection", (None, {}))
+        self._show_selection(selection_algo, selection)
         bases = results.pop("_baselines", {})
         plot_bases = results.pop("_plot_baselines", None) or self._plot_baselines(df, self.fee.value(), self._amount)
         self._show_comparison(comparison)
@@ -743,6 +791,8 @@ class BacktestView(QWidget):
         self._draw()
         self._lock_view()
         self.reset_view()
+        if params and isinstance(selection_algo, PoolEnsemble):
+            params = selection_algo.reuse_params(params)  # the selected members' parameters
         self.status.emit("done" + (f" · best params {params}" if params else ""))
 
     def _draw(self):
@@ -849,6 +899,34 @@ class BacktestView(QWidget):
         self.baseline_note.setVisible(bool(lines))
         self.baseline_note.setToolTip(tooltip(explain("xirr")))
 
+    def _show_selection(self, algo, results: dict[str, dict]):
+        """Which pool members each method used and which it dropped; with two methods, whether they agree (#21)."""
+        if not isinstance(algo, PoolEnsemble):
+            self.selection_card.hide()
+            return
+        t = self.themes.current
+        chosen = {method: set(algo.selected(params)) for method, params in results.items()}
+        both = len(chosen) > 1
+        rows, dropped = "", []
+        for m in algo.pool:
+            used = [m.name in c for c in chosen.values()]
+            if not any(used):
+                dropped.append(m.name)
+                continue
+            cells = "".join(f"<td align='center' style='color:{t.up if u else t.muted}'>{'used' if u else 'dropped'}</td>"
+                            for u in used)
+            if both:
+                agree = len(set(used)) == 1
+                cells += f"<td align='center' style='color:{t.up if agree else t.down}'>{'yes' if agree else 'no'}</td>"
+            kind = "filter" if m in algo.filters else "strategy"
+            rows += f"<tr><td>{m.name}</td><td style='color:{t.muted}'>{kind}</td>{cells}</tr>"
+        head = "".join(f"<th>{method}</th>" for method in chosen) + ("<th>agree</th>" if both else "")
+        summary = " · ".join(f"{method} uses {len(c)} of {len(algo.pool)}" for method, c in chosen.items())
+        dropped_text = f"Dropped{' by both' if both else ''}: {', '.join(dropped)}" if dropped else ""
+        self.selection.setText(f"<b>Selection</b> · {summary}<table cellspacing='6'><tr><th align='left'>member</th>"
+                               f"<th></th>{head}</tr>{rows}</table><span style='color:{t.muted}'>{dropped_text}</span>")
+        self.selection_card.show()
+
     def _show_comparison(self, cmp):
         """Verdict card for GA-vs-PSO runs: parameter differences, fitness gap and interpretation."""
         if cmp is None:
@@ -859,7 +937,7 @@ class BacktestView(QWidget):
         rows = "".join(
             f"<tr><td>{k}</td><td align='right'>{cmp.ga.best_params[k]:.4g}</td>"
             f"<td align='right'>{cmp.pso.best_params[k]:.4g}</td><td align='right'>{d:.0%}</td></tr>"
-            for k, d in cmp.param_diff.items())
+            for k, d in cmp.param_diff.items() if not k.startswith("use."))  # members: see the selection card
         self.verdict.setText(
             f"<b style='color:{color}'>{cmp.verdict.upper()}</b> · agreement {cmp.agreement:.0%} · "
             f"in-sample {cmp.objective} gap {cmp.fitness_gap:.1%}<br>{cmp.explanation()}"

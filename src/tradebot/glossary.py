@@ -83,6 +83,13 @@ TERMS = {
     "algorithm": "The trading strategy: the rules that decide when to buy and when to sell.",
     "members": "The strategies that vote. Each one says buy or sell, and the vote acts when enough of them "
                "agree (the threshold). All checks every known strategy.",
+    "pool": "The candidates the optimizer picks from. Strategies vote; indicators (marked filter) only allow a "
+            "buy while their rule holds, e.g. the close is above the average. All uses every one of them.",
+    "min_members": "The optimizer uses at least this many members of the pool.",
+    "max_members": "The optimizer uses at most this many members of the pool. Fewer members usually means less "
+                   "overfitting.",
+    "selection": "Which pool members the optimizer kept. When GA and PSO pick the same members, the choice is "
+                 "more likely real than luck.",
     "parameters": "The strategy's settings, such as how many days an average covers. Run backtest uses these "
                   "values; Optimize searches for good ones and fills them in.",
     "method": "How the optimizer searches for good parameters.",
