@@ -107,8 +107,34 @@ def test_categories(themes, tmp_path):
     assert restored.current == "other"  # remembered
 
 
-def test_strip_buttons_are_finger_sized_in_touch_mode(app):
-    assert ChartSidebar(touch=True).toggle.width() == 44 and ChartSidebar().toggle.width() == 32
+@pytest.mark.parametrize("touch, side", [(False, 42), (True, 52)])
+def test_strip_buttons_are_squares(app, tmp_path, touch, side):
+    themes = ThemeManager(user_dir=tmp_path, touch=touch)  # the theme's min-height must not squash them
+    themes.apply("light")
+    chart = ChartView(None, themes, ["TEST"])
+    chart.resize(1200, 700)
+    chart.show()
+    QApplication.processEvents()
+    for button in [chart.sidebar.toggle, *chart.sidebar.group.buttons()]:
+        assert (button.width(), button.height()) == (side, side)
+
+
+def test_collapsed_or_expanded_is_restored_when_the_app_starts(app, tmp_path, monkeypatch):
+    from tradebot.gui import app as gui
+
+    monkeypatch.setattr(gui.ChartView, "load", lambda self: None)
+    monkeypatch.setenv("TRADEBOT_CONFIG", str(tmp_path / "config.toml"))
+    themes = ThemeManager(user_dir=tmp_path / "themes")
+    path = tmp_path / "settings.json"
+    first = gui.MainWindow(themes, "dark", Settings(path))
+    assert first.chart.sidebar.is_open  # expanded on the very first start
+    first.chart.sidebar.toggle.click()
+    first.close()
+    second = gui.MainWindow(themes, "dark", Settings(path))  # the app starts again
+    assert not second.chart.sidebar.is_open and not second.chart.sidebar.panel.isVisibleTo(second)
+    second.chart.sidebar.toggle.click()
+    second.close()
+    assert gui.MainWindow(themes, "dark", Settings(path)).chart.sidebar.is_open
 
 
 # -- news for the charted symbol ------------------------------------------------------------------------------

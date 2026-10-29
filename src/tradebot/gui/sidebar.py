@@ -26,9 +26,9 @@ class ChartSidebar(QFrame):
         super().__init__(parent, objectName="ChartSidebar")
         self.settings = settings
         self.keys: list[str] = []
-        self.button_size = 44 if touch else 32  # the strip's square buttons; finger-sized in touch mode
+        self.button_size = 52 if touch else 42  # the strip's square buttons; finger-sized in touch mode
         self.toggle = QToolButton(objectName="SidebarToggle", toolTip="Hide the sidebar")
-        self.toggle.setFixedSize(self.button_size, self.button_size)
+        self._square(self.toggle)
         self.toggle.clicked.connect(lambda: self.set_open(not self.is_open))
         self.group = QButtonGroup(self)
         self.title = QLabel(objectName="SidebarTitle")
@@ -55,7 +55,7 @@ class ChartSidebar(QFrame):
 
     def add_category(self, key: str, icon: str, name: str, page: QWidget):
         btn = QToolButton(text=icon, objectName="SidebarTab", checkable=True, toolTip=name)
-        btn.setFixedSize(self.button_size, self.button_size)
+        self._square(btn)
         btn.clicked.connect(lambda: self.show_category(key))
         self.group.addButton(btn)
         self.strip.insertWidget(len(self.keys) + 1, btn)  # below the toggle, in the order added
@@ -100,6 +100,11 @@ class ChartSidebar(QFrame):
         self.pages.setCurrentIndex(i)
         self.group.buttons()[i].setChecked(True)
         self.title.setText(self.pages.widget(i).property("sidebar_name"))
+
+    def _square(self, button: QToolButton):
+        """A fixed square: set on the button itself, since the theme's min-height would override setFixedSize."""
+        n = self.button_size
+        button.setStyleSheet(f"min-width: {n}px; max-width: {n}px; min-height: {n}px; max-height: {n}px;")
 
     def _apply(self):
         self.panel.setVisible(self._open)
