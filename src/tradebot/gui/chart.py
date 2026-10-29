@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pyqtgraph as pg
 from PyQt6.QtCore import QEvent, QPointF, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QPainter, QPicture
+from PyQt6.QtGui import QPainter
 from PyQt6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -51,6 +51,27 @@ from tradebot.symbols import SymbolSearch, symbol_name
 pg.setConfigOptions(antialias=True)
 DASHES = {"dash": Qt.PenStyle.DashLine, "dot": Qt.PenStyle.DotLine}  #: Style.dash -> Qt pen style
 FIT_PADDING = 0.05  #: auto-fit margin above and below the visible data, as a fraction of its span
+
+
+def _fast_curves(plot):
+    """Curves drawn only inside the view and at screen resolution (#68); "peak" keeps every spike visible.
+    Set on the plot: its addItem() overrides these options of each curve."""
+    plot.setClipToView(True)
+    plot.setDownsampling(auto=True, mode="peak")
+
+
+class Curve(pg.PlotDataItem):
+    """A line that is antialiased only while it has fewer points than the view has pixels (#68): smoothing a
+    dense line shows no difference but costs up to a hundred times the time to paint."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, skipFiniteCheck=True, autoDownsampleFactor=1.0, **kwargs)  # one bucket per pixel
+
+    def updateItems(self, styleUpdate=True):
+        super().updateItems(styleUpdate)
+        vb, x = self.getViewBox(), self.curve.xData
+        sparse = isinstance(vb, pg.ViewBox) and x is not None and len(x) <= vb.width()
+        self.curve.opts["antialias"] = sparse and pg.getConfigOption("antialias")
 
 
 def _decimals(v: float) -> int:
@@ -129,6 +150,31 @@ class PriceAxis(pg.AxisItem):
         return [price_label(10.0 ** v) for v in values]
 
 
+class DateAxis(pg.DateAxisItem):
+    """The time axis. The x-linked panes show the same times, so they share the (slow, time-zone aware) tick
+    computation: it is done once per view range instead of once per pane (#68)."""
+
+    _shared: dict = {}  # (kind, arguments) -> result, of the latest few calls by any pane
+
+    def _cached(self, kind, key, compute):
+        key = (kind, *key)
+        if key not in DateAxis._shared:
+            if len(DateAxis._shared) > 16:  # only the current frame's ticks are worth keeping
+                DateAxis._shared.clear()
+            DateAxis._shared[key] = compute()
+        return DateAxis._shared[key]
+
+    def tickValues(self, minVal, maxVal, size):
+        key = (minVal, maxVal, size, self.fontMetrics.height(), self.utcOffset)
+        values, self.zoomLevel, self.minSpacing = self._cached("values", key, lambda: (
+            super(DateAxis, self).tickValues(minVal, maxVal, size), self.zoomLevel, self.minSpacing))
+        return values
+
+    def tickStrings(self, values, scale, spacing):
+        key = (tuple(values), spacing, id(self.zoomLevel), self.utcOffset)
+        return self._cached("strings", key, lambda: super(DateAxis, self).tickStrings(values, scale, spacing))
+
+
 class _PriceFormat:
     """Stands in for an InfiniteLine label's format string: shows the price at the line's view y."""
 
@@ -143,33 +189,103 @@ def _offline_note(df) -> str:
     return " · offline: showing cached candles, they may be outdated" if df.attrs.get("offline") else ""
 
 
+def ohlc_buckets(x, o, h, l, c, i0: int, i1: int, k: int):
+    """Candles ``i0 <= i < i1`` merged ``k`` at a time (first open, highest high, lowest low, last close), the
+    groups aligned to multiples of ``k`` so they stay the same while panning; x is the middle of each group."""
+    start = i0 - i0 % k
+    edges = np.arange(start, i1, k)
+    last = np.minimum(edges + k, i1) - 1
+    return ((x[edges] + x[last]) / 2, o[edges], np.maximum.reduceat(h[start:i1], edges - start),
+            np.minimum.reduceat(l[start:i1], edges - start), c[last])
+
+
+def _rects(x, bottom, top, width) -> list[QRectF]:
+    """Rectangles for QPainter.drawRects(), far faster than filling a path of them (#68); a flat one is still
+    drawn: the pen strokes it."""
+    height = np.where(top == bottom, 1e-12, top - bottom)
+    return list(map(QRectF, (x - width / 2).tolist(), bottom.tolist(), [width] * len(x), height.tolist()))
+
+
 class CandlestickItem(pg.GraphicsObject):
-    """Candles pre-rendered into a QPicture (fast pan/zoom for thousands of bars)."""
+    """Candles: only the visible ones are drawn, and with more candles than pixels, one merged candle per
+    pixel (#68), so panning stays fast with tens of thousands of bars."""
 
     def __init__(self):
         super().__init__()
-        self.picture = QPicture()
+        self._data = None
+        self._bounds = QRectF()
+        self._cache = (None, None)  # (visible slice and bucket size, shapes per style)
+        self._smooth = True  # antialiased: only while there are fewer candles than pixels, as for Curve
 
     def set_data(self, x, o, h, l, c, width, up, down):
-        self.picture = QPicture()
-        p = QPainter(self.picture)
-        for color, mask in ((up, c >= o), (down, c < o)):
-            pen = pg.mkPen(color, width=1)
-            pen.setCosmetic(True)
-            p.setPen(pen)
-            p.setBrush(pg.mkBrush(color))
-            for xi, oi, hi, li, ci in zip(x[mask], o[mask], h[mask], l[mask], c[mask]):
-                p.drawLine(QPointF(xi, li), QPointF(xi, hi))
-                p.drawRect(QRectF(xi - width / 2, oi, width, (ci - oi) or 1e-12))
-        p.end()
+        self._data = tuple(np.asarray(a, dtype=float) for a in (x, o, h, l, c))
+        self.width = width
+        self.pens = [pg.mkPen(color, width=1) for color in (up, down)]  # cosmetic: 1 px at any zoom
+        self.brushes = [pg.mkBrush(color) for color in (up, down)]
         self.prepareGeometryChange()
+        if len(x):
+            lo, hi = np.nanmin(l), np.nanmax(h)
+            self._bounds = QRectF(x[0] - width / 2, lo, x[-1] - x[0] + width, (hi - lo) or 1e-12)
+        else:
+            self._bounds = QRectF()
+        self._cache = (None, None)
         self.update()
 
+    def _shapes(self, x, o, h, l, c, width):
+        """[(style index, wicks path or None, body rectangles)] for the given (visible, maybe merged) candles."""
+        rising = c >= o
+        wicks = lambda m: pg.arrayToQPath(np.repeat(x[m], 2), np.column_stack([l[m], h[m]]).ravel(),  # noqa: E731
+                                          connect="pairs", finiteCheck=False)
+        return [(style, wicks(m), _rects(x[m], o[m], c[m], width))
+                for style, m in ((0, rising), (1, ~rising)) if m.any()]
+
+    def _paths(self):
+        x, o, h, l, c = self._data
+        vb = self.getViewBox()
+        i0, i1, k = 0, len(x), 1
+        if isinstance(vb, pg.ViewBox):
+            x0, x1 = vb.viewRange()[0]
+            i0 = max(int(np.searchsorted(x, x0 - self.width)) - 1, 0)
+            i1 = min(int(np.searchsorted(x, x1 + self.width)) + 1, len(x))
+            k = max(int((i1 - i0) / max(vb.width(), 1.0)), 1)  # candles per pixel
+            self._smooth = i1 - i0 <= vb.width()
+        key = (i0, i1, k)
+        if self._cache[0] != key:
+            if i1 <= i0:
+                shapes = []
+            elif k > 1:
+                shapes = self._shapes(*ohlc_buckets(x, o, h, l, c, i0, i1, k), self.width * k)
+            else:
+                shapes = self._shapes(*(a[i0:i1] for a in (x, o, h, l, c)), self.width)
+            self._cache = (key, shapes)
+        return self._cache[1]
+
     def paint(self, p, *args):
-        p.drawPicture(0, 0, self.picture)
+        if self._data is None:
+            return
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, self._smooth and pg.getConfigOption("antialias"))
+        for style, wicks, rects in self._paths():
+            p.setPen(self.pens[style])
+            p.setBrush(self.brushes[style])
+            if wicks is not None:
+                p.drawPath(wicks)
+            p.drawRects(rects)
 
     def boundingRect(self):
-        return QRectF(self.picture.boundingRect())
+        return QRectF(self._bounds)
+
+
+class HistogramItem(CandlestickItem):
+    """Bars from 0 (e.g. the MACD histogram), culled and merged per pixel like the candles."""
+
+    def set_data(self, x, y, width, brush, pen):
+        y = np.asarray(y, dtype=float)
+        zero = np.zeros_like(y)
+        super().set_data(x, zero, np.maximum(y, 0), np.minimum(y, 0), y, width, brush, brush)
+        self.pens = [pen]
+
+    def _shapes(self, x, o, h, l, c, width):
+        return [(0, None, _rects(x, l, h, width))] if len(x) else []  # a merged bar spans its group's range
 
 
 class ChartView(QWidget):
@@ -257,9 +373,10 @@ class ChartView(QWidget):
         # -- plot area ---------------------------------------------------------------------------
         self.canvas = pg.GraphicsLayoutWidget()
         self.price_axis = PriceAxis("right")
-        self.price = self.canvas.addPlot(row=0, col=0, axisItems={"bottom": pg.DateAxisItem(), "right": self.price_axis})
+        self.price = self.canvas.addPlot(row=0, col=0, axisItems={"bottom": DateAxis(), "right": self.price_axis})
         self.price.showGrid(x=True, y=True, alpha=0.15)
         self.price.setMenuEnabled(False)
+        _fast_curves(self.price)
         self.price.getAxis("right").setWidth(70)
         self.price.showAxis("right")
         self.price.hideAxis("left")
@@ -486,19 +603,18 @@ class ChartView(QWidget):
 
     def redraw(self, autorange: bool = False):
         t = self.themes.current
-        for item in list(self.price.items):
-            if item not in (self.vline, self.hline, *self.drawings):
-                self.price.removeItem(item)
-        for pane in self.panes:
-            self.canvas.removeItem(pane)
-            self._cross.pop(pane, None)
-            self._legend.pop(pane, None)
-        self.panes.clear()
+        keep = {id(item) for item in (*self.drawings, *(line for pair in self._cross.values() for line in pair))}
+        for plot in [self.price, *self.panes]:
+            for item in list(plot.items):
+                if id(item) not in keep:
+                    plot.removeItem(item)
+        spare, self.panes = self.panes, []  # indicator panes are reused in order: building one takes ~30 ms (#68)
         self._fit_series = {}
         self._rows = {self.price: []}
         self._positions = None
         self._style(t)
         if self.df is None or self.df.empty:
+            self._drop_panes(spare)
             self._legend[self.price].setText("")
             return
         df = self.df
@@ -511,7 +627,7 @@ class ChartView(QWidget):
             self.status.emit("log scale needs prices above 0: showing a linear scale")
         ty = self._ty
         if self.style_btn.isChecked():
-            self.price.plot(x, ty(c), pen=pg.mkPen(qcolor(t.accent), width=2))
+            self.price.addItem(Curve(x, ty(c), pen=pg.mkPen(qcolor(t.accent), width=2)))
             self._fit_series[self.price] = [ty(c)]
         else:
             self._fit_series[self.price] = [ty(l), ty(h)]
@@ -523,19 +639,9 @@ class ChartView(QWidget):
             frame = ind(df)
             target = self.price
             if not ind.overlay:
-                target = self.canvas.addPlot(row=len(self.panes) + 1, col=0, axisItems={"bottom": pg.DateAxisItem()})
-                target.setXLink(self.price)
-                target.setMaximumHeight(170)
-                target.showGrid(x=True, y=True, alpha=0.15)
-                target.showAxis("right")
-                target.hideAxis("left")
-                target.getAxis("right").setWidth(70)
-                target.setMenuEnabled(False)
+                target = spare.pop(0) if spare else self._new_pane()
                 for level in ind.levels:
                     target.addItem(pg.InfiniteLine(level, angle=0, pen=pg.mkPen(qcolor(t.muted), style=Qt.PenStyle.DotLine)))
-                target.vb.sigRangeChanged.connect(self._range_changed)
-                self._add_crosshair(target)
-                self._add_legend(target)
                 self.panes.append(target)
             values = []  # this indicator's drawn outputs for the value line
             self._rows.setdefault(target, []).append((_spaced_label(ind.name, ind.values), values))
@@ -553,14 +659,17 @@ class ChartView(QWidget):
                 default = t.muted if hist else t.series[(slot + k) % len(t.series)]
                 color = qcolor(resolve_color(t, style.color) if style.color else default)
                 if hist:
-                    target.addItem(pg.BarGraphItem(x=x[ok], height=y[ok], width=width, brush=pg.mkBrush(color)))
+                    bars = HistogramItem()
+                    bars.set_data(x[ok], y[ok], width, color, pg.mkPen(pg.getConfigOption("foreground")))
+                    target.addItem(bars)
                     self._fit_series.setdefault(target, []).append(np.zeros_like(y))  # bars grow from 0
                 else:
                     pen = pg.mkPen(color, width=style.width or 1.6, style=DASHES.get(style.dash, Qt.PenStyle.SolidLine))
-                    target.plot(x[ok], y[ok], pen=pen, name=col)
+                    target.addItem(Curve(x[ok], y[ok], pen=pen, name=col))
                 color = color.name()  # "#rrggbb" for the value line's rich text
                 self._fit_series.setdefault(target, []).append(y)
                 values.append((raw, color))  # the readout shows prices, also on the log scale
+        self._drop_panes(spare)
         if self.algorithm is not None:
             self._positions = self.algorithm.run(df).to_numpy()
             change = np.diff(np.r_[0.0, self._positions])
@@ -576,6 +685,28 @@ class ChartView(QWidget):
             self.reset_view()
         else:
             self.fit_y()
+
+    def _new_pane(self):
+        """An empty indicator pane below the last one, x-linked to the price pane."""
+        pane = self.canvas.addPlot(row=len(self.panes) + 1, col=0, axisItems={"bottom": DateAxis()})
+        pane.setXLink(self.price)
+        pane.setMaximumHeight(170)
+        pane.showGrid(x=True, y=True, alpha=0.15)
+        pane.showAxis("right")
+        pane.hideAxis("left")
+        pane.getAxis("right").setWidth(70)
+        pane.setMenuEnabled(False)
+        _fast_curves(pane)
+        pane.vb.sigRangeChanged.connect(self._range_changed)
+        self._add_crosshair(pane)
+        self._add_legend(pane)
+        return pane
+
+    def _drop_panes(self, panes):
+        for pane in panes:
+            self.canvas.removeItem(pane)
+            self._cross.pop(pane, None)
+            self._legend.pop(pane, None)
 
     def _palette_slot(self, ind) -> int:
         """Where an indicator's outputs start in the theme palette, fixed when it's first drawn: removing or
