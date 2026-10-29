@@ -37,6 +37,7 @@ from tradebot.algorithms import ALGORITHMS, build_algorithm
 from tradebot.backtest.metrics import fmt
 from tradebot.brokers import BROKERS, create_broker
 from tradebot.core.timeframes import TIMEFRAMES
+from tradebot.glossary import METHODS, OBJECTIVES, STRATEGIES, explain
 from tradebot.gui.common import (
     DataFrameModel,
     DateRange,
@@ -47,11 +48,12 @@ from tradebot.gui.common import (
     pct,
     run_async,
     shortfall,
+    tooltip,
 )
 from tradebot.gui.news import fill_news_list, open_link
 from tradebot.gui.params import ParamForm
 from tradebot.gui.theme import ThemeManager, qcolor
-from tradebot.gui.touch import PlotTouchHandler, TouchController, enable_kinetic_scroll
+from tradebot.gui.touch import LongPressTooltips, PlotTouchHandler, TouchController, enable_kinetic_scroll
 from tradebot.symbols import SymbolSearch
 
 
@@ -59,6 +61,34 @@ def _title(text: str) -> QLabel:
     label = QLabel(text)
     label.setObjectName("Title")
     return label
+
+
+def _explain_choices(combo: QComboBox, intro: str, texts: dict):
+    """A tooltip per entry (keyed by the entry's data, or its text) and one for the box that explains all of
+    them, since the open list's tooltips can't be reached by touch."""
+    lines = [intro] if intro else []
+    for i in range(combo.count()):
+        key = combo.itemData(i) or combo.itemText(i)
+        if texts.get(key):
+            combo.setItemData(i, tooltip(texts[key]), Qt.ItemDataRole.ToolTipRole)
+            lines.append(f"<b>{combo.itemText(i)}</b>: {texts[key]}")
+    combo.setToolTip("<qt>" + "<br>".join(lines) + "</qt>")
+
+
+def _explained_row(form: QFormLayout, label: str, widget: QWidget, term: str):
+    """A form row whose label and field both explain ``term`` on hover."""
+    form.addRow(label, widget)
+    text = tooltip(explain(term))
+    form.labelForField(widget).setToolTip(text)
+    widget.setToolTip(widget.toolTip() or text)  # a combo box keeps its list of choices
+
+
+def _results_tip(column: str) -> str:
+    """Results-table header: "GA out-of-sample" -> the out-of-sample explanation."""
+    for term in ("out-of-sample", "in-sample", "backtest"):
+        if term in column:
+            return tooltip(explain(term))
+    return tooltip("Point at a row to see what that number means.") if column == "metric" else ""
 
 
 def _table(model) -> QTableView:
@@ -385,8 +415,10 @@ class BacktestView(QWidget):
         for label, key in (("Genetic algorithm (GA)", "ga"), ("Particle swarm (PSO)", "pso"),
                            ("Both + compare", "both")):
             self.method.addItem(label, key)
-        self.method.setToolTip("'Both' runs GA, then PSO on the same data and budget and reports how much they "
-                               "disagree. Big disagreement means a fragile optimum.")
+        _explain_choices(self.method, explain("method"), METHODS)
+        _explain_choices(self.objective, explain("objective"), OBJECTIVES)
+        strategies = {name: STRATEGIES.get(name) or ALGORITHMS.get(name).description for name in ALGORITHMS.names()}
+        _explain_choices(self.algo, explain("algorithm"), strategies)
         run = QPushButton("Run backtest")
         run.setObjectName("Primary")
         run.clicked.connect(self.run_backtest)
@@ -394,28 +426,35 @@ class BacktestView(QWidget):
         opt.clicked.connect(self.run_optimizer)
         chart = QPushButton("Show on chart")
         chart.clicked.connect(lambda: self.show_on_chart.emit(self.symbol.text(), self._algorithm()))
+        for button, term in ((run, "backtest"), (opt, "optimize"), (chart, "show_on_chart")):
+            button.setToolTip(tooltip(explain(term)))
         self.progress = QProgressBar()
         self.progress.hide()
 
         form = QFormLayout()
-        for label, w in (("Symbol", self.symbol), ("Timeframe", self.tf), ("Candles", self.bars), ("Dates", self.dates),
-                         ("Fee / side", self.fee), ("Algorithm", self.algo)):
-            form.addRow(label, w)
+        for label, w, term in (("Symbol", self.symbol, "symbol"), ("Timeframe", self.tf, "timeframe"),
+                               ("Candles", self.bars, "candles"), ("Dates", self.dates, "dates"),
+                               ("Fee / side", self.fee, "fee"), ("Algorithm", self.algo, "algorithm")):
+            _explained_row(form, label, w, term)
         opt_form = QFormLayout()
-        for label, w in (("Method", self.method), ("Population / swarm", self.population),
-                         ("Generations / iterations", self.generations), ("Objective", self.objective)):
-            opt_form.addRow(label, w)
+        for label, w, term in (("Method", self.method, "method"), ("Population / swarm", self.population, "population"),
+                               ("Generations / iterations", self.generations, "generations"),
+                               ("Objective", self.objective, "objective")):
+            _explained_row(opt_form, label, w, term)
         from tradebot.optimize import select_backend
 
         backend = QLabel(f"Compute backend: {select_backend().description}")
         backend.setObjectName("Muted")
         backend.setWordWrap(True)
+        backend.setToolTip(tooltip(explain("backend")))
         left = QVBoxLayout()
         left.addWidget(card(_title("Backtest lab")))
         setup = card()
         setup.layout().addLayout(form)
         left.addWidget(setup)
-        params_card = card(QLabel("Parameters"), self.params)
+        params_title = QLabel("Parameters")
+        params_title.setToolTip(tooltip(explain("parameters")))
+        params_card = card(params_title, self.params)
         left.addWidget(params_card)
         opt_card = card(QLabel("Optimizer"))
         opt_card.layout().addLayout(opt_form)
@@ -440,15 +479,20 @@ class BacktestView(QWidget):
         self.plot.showGrid(x=True, y=True, alpha=0.15)
         self.plot.addLegend()
         self.touch = TouchController(self.plot.viewport(), PlotTouchHandler(self.plot, lambda _: self.plot.getPlotItem()))
-        self.metrics = DataFrameModel()
-        metrics_view = _table(self.metrics)
+        self.metrics = DataFrameModel(row_tips=lambda row: tooltip(explain(row["metric"])), header_tips=_results_tip)
+        self.metrics_view = metrics_view = _table(self.metrics)
         metrics_view.setMaximumHeight(300)
         right = QVBoxLayout()
-        right.addWidget(card(QLabel("Equity curve vs. buy & hold"), self.plot), 3)
+        equity_title = QLabel("Equity curve vs. buy & hold")
+        equity_title.setToolTip(tooltip(explain("equity")))
+        right.addWidget(card(equity_title, self.plot), 3)
         right.addWidget(metrics_view, 2)
         self.verdict = QLabel()
         self.verdict.setWordWrap(True)
         self.verdict.setTextFormat(Qt.TextFormat.RichText)
+        self.verdict.setToolTip("<qt>" + "<br>".join(f"<b>{name}</b>: {explain(term)}" for name, term in (
+            ("Verdict", "verdict"), ("Agreement", "agreement"), ("Gap", "gap"),
+            ("Difference (% of range)", "param_diff"))) + "</qt>")
         self.verdict_card = card(self.verdict)
         self.verdict_card.hide()
         right.addWidget(self.verdict_card)
@@ -458,6 +502,7 @@ class BacktestView(QWidget):
         lay.addLayout(right, 1)
         self._algo_changed(self.algo.currentText())
         self.generation.connect(self._progress)
+        self._tips = LongPressTooltips(self)  # touch: press and hold anything to read its explanation
         themes.changed.connect(self._style)
         self._style(themes.current)
 
