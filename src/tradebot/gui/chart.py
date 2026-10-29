@@ -79,17 +79,62 @@ def nearest_bar(x, t: float) -> int:
 def visible_y_range(x, series, x0, x1, padding=FIT_PADDING):
     """Padded (low, high) of all ``series`` (arrays aligned with the sorted ``x``) over ``x0 <= x <= x1``.
 
-    NaNs are ignored; returns None if nothing is visible.
+    NaNs (and infinities, e.g. log10(0)) are ignored; returns None if nothing is visible.
     """
     i0, i1 = np.searchsorted(x, x0, "left"), np.searchsorted(x, x1, "right")
     visible = [np.asarray(s, dtype=float)[i0:i1] for s in series]
     visible = np.concatenate(visible) if visible else np.empty(0)
-    visible = visible[~np.isnan(visible)]
+    visible = visible[np.isfinite(visible)]
     if not visible.size:
         return None
     lo, hi = float(visible.min()), float(visible.max())
     span = (hi - lo) or abs(hi) * 0.01 or 1.0  # flat data: open up a small band around it
     return lo - padding * span, hi + padding * span
+
+
+def price_label(p: float) -> str:
+    """A price-axis tick: 100,000 · 250 · 0.05."""
+    if p >= 1000:
+        return f"{round(p):,}"
+    return np.format_float_positional(float(f"{p:.6g}"), trim="-")
+
+
+class PriceAxis(pg.AxisItem):
+    """Price axis that, on the log scale (#60), labels a log10 view with real prices at round values."""
+
+    log = False
+    MIN_SPACING = 40  #: pixels between labels
+
+    def tickValues(self, minVal, maxVal, size):
+        if not self.log:
+            return super().tickValues(minVal, maxVal, size)
+        fits = max(int(size / self.MIN_SPACING), 2)
+        decades = range(int(np.floor(minVal)) - 1, int(np.ceil(maxVal)) + 1)
+        for steps in ((1, 2, 5), (1, 3), (1,)):  # 1-2-5 per decade while they fit, then fewer
+            ticks = [np.log10(m * 10.0 ** d) for d in decades for m in steps]
+            ticks = [v for v in ticks if minVal <= v <= maxVal]
+            if 2 <= len(ticks) <= fits:
+                return [(1.0, ticks)]
+        if len(ticks) > fits:  # many decades: every n-th power of ten
+            return [(1.0, ticks[:: int(np.ceil(len(ticks) / fits))])]
+        # less than about a factor of 2.5 in view: round linear steps of the real prices
+        levels = super().tickValues(10.0 ** minVal, 10.0 ** maxVal, size)
+        return [(1.0, [np.log10(v) for v in values if v > 0]) for _, values in levels]
+
+    def tickStrings(self, values, scale, spacing):
+        if not self.log:
+            return super().tickStrings(values, scale, spacing)
+        return [price_label(10.0 ** v) for v in values]
+
+
+class _PriceFormat:
+    """Stands in for an InfiniteLine label's format string: shows the price at the line's view y."""
+
+    def __init__(self, chart: ChartView):
+        self.chart = chart
+
+    def format(self, value):
+        return f"{self.chart.price_at(value):.6g}"
 
 
 class CandlestickItem(pg.GraphicsObject):
@@ -145,6 +190,7 @@ class ChartView(QWidget):
         self._next_slot = 0
         self._loaded_symbol = ""  # the symbol of self.df, remembered for the next start
         self._pending_note = ""  # a message from restoring the last session, shown with the first load
+        self._log = False  # the price pane's view y is log10(price) (#60)
 
         # -- toolbar -----------------------------------------------------------------------------
         self.symbol = QLineEdit(watchlist[0] if watchlist else "BTC/USDT")
@@ -204,7 +250,8 @@ class ChartView(QWidget):
 
         # -- plot area ---------------------------------------------------------------------------
         self.canvas = pg.GraphicsLayoutWidget()
-        self.price = self.canvas.addPlot(row=0, col=0, axisItems={"bottom": pg.DateAxisItem()})
+        self.price_axis = PriceAxis("right")
+        self.price = self.canvas.addPlot(row=0, col=0, axisItems={"bottom": pg.DateAxisItem(), "right": self.price_axis})
         self.price.showGrid(x=True, y=True, alpha=0.15)
         self.price.setMenuEnabled(False)
         self.price.getAxis("right").setWidth(70)
@@ -214,17 +261,25 @@ class ChartView(QWidget):
         # crosshair: per pane a vertical line (shown in every pane) and a horizontal one (hovered pane only)
         self._cross: dict = {}
         self.vline, self.hline = self._add_crosshair(self.price)
+        self.hline.label.format = _PriceFormat(self)
         self._add_legend(self.price)
         self.canvas.scene().sigMouseMoved.connect(self._mouse_moved)
         self.canvas.scene().sigMouseClicked.connect(self._mouse_clicked)
         self.price.vb.sigRangeChanged.connect(self._range_changed)
 
-        self.fit_btn = QToolButton(self.canvas, text="↕", checkable=True, toolTip="Auto-fit price axis to visible candles")
+        # the chart-corner buttons: no padding or min-height from the theme, so both are exactly `size` square
+        self.fit_btn = QToolButton(self.canvas, text="↕", checkable=True, toolTip="Auto-fit price axis to visible candles",
+                                   objectName="ChartCorner")
         # on by default (a checked= keyword is applied before checkable and lost)
         self.fit_btn.setChecked(bool(settings.get("chart.autofit", True)) if settings else True)
         size = 40 if themes.touch else 28  # finger-sized in touch mode
         self.fit_btn.setFixedSize(size, size)
         self.fit_btn.toggled.connect(self._autofit_toggled)
+        self.log_btn = QToolButton(self.canvas, text="log", checkable=True, toolTip="Logarithmic price scale",
+                                   objectName="ChartCorner")
+        self.log_btn.setChecked(bool(settings.get("chart.log", False)) if settings else False)
+        self.log_btn.setFixedSize(size, size)
+        self.log_btn.toggled.connect(self._log_toggled)
         self.canvas.installEventFilter(self)  # keeps the button in the bottom-left corner
 
         lay = QVBoxLayout(self)
@@ -406,13 +461,18 @@ class ChartView(QWidget):
         x = self._x = epoch_seconds(df.index)
         width = (np.median(np.diff(x)) if len(x) > 1 else 86400) * 0.7
         o, h, l, c = (df[k].to_numpy() for k in ("open", "high", "low", "close"))
+        positive = bool((l > 0).all())
+        self._set_log(self.log_btn.isChecked() and positive)
+        if self.log_btn.isChecked() and not positive:
+            self.status.emit("log scale needs prices above 0: showing a linear scale")
+        ty = self._ty
         if self.style_btn.isChecked():
-            self.price.plot(x, c, pen=pg.mkPen(qcolor(t.accent), width=2))
-            self._fit_series[self.price] = [c]
+            self.price.plot(x, ty(c), pen=pg.mkPen(qcolor(t.accent), width=2))
+            self._fit_series[self.price] = [ty(c)]
         else:
-            self._fit_series[self.price] = [l, h]
+            self._fit_series[self.price] = [ty(l), ty(h)]
             candles = CandlestickItem()
-            candles.set_data(x, o, h, l, c, width, qcolor(t.up), qcolor(t.down))
+            candles.set_data(x, ty(o), ty(h), ty(l), ty(c), width, qcolor(t.up), qcolor(t.down))
             self.price.addItem(candles)
 
         for ind in self.indicators:
@@ -440,8 +500,10 @@ class ChartView(QWidget):
                 if not ind.is_line(col):
                     self._draw_labels(target, ind, frame, col, x, c, t)
                     continue
-                y = frame[col].to_numpy()
-                ok = ~np.isnan(y)
+                raw = y = frame[col].to_numpy()
+                if target is self.price:
+                    y = ty(y)
+                ok = np.isfinite(y)
                 style = ind.styles.get(ind.output_of(col), Style())
                 hist = col.endswith("_hist")
                 default = t.muted if hist else t.series[(slot + k) % len(t.series)]
@@ -454,13 +516,13 @@ class ChartView(QWidget):
                     target.plot(x[ok], y[ok], pen=pen, name=col)
                 color = color.name()  # "#rrggbb" for the value line's rich text
                 self._fit_series.setdefault(target, []).append(y)
-                values.append((y, color))
+                values.append((raw, color))  # the readout shows prices, also on the log scale
         if self.algorithm is not None:
             self._positions = self.algorithm.run(df).to_numpy()
             change = np.diff(np.r_[0.0, self._positions])
             for mask, symbol, color, anchor in ((change > 0, "t1", t.up, l * 0.995), (change < 0, "t", t.down, h * 1.005)):
                 if mask.any():
-                    self.price.addItem(pg.ScatterPlotItem(x=x[mask], y=anchor[mask], symbol=symbol, size=13,
+                    self.price.addItem(pg.ScatterPlotItem(x=x[mask], y=ty(anchor[mask]), symbol=symbol, size=13,
                                                           brush=pg.mkBrush(color), pen=pg.mkPen(None)))
         self._style(t)
         self._show_values()
@@ -495,7 +557,7 @@ class ChartView(QWidget):
             font = item.textItem.font()
             font.setBold(True)
             item.setFont(font)
-            item.setPos(x[i], anchor[i])
+            item.setPos(x[i], self._ty(anchor[i]) if target is self.price else anchor[i])
             target.addItem(item)
 
     # -- crosshair & drawing tools ---------------------------------------------------------------
@@ -517,7 +579,8 @@ class ChartView(QWidget):
         row = self.df.iloc[i]
         chg = row.close / row.open - 1
         self.status.emit(f"{self.df.index[i]:%Y-%m-%d %H:%M}  O {row.open:.6g}  H {row.high:.6g}  "
-                         f"L {row.low:.6g}  C {row.close:.6g}  ({chg * 100:+.2f}%)   cursor {pt.y():.6g}")
+                         f"L {row.low:.6g}  C {row.close:.6g}  ({chg * 100:+.2f}%)   "
+                         f"cursor {self.price_at(pt.y()) if plot is self.price else pt.y():.6g}")
 
     def _tool_toggled(self, key, on):
         if on:
@@ -549,7 +612,7 @@ class ChartView(QWidget):
             return
         pt = self.price.vb.mapSceneToView(scene_pos)
         if tool == "hline":
-            self._add_level(pt.y())
+            self._add_level(self.price_at(pt.y()))
             return
         if self._pending_point is None:
             self._pending_point = pt
@@ -566,8 +629,10 @@ class ChartView(QWidget):
 
     def _add_level(self, price: float):
         t = self.themes.current
-        item = pg.InfiniteLine(price, angle=0, movable=True, pen=pg.mkPen(qcolor(t.accent), width=2),
+        item = pg.InfiniteLine(self._ty(price), angle=0, movable=True, pen=pg.mkPen(qcolor(t.accent), width=2),
                                label="{value:.6g}", labelOpts={"position": 0.97, "color": t.accent})
+        item.label.format = _PriceFormat(self)
+        item.label.valueChanged()
         self._add_drawing(item, "hline")
 
     def reset_view(self):
@@ -585,9 +650,9 @@ class ChartView(QWidget):
     def autofit(self) -> bool:
         return self.fit_btn.isChecked()
 
-    def fit_y(self):
-        """Fit each plot's y-axis to its data inside the visible time range (while auto-fit is on)."""
-        if not self.autofit:
+    def fit_y(self, force: bool = False):
+        """Fit each plot's y-axis to its data inside the visible time range (while auto-fit is on, or ``force``)."""
+        if not (self.autofit or force):
             return
         x0, x1 = self.price.vb.viewRange()[0]
         self._adjusting = True
@@ -639,9 +704,53 @@ class ChartView(QWidget):
             for plot in [self.price, *self.panes]:
                 plot.enableAutoRange(y=False)  # keep the current y-range until the user changes it
 
+    # -- logarithmic price scale (#60) -----------------------------------------------------------
+    def _ty(self, price):
+        """Price -> the price pane's view y: log10(price) on the log scale."""
+        if not self._log:
+            return price
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return np.log10(price)
+
+    def price_at(self, y: float) -> float:
+        """The price pane's view y -> price."""
+        return 10.0 ** y if self._log else y
+
+    def _set_log(self, on: bool):
+        """Switch the price pane's view y between price and log10(price), moving the drawings along."""
+        if on == self._log:
+            return
+        self._log = self.price_axis.log = on  # first: the level labels read it while their lines move
+
+        def to_view(y):
+            return np.log10(max(y, 1e-12)) if on else 10.0 ** y
+
+        for item in self.drawings:
+            if isinstance(item, pg.InfiniteLine):
+                item.setValue(to_view(item.value()))
+            elif isinstance(item, pg.RectROI):
+                (x0, y0), (w, h) = item.pos(), item.size()
+                y0, y1 = to_view(y0), to_view(y0 + h)
+                item.setPos([x0, y0], finish=False)
+                item.setSize([w, y1 - y0], finish=False)
+            else:  # trendline: move both ends
+                for handle in item.getHandles():
+                    p = item.mapToParent(handle.pos())
+                    item.movePoint(handle, QPointF(p.x(), to_view(p.y())), finish=False)
+        self.price_axis.picture = None  # re-generate the ticks
+        self.price_axis.update()
+
+    def _log_toggled(self, on):
+        if self.settings:
+            self.settings.set("chart.log", on)
+        self.redraw()
+        self.fit_y(force=True)  # the old y-range means nothing on the other scale
+
     def eventFilter(self, obj, event):
         if obj is self.canvas and event.type() == QEvent.Type.Resize:
-            self.fit_btn.move(8, self.canvas.height() - self.fit_btn.height() - 8)
+            bottom = self.canvas.height() - self.fit_btn.height() - 8
+            self.fit_btn.move(8, bottom)
+            self.log_btn.move(8 + self.fit_btn.width() + 4, bottom)
         elif obj is self.canvas and event.type() == QEvent.Type.Leave and self._hover is not None:
             self._hover = None  # cursor left the chart: show the latest bar again
             self._show_values()
@@ -653,7 +762,7 @@ class ChartView(QWidget):
         menu = QMenu(self)
         menu.addAction("Reset zoom", self.reset_view)
         if plot is self.price and self.df is not None:
-            price = self.price.vb.mapSceneToView(scene_pos).y()
+            price = self.price_at(self.price.vb.mapSceneToView(scene_pos).y())
             menu.addAction(f"Add level at {price:.6g}", lambda: self._add_level(price))
         for key, btn in self.tools.items():
             if key != "hline":
