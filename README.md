@@ -461,6 +461,7 @@ For venues without an API, subclass `ManualExecutionBroker` or
 
 ```sh
 uv run pytest
+uv run python scripts/bench_chart.py   # chart redraw and pan times for 500 / 5,000 / 50,000 candles
 ```
 
 Don't add third-party tools or broker assets to the repo or the binaries. Integrations call a tool the
