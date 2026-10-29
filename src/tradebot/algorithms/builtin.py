@@ -21,9 +21,12 @@ class RsiThreshold(BaseAlgorithm):
     name = "rsi_threshold"
     description = "Buy when RSI falls below `lower`, sell when it rises above `upper`"
     params = {
-        "period": IntParam(14, 2, 50),
-        "lower": Param(33.0, 5.0, 50.0),
-        "upper": Param(66.0, 50.0, 95.0),
+        "period": IntParam(14, 2, 50, "How many candles the RSI looks back. Shorter reacts faster but gives more "
+                                      "false signals."),
+        "lower": Param(33.0, 5.0, 50.0, "Buy when the RSI drops below this: the price has fallen a lot recently "
+                                        "(\"oversold\"). Lower waits for deeper dips."),
+        "upper": Param(66.0, 50.0, 95.0, "Sell when the RSI rises above this: the price has risen a lot recently "
+                                         "(\"overbought\")."),
     }
 
     def signals(self, o, p):
@@ -37,7 +40,12 @@ class RsiThreshold(BaseAlgorithm):
 class MacdCross(BaseAlgorithm):
     name = "macd_cross"
     description = "Long while the MACD line is above its signal line"
-    params = {"fast": IntParam(12, 2, 50), "slow": IntParam(26, 5, 120), "signal": IntParam(9, 2, 50)}
+    params = {
+        "fast": IntParam(12, 2, 50, "Candles in the short average that follows the price closely."),
+        "slow": IntParam(26, 5, 120, "Candles in the long average that shows the overall trend."),
+        "signal": IntParam(9, 2, 50, "Candles used to smooth the difference of the two into the signal line. "
+                                     "Shorter trades more often."),
+    }
 
     def signals(self, o, p):
         m = MACD.compute(o, fast=p["fast"], slow=p["slow"], signal=p["signal"])
@@ -63,7 +71,11 @@ class IchimokuCloud(BaseAlgorithm):
 class SmaCross(BaseAlgorithm):
     name = "sma_cross"
     description = "Long while the fast SMA is above the slow SMA"
-    params = {"fast": IntParam(20, 2, 100), "slow": IntParam(50, 10, 300)}
+    params = {
+        "fast": IntParam(20, 2, 100, "Candles in the short moving average, which follows the price closely."),
+        "slow": IntParam(50, 10, 300, "Candles in the long moving average. In the market while the short one "
+                                      "is above it."),
+    }
 
     def signals(self, o, p):
         fast = SMA.compute(o, period=p["fast"])["value"]
@@ -77,7 +89,11 @@ class SmaCross(BaseAlgorithm):
 class BollingerReversion(BaseAlgorithm):
     name = "bollinger_reversion"
     description = "Buy a close below the lower band, exit at the middle band"
-    params = {"period": IntParam(20, 5, 100), "width": Param(2.0, 1.0, 3.5)}
+    params = {
+        "period": IntParam(20, 5, 100, "Candles in the average the bands are drawn around."),
+        "width": Param(2.0, 1.0, 3.5, "How far the bands are from the average, in standard deviations. Wider "
+                                      "bands mean fewer, deeper dips to buy."),
+    }
 
     def signals(self, o, p):
         bb = Bollinger.compute(o, period=p["period"], width=p["width"])
@@ -93,9 +109,10 @@ class RangeTrader(BaseAlgorithm):
     name = "range"
     description = "Buy at or below `buy_price`, sell at or above `sell_price` (or below `stop_price`)"
     params = {
-        "buy_price": Param(0.0, 0.0, 1e9),
-        "sell_price": Param(1e9, 0.0, 1e9),
-        "stop_price": Param(0.0, 0.0, 1e9),
+        "buy_price": Param(0.0, 0.0, 1e9, "Buy when the price falls to this or lower."),
+        "sell_price": Param(1e9, 0.0, 1e9, "Sell when the price rises to this or higher (take profit)."),
+        "stop_price": Param(0.0, 0.0, 1e9, "Sell when the price falls below this, to limit a loss (stop loss). "
+                                           "0 means no stop."),
     }
 
     def signals(self, o, p):
@@ -113,7 +130,8 @@ class VotingEnsemble(BaseAlgorithm):
 
     name = "vote"
     description = "Majority vote over several algorithms"
-    params = {"threshold": Param(0.7, 0.5, 1.0)}
+    params = {"threshold": Param(0.7, 0.5, 1.0, "The share of member strategies that must agree before "
+                                                 "buying or selling: 0.7 means 70%.")}
 
     def __init__(self, members: list[BaseAlgorithm] | None = None, **params):
         self.members = members or [RsiThreshold(), MacdCross(), IchimokuCloud()]

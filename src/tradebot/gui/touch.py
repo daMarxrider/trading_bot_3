@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 
 from PyQt6.QtCore import QEvent, QObject, QPoint, QPointF, Qt, QTimer
 from PyQt6.QtGui import QEventPoint, QInputDevice
-from PyQt6.QtWidgets import QAbstractItemView, QScroller, QWidget
+from PyQt6.QtWidgets import QAbstractItemView, QApplication, QHeaderView, QScroller, QToolTip, QWidget
 
 TAP_SLOP_PX = 12.0  #: movement below this still counts as a tap / long press
 LONG_PRESS_S = 0.5
@@ -270,6 +270,76 @@ class PlotTouchHandler(GestureHandler):
     def on_long_press(self, x, y):
         if self.long_press_cb:
             self.long_press_cb(self._scene(x, y), self.view.mapToGlobal(QPoint(round(x), round(y))))
+
+
+class LongPressTooltips(QObject):
+    """Touchscreens have no hover: pressing and holding a widget inside ``root`` shows its tooltip, or a table
+    cell's (#70). Mouse input is left alone."""
+
+    def __init__(self, root: QWidget):
+        super().__init__(root)
+        self.root = root
+        self._press: QPoint | None = None  # global position of the finger, while it may become a long press
+        self._timer = QTimer(self, singleShot=True, interval=int(LONG_PRESS_S * 1000))
+        self._timer.timeout.connect(self._show)
+        QApplication.instance().installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        kind = event.type()
+        if kind in (QEvent.Type.TouchBegin, QEvent.Type.MouseButtonPress) and _from_touchscreen(event):
+            pos = event.points()[0].globalPosition().toPoint() if kind == QEvent.Type.TouchBegin \
+                else event.globalPosition().toPoint()
+            if self._press is None or (pos - self._press).manhattanLength() > TAP_SLOP_PX:
+                self._press = pos
+                self._timer.start()
+        elif kind in (QEvent.Type.TouchUpdate, QEvent.Type.MouseMove) and self._press is not None:
+            pos = event.points()[0].globalPosition().toPoint() if kind == QEvent.Type.TouchUpdate \
+                else event.globalPosition().toPoint()
+            if (pos - self._press).manhattanLength() > TAP_SLOP_PX:  # a drag or scroll, not a press
+                self._cancel()
+        elif kind in (QEvent.Type.TouchEnd, QEvent.Type.TouchCancel, QEvent.Type.MouseButtonRelease):
+            self._cancel()
+        return False
+
+    def _cancel(self):
+        self._timer.stop()
+        self._press = None
+
+    def _show(self):
+        pos, self._press = self._press, None
+        widget = QApplication.widgetAt(pos) if pos is not None else None
+        if widget is None or not (widget is self.root or self.root.isAncestorOf(widget)) \
+                or not self.root.isVisible():
+            return
+        text = tooltip_at(widget, pos)
+        if text:
+            QToolTip.showText(pos, text, widget)
+
+
+def tooltip_at(widget: QWidget, global_pos: QPoint) -> str:
+    """The tooltip a hover at ``global_pos`` would show: a table cell's, else the nearest widget's."""
+    while widget is not None:
+        view = widget.parent()
+        if isinstance(view, QHeaderView) and widget is view.viewport():
+            section = view.logicalIndexAt(widget.mapFromGlobal(global_pos))
+            text = view.model().headerData(section, view.orientation(), Qt.ItemDataRole.ToolTipRole) \
+                if section >= 0 and view.model() is not None else None
+            if text:
+                return text
+        elif isinstance(view, QAbstractItemView) and widget is view.viewport():
+            index = view.indexAt(widget.mapFromGlobal(global_pos))
+            text = index.data(Qt.ItemDataRole.ToolTipRole) if index.isValid() else None
+            if text:
+                return text
+        if widget.toolTip():
+            return widget.toolTip()
+        widget = widget.parentWidget()
+    return ""
+
+
+def _from_touchscreen(event) -> bool:
+    device = event.device() if hasattr(event, "device") else None
+    return device is not None and device.type() == QInputDevice.DeviceType.TouchScreen
 
 
 def enable_kinetic_scroll(view: QWidget) -> None:
