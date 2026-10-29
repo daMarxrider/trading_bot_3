@@ -274,11 +274,13 @@ class PlotTouchHandler(GestureHandler):
 
 class LongPressTooltips(QObject):
     """Touchscreens have no hover: pressing and holding a widget inside ``root`` shows its tooltip, or a table
-    cell's (#70). Mouse input is left alone."""
+    cell's (#70); with ``on_long_press``, that's called with the global position instead (e.g. a context menu).
+    Mouse input is left alone."""
 
-    def __init__(self, root: QWidget):
+    def __init__(self, root: QWidget, on_long_press=None):
         super().__init__(root)
         self.root = root
+        self.on_long_press = on_long_press
         self._press: QPoint | None = None  # global position of the finger, while it may become a long press
         self._timer = QTimer(self, singleShot=True, interval=int(LONG_PRESS_S * 1000))
         self._timer.timeout.connect(self._show)
@@ -310,6 +312,9 @@ class LongPressTooltips(QObject):
         widget = QApplication.widgetAt(pos) if pos is not None else None
         if widget is None or not (widget is self.root or self.root.isAncestorOf(widget)) \
                 or not self.root.isVisible():
+            return
+        if self.on_long_press is not None:
+            self.on_long_press(pos)
             return
         text = tooltip_at(widget, pos)
         if text:
