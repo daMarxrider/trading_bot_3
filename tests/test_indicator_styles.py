@@ -15,7 +15,7 @@ from PyQt6.QtCore import Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from tradebot.core import ops  # noqa: E402
-from tradebot.gui.chart import ChartView  # noqa: E402
+from tradebot.gui.chart import ChartView, HistogramItem  # noqa: E402
 from tradebot.gui.theme import BUILTIN, ThemeManager, resolve_color  # noqa: E402
 from tradebot.indicators import INDICATORS, BaseIndicator, Style  # noqa: E402
 from tradebot.indicators.builtin import RSI, Bollinger  # noqa: E402
@@ -70,7 +70,7 @@ def curves(plot):
 
 
 def bars(plot):
-    return [item for item in plot.items if isinstance(item, pg.BarGraphItem)]
+    return [item for item in plot.items if isinstance(item, HistogramItem)]
 
 
 def test_styles_set_colour_width_dash_and_histogram(chart, styled):
@@ -83,7 +83,7 @@ def test_styles_set_colour_width_dash_and_histogram(chart, styled):
     assert fast.color().name() == "#ffd166" and fast.widthF() == 3 and fast.style() == Qt.PenStyle.SolidLine
     assert slow.color().name() == t.up and slow.style() == Qt.PenStyle.DashLine  # theme token
     (hist,) = bars(pane)
-    assert hist.opts["brush"].color().name() == t.down
+    assert hist.brushes[0].color().name() == t.down
     assert "color:#ffd166'" in chart._legend[pane].text and f"color:{t.up}'" in chart._legend[pane].text
 
 
