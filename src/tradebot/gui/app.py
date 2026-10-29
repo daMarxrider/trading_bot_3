@@ -59,7 +59,7 @@ class MainWindow(QMainWindow):
         self.news = NewsView(themes, lambda: list(dict.fromkeys(self.chart.watchlists.all_symbols()
                                                                 + self.portfolio_symbols)))
         self.portfolio = PortfolioView(engine, themes)
-        self.lab = BacktestView(engine, themes, symbols, search, settings)
+        self.lab = BacktestView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)
         pages = [("Chart", "📈", self.chart), ("Screener", "🔎", self.screener), ("Backtest", "🧪", self.lab),
                  ("Portfolio", "💼", self.portfolio), ("News", "📰", self.news)]
 

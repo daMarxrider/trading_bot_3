@@ -49,6 +49,15 @@ METHODS = {
             "\"best\" settings are probably fragile.",
 }
 
+#: How a multi-symbol search combines the symbols' scores ("Aggregate", #84).
+AGGREGATES = {
+    "mean": "The average score over all symbols. A good default.",
+    "median": "The middle score: one symbol doing extremely well (or badly) can't decide the result.",
+    "min": "The worst symbol's score: only settings that work on every symbol win. The most cautious choice.",
+    "mean-std": "The average minus how much the scores differ between symbols. Prefers settings that work "
+                "about equally well everywhere.",
+}
+
 #: The built-in strategies ("Algorithm"); a plugin strategy shows its own description instead.
 STRATEGIES = {
     "rsi_threshold": "Buys after the price has fallen sharply (the RSI is low) and sells after it has risen sharply "
@@ -72,7 +81,13 @@ STRATEGIES = {
 
 #: Inputs and labels of the backtest lab.
 TERMS = {
-    "symbol": "The market to test on, e.g. BTC/USDT or AAPL.",
+    "symbol": "The market to test on, e.g. BTC/USDT or AAPL. Several, separated by commas, test and optimize "
+              "on all of them; the list button fills in a watchlist, or all of them.",
+    "aggregate": "With several symbols: how their scores become one for the optimizer.",
+    "align": "With several symbols: cut all of them to the dates every one of them has, so they cover the same "
+             "period. Otherwise a symbol with much less history than the rest is left out.",
+    "per_symbol": "The tuned settings on each symbol. Settings that only shine on one or two symbols are probably "
+                  "luck. Click a row to see that symbol's curves.",
     "timeframe": "How much time one candle covers: 1d is one candle per day, 1h one per hour. Shorter "
                  "timeframes mean more trades and more fees.",
     "candles": "How much history to test on, in candles. More history gives more trades and a more "
@@ -134,7 +149,7 @@ TERMS = {
 
 def explain(key: str) -> str:
     """The explanation for any term above, or "" if there is none."""
-    for table in (TERMS, METRICS, OBJECTIVES, METHODS, STRATEGIES):
+    for table in (TERMS, METRICS, OBJECTIVES, METHODS, AGGREGATES, STRATEGIES):
         if key in table:
             return table[key]
     return ""

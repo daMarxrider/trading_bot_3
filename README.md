@@ -127,6 +127,9 @@ tradebot optimize BTC/USDT rsi_threshold --method pso          # particle swarm 
 tradebot optimize BTC/USDT rsi_threshold --method both         # run GA and PSO, then compare them
 tradebot optimize BTC/USDT                                     # also pick which strategies/indicators to use
 tradebot optimize BTC/USDT --pool rsi_threshold,macd_cross,elliott_wave,sma --max-members 3
+tradebot optimize AAPL,MSFT,NVDA,SAP.DE macd_cross --aggregate median   # one parameter set for several symbols
+tradebot optimize -w Crypto sma_cross                          # every symbol of a watchlist (-w all: of all of them)
+tradebot backtest AAPL,MSFT,NVDA macd_cross -p fast=8           # one row per symbol
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50          # dry run
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50 --live   # real orders
 tradebot positions --broker kucoin
@@ -200,6 +203,22 @@ The comparison ends with a verdict:
 A separate warning flags overfitting when the in-sample winner does worse out
 of sample. The GUI's Backtest lab offers the same options.
 
+**Several symbols.** Parameters tuned on one chart are often curve-fitted. Give
+`optimize` several symbols, comma-separated or with `--watchlist`/`-w` (repeatable;
+`all` = every watchlist; the symbols argument can then be left out), and one
+parameter set is scored on every symbol, each with its own 70/30 split. The
+per-symbol scores become one fitness with `--aggregate`:
+- `mean` (default), `median` (one outlier can't decide), `min` (the worst symbol
+  counts: the most cautious), or `mean-std` (mean minus the spread between symbols).
+
+A symbol with less than half the candles of the longest one is skipped with a
+note; `--align` instead cuts every symbol to the dates all of them cover. The
+output has a row per symbol (objective in-/out-of-sample, XIRR, lead over each
+baseline, trades), the aggregate, on how many symbols each baseline was beaten,
+and a warning when one or two symbols carry the result (the median far below the
+mean). The reuse command is a `backtest` on the same symbols, which then prints
+one row per symbol.
+
 **Picking the strategies.** Without an algorithm, `optimize` also decides *which*
 strategies and indicators to use. It starts from a pool: every strategy and
 indicator (plugins included), or the ones given with `--pool`. Every member gets
@@ -266,7 +285,11 @@ same members. Agreement there is a good sign that the selection is real and not 
   optimizer with live progress. With the **pool** algorithm, the optimizer also
   picks the members: All (default) or your own choice of strategies and
   indicator filters, with min/max members. A selection card then shows which
-  members were used or dropped, and whether GA and PSO agree.
+  members were used or dropped, and whether GA and PSO agree. The symbol field
+  takes several symbols (comma-separated, completion works on the last one), and
+  its ☰ button fills in a watchlist or all of them. With several symbols, Run
+  backtest and Optimize add a per-symbol table (with the aggregate and the
+  baselines beaten); click a row to see that symbol's curves and metrics.
 * **Portfolio & dividends**: total equity, allocation donuts, and per-holding
   and total current dividend yield, trailing annual yield and yield on cost.
 * **News**: headlines for the watchlists' and portfolio symbols, auto-refreshed

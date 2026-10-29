@@ -166,7 +166,8 @@ def chart(
 
 @app.command()
 def backtest(
-    symbol: Symbol,
+    symbol: Annotated[str, typer.Argument(help="e.g. AAPL, SAP.DE, BTC/USDT; several separated by commas",
+                                          autocompletion=complete.symbols)],
     algo: Algo,
     tf: TF = "1d",
     start: Annotated[Optional[str], typer.Option(help="ISO date")] = None,
@@ -184,6 +185,10 @@ def backtest(
     from tradebot.cli.charts import render_chart
 
     algorithm = make_algo(algo, param, members)
+    symbols = _symbols(symbol, [])
+    if len(symbols) > 1:
+        _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount)
+        return
     df = load_data(symbol, tf, start, end, bars)
     res = run_backtest(df, algorithm, fee=fee, initial_capital=capital)
     if plot:
@@ -195,9 +200,33 @@ def backtest(
     warn_not_beaten(bl, "Over this period")
 
 
+def _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount) -> None:
+    """One row per symbol: the strategy's return, Sharpe, XIRR and lead over each baseline."""
+    from tradebot.backtest import backtest as run_backtest, baselines
+    from tradebot.backtest.metrics import fmt
+
+    t = Table(title=f"{algorithm!r} · {tf}")
+    for col in ("symbol", "total return", "sharpe", "XIRR", "vs buy & hold", "vs monthly", "trades"):
+        t.add_column(col, justify="left" if col == "symbol" else "right")
+    beats = {}
+    for s, df in _load_many(symbols, tf, start, end, bars).items():
+        res = run_backtest(df, algorithm, fee=fee, initial_capital=capital)
+        bl = baselines(df, res, fee=fee, initial_capital=capital, amount=dca_amount)
+        lead = [f"[{'green' if v > 0 else 'red'}]{fmt('vs buy & hold', v)}[/]" for v in bl.excess.values()]
+        for name in bl.excess:
+            beats[name] = beats.get(name, 0) + (name not in bl.not_beaten)
+        t.add_row(s, fmt("total_return", res.metrics["total_return"]), fmt("sharpe", res.metrics["sharpe"]),
+                  fmt("xirr", bl.strategy_xirr), *lead, str(len(res.trades)))
+    console.print(t)
+    n = len(t.rows)
+    console.print(" · ".join(f"beats {k} on {v}/{n}" for k, v in beats.items()))
+
+
 @app.command()
 def optimize(
-    symbol: Symbol,
+    symbol: Annotated[Optional[str], typer.Argument(
+        help="e.g. AAPL, or several separated by commas: AAPL,MSFT,BTC/USDT (can be left out with --watchlist)",
+        autocompletion=complete.symbols)] = None,
     algo: Annotated[Optional[str], typer.Argument(
         help="Algorithm name (tradebot list); leave it out to let the optimizer pick from all of them (see --pool)",
         autocompletion=complete.algorithms)] = None,
@@ -226,19 +255,36 @@ def optimize(
     min_trades: Annotated[int, typer.Option(help="Reject parameter sets with fewer round trips")] = 4,
     dca_amount: DcaAmount = None,
     seed: Optional[int] = None,
+    watchlist: Annotated[list[str], typer.Option(
+        "--watchlist", "-w", help="Also optimize on this watchlist's symbols (repeatable; 'all' = every watchlist)",
+        autocompletion=complete.watchlists)] = [],
+    aggregate: Annotated[str, typer.Option(
+        help="With several symbols: how their scores combine into one (mean | median | min | mean-std)",
+        autocompletion=complete.choices(("mean", ""), ("median", "robust to one outlier"),
+                                        ("min", "the worst symbol counts"), ("mean-std", "mean minus spread")))] = "mean",
+    align: Annotated[bool, typer.Option(help="With several symbols: cut all of them to their common date range")] = False,
 ):
     """Optimize algorithm parameters with a genetic algorithm and/or particle swarm (GPU accelerated
     when available) and report out-of-sample results. ``--method both`` also measures how much the two
     methods disagree - large disagreement means a fragile optimum.
 
     Without an algorithm, the optimizer also picks *which* strategies vote and which indicators filter
-    the entries, from all of them or from ``--pool``."""
+    the entries, from all of them or from ``--pool``.
+
+    With several symbols (comma-separated, or ``--watchlist``) one parameter set is scored on every
+    symbol and the scores are combined (``--aggregate``): settings that only work on one chart lose."""
     from rich.progress import Progress
 
     from tradebot.optimize import OPTIMIZERS, run_comparison, select_backend
+    from tradebot.optimize.base import AGGREGATES
 
     if method not in (*OPTIMIZERS, "both"):
         raise typer.BadParameter("method must be ga, pso or both")
+    if aggregate not in AGGREGATES:
+        raise typer.BadParameter(f"aggregate must be one of {', '.join(AGGREGATES)}", param_hint="--aggregate")
+    if watchlist and algo is None and symbol and (symbol == "pool" or symbol in ALGORITHMS.names()):
+        symbol, algo = None, symbol  # tradebot optimize -w Crypto sma_cross
+    symbols = _symbols(symbol, watchlist)
     if algo in (None, "pool"):
         algorithm = _make_pool(pool or members, min_members, max_members)
         algo = "pool"
@@ -246,14 +292,20 @@ def optimize(
         raise typer.BadParameter("--pool, --min-members and --max-members need the pool: leave out the algorithm")
     else:
         algorithm = make_algo(algo, [], members)
-    df = load_data(symbol, tf, start, end, bars)
+    if len(symbols) == 1:
+        df = load_data(symbols[0], tf, start, end, bars)
+        size = f"{len(df)} candles"
+    else:
+        df = _load_many(symbols, tf, start, end, bars)
+        size = f"{len(df)} symbols · {sum(map(len, df.values()))} candles"
     if backend == "auto" and not algorithm.vectorized:
         backend = "numpy"  # loop-based algorithms (e.g. elliott_wave) run on the CPU anyway
     kwargs = dict(population=population, generations=generations, objective=objective, train_fraction=train,
                   backend=select_backend(backend), fee=fee, seed=seed, fixed=parse_kv(fix), min_trades=min_trades,
-                  dca_amount=dca_amount)
+                  dca_amount=dca_amount, aggregate=aggregate, align=align)
     n_genes = len([k for k in algorithm.param_space() if k not in kwargs["fixed"]])
-    console.print(f"backend: [bold]{kwargs['backend'].description}[/] · {len(df)} candles · {n_genes} parameters")
+    console.print(f"backend: [bold]{kwargs['backend'].description}[/] · {size} · {n_genes} parameters")
+    symbol = symbols[0]
     with Progress(console=console) as progress:
         task = progress.add_task("optimizing", total=generations)
         label = {"name": method.upper()}
@@ -265,10 +317,15 @@ def optimize(
         def report(step, best, params):
             progress.update(task, advance=1, description=f"{label['name']} step {step + 1} best {objective}={best:.3f}")
 
-        if method == "both":
-            cmp = run_comparison(algorithm, df, progress=report, on_phase=phase, **kwargs)
-        else:
-            res = OPTIMIZERS[method](algorithm, df, **kwargs).run(report)
+        try:
+            if method == "both":
+                cmp = run_comparison(algorithm, df, progress=report, on_phase=phase, **kwargs)
+            else:
+                res = OPTIMIZERS[method](algorithm, df, **kwargs).run(report)
+        except ValueError as e:  # e.g. no symbol with enough history
+            raise typer.BadParameter(str(e)) from None
+    if done := (cmp.ga if method == "both" else res).symbols:
+        symbol = ",".join(r.symbol for r in done)  # for the reuse command, without the skipped symbols
     if method == "both":
         _print_comparison(cmp, symbol, algorithm)
         return
@@ -280,11 +337,78 @@ def optimize(
     for k, v in _reused(algorithm, res.best_params).items():
         t.add_row(k, f"{v:g}")
     console.print(t)
-    console.print(results_table("in-sample", res.train_baselines.columns("strategy", res.train)))
-    if res.test is not None:
-        console.print(results_table("out-of-sample", res.test_baselines.columns("strategy", res.test)))
-    warn_not_beaten(res.test_baselines, "Out-of-sample")
+    if res.symbols:
+        _print_symbols({method.upper(): res})
+    else:
+        console.print(results_table("in-sample", res.train_baselines.columns("strategy", res.train)))
+        if res.test is not None:
+            console.print(results_table("out-of-sample", res.test_baselines.columns("strategy", res.test)))
+        warn_not_beaten(res.test_baselines, "Out-of-sample")
     console.print(f"{res.evaluations} evaluations · reuse with: [cyan]{_reuse_command(symbol, algorithm, res.best_params)}[/]")
+
+
+def _symbols(symbol: str | None, watchlists: list[str]) -> list[str]:
+    """The comma-separated symbols, then those of each ``--watchlist`` ("all": every list), de-duplicated."""
+    out = [s.strip() for s in (symbol or "").split(",") if s.strip()]
+    for name in watchlists:
+        try:
+            from tradebot.config import watchlist as members, watchlists as lists
+
+            out += members(None if name == "all" and "all" not in lists() else name)
+        except KeyError as e:
+            raise typer.BadParameter(e.args[0], param_hint="--watchlist") from None
+    if not out:
+        raise typer.BadParameter("give a symbol (or several, comma-separated) or --watchlist")
+    return list(dict.fromkeys(out))
+
+
+def _load_many(symbols: list[str], tf: str, start, end, bars) -> dict[str, pd.DataFrame]:
+    """Candles per symbol; a symbol that can't be loaded is left out with a note."""
+    frames = {}
+    for s in symbols:
+        try:
+            frames[s] = load_data(s, tf, start, end, bars)
+        except Exception as e:  # unknown symbol, delisted, offline without cache
+            console.print(f"[yellow]skipping {s}: {e}[/]")
+    if not frames:
+        raise typer.BadParameter("none of the symbols could be loaded")
+    return frames
+
+
+def _print_symbols(results: dict) -> None:
+    """Per symbol: objective in-/out-of-sample, XIRR and lead over the baselines, trades; then the aggregate (#84)."""
+    from tradebot.backtest.metrics import fmt
+
+    def cell(v, f):
+        return "–" if v is None else f(v)
+
+    def lead(v):
+        return f"[{'green' if v > 0 else 'red'}]{fmt('vs buy & hold', v)}[/]"
+
+    for label, res in results.items():
+        obj = res.objective
+        t = Table(title=f"per symbol ({label})" if len(results) > 1 else "per symbol")
+        for col in ("symbol", f"{obj} in", f"{obj} out", "XIRR out", "vs buy & hold", "vs monthly", "trades out"):
+            t.add_column(col, justify="left" if col == "symbol" else "right")
+        for row in res.rows():
+            t.add_row(row["symbol"], f"{row['in-sample']:.3f}", cell(row["out-of-sample"], "{:.3f}".format),
+                      cell(row["xirr"], lambda v: fmt("xirr", v)), cell(row["vs buy & hold"], lead),
+                      cell(row["vs monthly investing"], lead), cell(row["trades"], str))
+        n = len(res.symbols)
+        out = res.aggregated("test")
+        t.add_row(f"[bold]{res.aggregate}[/]", f"[bold]{res.aggregated('train'):.3f}[/]",
+                  f"[bold]{out:.3f}[/]" if out is not None else "–", "",
+                  *(f"beats on {res.beats().get(k, 0)}/{n}" for k in ("buy & hold", "monthly investing")), "")
+        console.print(t)
+        for s, reason in res.skipped.items():
+            console.print(f"[dim]skipped {s}: {reason}[/]")
+        if res.carried_by_few:
+            console.print(f"[bold yellow]{label}: the result is carried by one or two symbols (median far below the "
+                          "mean); it probably doesn't generalize[/]")
+        if weak := {k: v for k, v in res.beats().items() if v < n / 2}:
+            who = f"the {label} result" if len(results) > 1 else "the strategy"
+            console.print(f"[bold red]Out-of-sample, {who} beats "
+                          f"{' and '.join(f'{k} on only {v} of {n}' for k, v in weak.items())} symbols[/]")
 
 
 def _make_pool(names: str | None, min_members: int, max_members: int | None):
@@ -346,6 +470,21 @@ def _print_comparison(cmp, symbol: str, algorithm) -> None:
         color = "green" if d <= 0.10 else "yellow" if d <= 0.25 else "red"
         t.add_row(k, f"{cmp.ga.best_params[k]:g}", f"{cmp.pso.best_params[k]:g}", f"[{color}]{d:.0%}[/]")
     console.print(t)
+    if cmp.ga.symbols:
+        _print_symbols({"GA": cmp.ga, "PSO": cmp.pso})
+        console.print(f"evaluations: GA {cmp.ga.evaluations} · PSO {cmp.pso.evaluations}")
+    else:
+        _print_comparison_results(cmp)
+    color = {"consistent": "green", "fragile": "yellow", "divergent": "red"}[cmp.verdict]
+    console.print(f"agreement [bold]{cmp.agreement:.0%}[/] · max parameter difference {cmp.max_param_diff:.0%} · "
+                  f"in-sample {cmp.objective} gap {cmp.fitness_gap:.1%}")
+    console.print(f"verdict: [bold {color}]{cmp.verdict.upper()}[/] - {cmp.explanation()}")
+    best = cmp.better
+    console.print(f"better in-sample: {best.method.upper()} · reuse with: "
+                  f"[cyan]{_reuse_command(symbol, algorithm, best.best_params)}[/]")
+
+
+def _print_comparison_results(cmp) -> None:
     columns, bases = {}, {}
     for period, attr in (("in-sample", "train"), ("out-of-sample", "test")):
         for r in (cmp.ga, cmp.pso):
@@ -359,13 +498,6 @@ def _print_comparison(cmp, symbol: str, algorithm) -> None:
     console.print(results_table("baselines", bases))
     for r in (cmp.ga, cmp.pso):
         warn_not_beaten(r.test_baselines, "Out-of-sample", f"the {r.method.upper()} result")
-    color = {"consistent": "green", "fragile": "yellow", "divergent": "red"}[cmp.verdict]
-    console.print(f"agreement [bold]{cmp.agreement:.0%}[/] · max parameter difference {cmp.max_param_diff:.0%} · "
-                  f"in-sample {cmp.objective} gap {cmp.fitness_gap:.1%}")
-    console.print(f"verdict: [bold {color}]{cmp.verdict.upper()}[/] - {cmp.explanation()}")
-    best = cmp.better
-    console.print(f"better in-sample: {best.method.upper()} · reuse with: "
-                  f"[cyan]{_reuse_command(symbol, algorithm, best.best_params)}[/]")
 
 
 @bot_app.command("run")
