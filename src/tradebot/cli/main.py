@@ -19,7 +19,9 @@ from tradebot.core.registry import load_plugins
 from tradebot.indicators import INDICATORS
 
 complete.match_case_insensitively()  # before the commands are built: "sol" TAB -> SOL/USDT
-app = typer.Typer(help="Algorithmic trading platform: charts, backtests, optimization, live bots.", no_args_is_help=True)
+app = typer.Typer(help="Algorithmic trading platform: charts, backtests, optimization, live bots.", no_args_is_help=True,
+                  epilog="Not affiliated with or endorsed by any broker. No warranty; use at your own risk. "
+                         "Details: tradebot --version")
 bot_app = typer.Typer(help="Automated trading bots.", no_args_is_help=True)
 app.add_typer(bot_app, name="bot")
 console = Console()
@@ -34,8 +36,19 @@ Algo = Annotated[str, typer.Argument(help="Algorithm name (tradebot list)", auto
 Broker = Annotated[str, typer.Option(help="Registered broker name", autocompletion=complete.brokers)]
 
 
+def _version(show: bool):
+    if show:
+        from tradebot import __version__
+        from tradebot.legal import DISCLAIMER
+
+        console.print(f"tradebot {__version__}\n\n{DISCLAIMER}", highlight=False)
+        raise typer.Exit()
+
+
 @app.callback()
-def _main(verbose: Annotated[bool, typer.Option("-v", "--verbose")] = False):
+def _main(verbose: Annotated[bool, typer.Option("-v", "--verbose")] = False,
+          version: Annotated[bool, typer.Option("--version", callback=_version, is_eager=True,
+                                                help="Show the version and the disclaimer")] = False):
     from tradebot.data.providers import quiet_yfinance
 
     quiet_yfinance()
@@ -269,7 +282,14 @@ def bot_run(
     once: Annotated[bool, typer.Option(help="Evaluate a single candle and exit")] = False,
 ):
     """Run an algorithm live against a broker (dry run unless --live)."""
+    from tradebot import legal
     from tradebot.live import TradingBot
+
+    if live and not legal.live_risk_accepted():  # asked once, then remembered in config.toml (#58)
+        console.print(legal.LIVE_RISK, highlight=False)
+        typer.confirm("Do you understand and accept this?", abort=True)
+        if not legal.accept_live_risk():
+            console.print("[yellow]couldn't save the acceptance to the config file; you'll be asked again next time[/]")
 
     kwargs = {"sandbox": True} if sandbox else {}
     b = create_broker(broker, **kwargs)
