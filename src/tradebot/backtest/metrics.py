@@ -73,12 +73,15 @@ def compute_metrics(returns: pd.Series, positions: pd.Series, trades: pd.DataFra
     }
 
 
-_PERCENT = {"total_return", "cagr", "max_drawdown", "win_rate", "exposure"}
+_PERCENT = {"total_return", "cagr", "max_drawdown", "win_rate", "exposure", "xirr"}
+#: The strategy's lead over a baseline (#19), shown with its sign.
+_SIGNED = {"vs buy & hold", "vs monthly investing"}
 
 
 def fmt(key: str, value) -> str:
     if isinstance(value, int):
         return str(value)
-    if key in _PERCENT:
-        return f"{value * 100:.2f}%"
+    if key in _SIGNED | _PERCENT:
+        pct = round(value * 100, 2) + 0.0  # no "-0.00%" for a value a hair below zero
+        return f"{pct:+.2f}%" if key in _SIGNED else f"{pct:.2f}%"
     return f"{value:.2f}"

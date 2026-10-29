@@ -36,6 +36,8 @@ TF = Annotated[str, typer.Option("--tf", help="Timeframe: 1m 5m 15m 30m 1h 4h 1d
 Symbol = Annotated[str, typer.Argument(help="e.g. AAPL, SAP.DE, BTC/USDT", autocompletion=complete.symbols)]
 Algo = Annotated[str, typer.Argument(help="Algorithm name (tradebot list)", autocompletion=complete.algorithms)]
 Broker = Annotated[str, typer.Option(help="Registered broker name", autocompletion=complete.brokers)]
+DcaAmount = Annotated[Optional[float], typer.Option(
+    help="Amount the monthly-investing baseline invests each month (default: capital / months)")]
 
 
 def _version(show: bool):
@@ -93,13 +95,24 @@ def make_algo(name: str, params: list[str], members: str | None):
     return build_algorithm(name, parse_kv(params), members.split(",") if members else None)
 
 
-def metrics_table(title: str, metrics: dict) -> Table:
+def results_table(title: str, columns: dict[str, dict]) -> Table:
+    """One column of metrics per result; a metric a column lacks shows as "–"."""
     from tradebot.backtest.metrics import fmt
 
-    t = Table(title=title, show_header=False)
-    for k, v in metrics.items():
-        t.add_row(k.replace("_", " "), fmt(k, v))
+    t = Table(title=title)
+    t.add_column("metric")
+    for name in columns:
+        t.add_column(name, justify="right")
+    keys = list(dict.fromkeys(k for metrics in columns.values() for k in metrics))
+    for k in keys:
+        t.add_row(k.replace("_", " "), *(fmt(k, c[k]) if k in c else "–" for c in columns.values()))
     return t
+
+
+def warn_not_beaten(bl, where: str, who: str = "the strategy") -> None:
+    """Say plainly when the strategy didn't beat a baseline (by XIRR) on that part of the data (#19)."""
+    if bl is not None and bl.not_beaten:
+        console.print(f"[bold red]{where}, {who} does not beat {' or '.join(bl.not_beaten)}[/]")
 
 
 # -- commands -----------------------------------------------------------------------------------------
@@ -159,10 +172,11 @@ def backtest(
     members: Members = None,
     fee: Annotated[float, typer.Option(help="Fee per side, fraction")] = 0.001,
     capital: float = 10_000.0,
+    dca_amount: DcaAmount = None,
     plot: Annotated[bool, typer.Option(help="Show chart with signals and equity")] = True,
 ):
-    """Backtest an algorithm on historical OHLC data."""
-    from tradebot.backtest import backtest as run_backtest
+    """Backtest an algorithm on historical OHLC data, next to buy & hold and monthly investing."""
+    from tradebot.backtest import backtest as run_backtest, baselines
     from tradebot.cli.charts import render_chart
 
     algorithm = make_algo(algo, param, members)
@@ -170,10 +184,11 @@ def backtest(
     res = run_backtest(df, algorithm, fee=fee, initial_capital=capital)
     if plot:
         print(render_chart(df, f"{symbol} {tf} · {algorithm!r}", algorithm.chart_indicators(), algorithm, equity=res.equity))
-    hold = (df["close"].iloc[-1] / df["close"].iloc[0] - 1) * 100
+    bl = baselines(df, res, fee=fee, initial_capital=capital, amount=dca_amount)
     console.print(f"[bold]{algorithm!r}[/] on {symbol} {tf} ({df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d})")
-    console.print(metrics_table("backtest", res.metrics))
-    console.print(f"final equity [bold]{res.equity.iloc[-1]:,.2f}[/] · buy & hold {hold:+.2f}%")
+    console.print(results_table("backtest", bl.columns("strategy", res)))
+    console.print(f"final equity [bold]{res.equity.iloc[-1]:,.2f}[/]")
+    warn_not_beaten(bl, "Over this period")
 
 
 @app.command()
@@ -198,6 +213,7 @@ def optimize(
         ("auto", "GPU if available"), ("gpu", ""), ("cpu", "torch on the CPU"), ("numpy", "")))] = "auto",
     fee: float = 0.001,
     min_trades: Annotated[int, typer.Option(help="Reject parameter sets with fewer round trips")] = 4,
+    dca_amount: DcaAmount = None,
     seed: Optional[int] = None,
 ):
     """Optimize algorithm parameters with a genetic algorithm and/or particle swarm (GPU accelerated
@@ -214,7 +230,8 @@ def optimize(
     if backend == "auto" and not algorithm.vectorized:
         backend = "numpy"  # loop-based algorithms (e.g. elliott_wave) run on the CPU anyway
     kwargs = dict(population=population, generations=generations, objective=objective, train_fraction=train,
-                  backend=select_backend(backend), fee=fee, seed=seed, fixed=parse_kv(fix), min_trades=min_trades)
+                  backend=select_backend(backend), fee=fee, seed=seed, fixed=parse_kv(fix), min_trades=min_trades,
+                  dca_amount=dca_amount)
     n_genes = len([k for k in algorithm.param_space() if k not in kwargs["fixed"]])
     console.print(f"backend: [bold]{kwargs['backend'].description}[/] · {len(df)} candles · {n_genes} parameters")
     with Progress(console=console) as progress:
@@ -241,16 +258,15 @@ def optimize(
     for k, v in res.best_params.items():
         t.add_row(k, f"{v:g}")
     console.print(t)
-    console.print(metrics_table("in-sample", res.train.metrics))
+    console.print(results_table("in-sample", res.train_baselines.columns("strategy", res.train)))
     if res.test is not None:
-        console.print(metrics_table("out-of-sample", res.test.metrics))
+        console.print(results_table("out-of-sample", res.test_baselines.columns("strategy", res.test)))
+    warn_not_beaten(res.test_baselines, "Out-of-sample")
     flags = " ".join(f"-p {k}={v:g}" for k, v in res.best_params.items())
     console.print(f"{res.evaluations} evaluations · reuse with: [cyan]tradebot backtest {symbol} {algo} {flags}[/]")
 
 
 def _print_comparison(cmp, symbol: str, algo: str) -> None:
-    from tradebot.backtest.metrics import fmt
-
     t = Table(title="GA vs PSO: parameters")
     for col in ("param", "GA", "PSO", "difference (% of range)"):
         t.add_column(col, justify="left" if col == "param" else "right")
@@ -258,15 +274,19 @@ def _print_comparison(cmp, symbol: str, algo: str) -> None:
         color = "green" if d <= 0.10 else "yellow" if d <= 0.25 else "red"
         t.add_row(k, f"{cmp.ga.best_params[k]:g}", f"{cmp.pso.best_params[k]:g}", f"[{color}]{d:.0%}[/]")
     console.print(t)
-    m = Table(title="GA vs PSO: results")
-    for col in ("metric", "GA in-sample", "PSO in-sample", "GA out-of-sample", "PSO out-of-sample"):
-        m.add_column(col, justify="left" if col == "metric" else "right")
-    for key in cmp.ga.train.metrics:
-        cells = [fmt(key, r.metrics[key]) if r is not None else "–"
-                 for r in (cmp.ga.train, cmp.pso.train, cmp.ga.test, cmp.pso.test)]
-        m.add_row(key.replace("_", " "), *cells)
-    m.add_row("evaluations", str(cmp.ga.evaluations), str(cmp.pso.evaluations), "", "")
+    columns, bases = {}, {}
+    for period, attr in (("in-sample", "train"), ("out-of-sample", "test")):
+        for r in (cmp.ga, cmp.pso):
+            bl, res = getattr(r, f"{attr}_baselines"), getattr(r, attr)
+            if res is not None:
+                columns[f"{r.method.upper()} {period}"] = bl.columns(r.method, res)[r.method]
+                bases.update({f"{k} {period}": v.metrics for k, v in bl.results.items()})  # same split for both
+    m = results_table("GA vs PSO: results", columns)
+    m.add_row("evaluations", str(cmp.ga.evaluations), str(cmp.pso.evaluations), *[""] * (len(columns) - 2))
     console.print(m)
+    console.print(results_table("baselines", bases))
+    for r in (cmp.ga, cmp.pso):
+        warn_not_beaten(r.test_baselines, "Out-of-sample", f"the {r.method.upper()} result")
     color = {"consistent": "green", "fragile": "yellow", "divergent": "red"}[cmp.verdict]
     console.print(f"agreement [bold]{cmp.agreement:.0%}[/] · max parameter difference {cmp.max_param_diff:.0%} · "
                   f"in-sample {cmp.objective} gap {cmp.fitness_gap:.1%}")
