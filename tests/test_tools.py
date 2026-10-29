@@ -181,3 +181,53 @@ def test_gear_button_is_at_the_bottom_of_the_sidebar(app, config_file, tmp_path,
     assert "⚙" in window.settings_btn.text()
     assert not side.findChildren(QComboBox)  # the theme selector moved into the dialog
     window.close()
+
+
+# -- categories and broker API keys ---------------------------------------------------------------------
+def test_categories_on_the_left_switch_pages(dialog):
+    names = [b.text().split("  ", 1)[1] for b in dialog.nav_group.buttons()]
+    assert names == ["Appearance", "Integrations"]
+    assert dialog.nav_group.checkedButton() is dialog.nav_group.buttons()[0]  # opens on Appearance
+    appearance = dialog.pages.currentWidget()
+    assert appearance.isAncestorOf(dialog.theme_box)
+    dialog.show_page("Integrations")
+    page = dialog.pages.currentWidget()
+    assert page is not appearance and page.isAncestorOf(dialog.paths["sc"])
+    assert page.isAncestorOf(dialog.credentials["binance", "api_key"])
+
+
+def test_broker_keys_are_saved_in_their_table(dialog, config_file):
+    from PyQt6.QtWidgets import QLineEdit
+
+    secret = dialog.credentials["kucoin", "password"]
+    assert secret.echoMode() == QLineEdit.EchoMode.Password  # secrets show as dots
+    assert dialog.credentials["kucoin", "api_key"].echoMode() == QLineEdit.EchoMode.Normal
+    for key, value in (("api_key", "k1"), ("password", "pass")):
+        dialog.credentials["kucoin", key].setText(value)
+        dialog.credentials["kucoin", key].editingFinished.emit()
+    assert load_config()["brokers"]["kucoin"] == {"api_key": "k1", "password": "pass"}
+    secret.setText("")
+    secret.editingFinished.emit()
+    assert load_config()["brokers"]["kucoin"] == {"api_key": "k1"}
+
+
+def test_broker_keys_show_what_is_saved_and_respect_the_environment(app, config_file, tmp_path, monkeypatch):
+    from tradebot.gui.settings import SettingsDialog
+    from tradebot.gui.theme import ThemeManager
+
+    config_file.write_text('[brokers.binance]\napi_key = "saved"\nsecret = "in-file"\n')
+    monkeypatch.setenv("TRADEBOT_BINANCE_SECRET", "from-env")
+    themes = ThemeManager(user_dir=tmp_path / "themes")
+    themes.apply("light")
+    d = SettingsDialog(themes, "light")
+    assert d.credentials["binance", "api_key"].text() == "saved"
+    env = d.credentials["binance", "secret"]
+    assert not env.isEnabled() and env.text() == "" and "TRADEBOT_BINANCE_SECRET" in env.placeholderText()
+
+
+def test_every_broker_with_credentials_is_listed(dialog):
+    from tradebot.brokers import BROKERS
+
+    for broker in BROKERS:
+        for key in broker.credential_keys:
+            assert (broker.name, key) in dialog.credentials

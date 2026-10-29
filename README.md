@@ -228,11 +228,16 @@ of sample. The GUI's Backtest lab offers the same options.
 
 Lists and tables scroll with a kinetic flick. With a touchscreen present, controls automatically get finger-sized hit targets. Override this with `touch_mode = "on"` or `"off"` in the config.
 
-**⚙ Settings** (bottom left of the sidebar) opens the settings:
-* **Theme**: it applies right away.
-* **Third-party tools**: the path to each external tool tradebot can use, such as the Scalable Capital
-  CLI (`sc`). Leave it empty to find the tool on `PATH`. Each tool shows whether it was found, and a
-  download link if it wasn't.
+**⚙ Settings** (bottom left of the sidebar) opens the settings, with the categories on the left:
+* **Appearance**: the theme. It applies right away.
+* **Integrations**:
+  * *Third-party tools*: the path to each external tool tradebot can use, such as the Scalable Capital
+    CLI (`sc`). Leave it empty to find the tool on `PATH`. Each tool shows whether it was found, and a
+    download link if it wasn't.
+  * *Broker API keys*: the credentials of every broker (API key, secret, passphrase, holdings CSV, …),
+    saved under `[brokers.<name>]`. They're stored in plain text. A key set as an environment variable
+    (`TRADEBOT_<BROKER>_<KEY>`) takes precedence and is shown greyed out. Use API keys without
+    withdrawal rights.
 
 Changes are saved to `config.toml` right away.
 
@@ -268,10 +273,10 @@ holdings_csv = "~/finance/scalable.csv"   # columns: symbol,quantity,avg_cost
 sc = "/opt/scalable/sc"     # optional; default: found on PATH
 ```
 
-The settings dialog writes `theme` and the `[tools]` paths to this file, so the app
+The settings dialog writes `theme`, the `[tools]` paths and the broker keys to this file, so the app
 starts with them next time. Only those lines change; your comments and other
-settings stay as they are, and a missing file is created. An empty tool path
-removes the line.
+settings stay as they are, and a missing file is created. An empty field
+removes its line.
 
 Settings the app remembers by itself (such as the chart's auto-fit toggle) are
 saved in `settings.json` in the OS config folder, not in `config.toml`:
