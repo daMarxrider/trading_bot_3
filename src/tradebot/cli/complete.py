@@ -57,6 +57,21 @@ def members(incomplete: str) -> Completion:
     return [(prefix + name, help_) for name, help_ in algorithms(last) if name not in taken]
 
 
+def pool_members(incomplete: str) -> Completion:
+    """Comma-separated strategies and rule-backed indicators for ``--pool``: completes the last one."""
+    _plugins_loaded()
+    from tradebot.algorithms import ALGORITHMS
+    from tradebot.algorithms.pool import RULES
+    from tradebot.indicators import INDICATORS
+
+    head, _, last = incomplete.rpartition(",")
+    prefix = f"{head}," if head else ""
+    taken = set(head.split(","))
+    names = [(cls.name, cls.description) for cls in ALGORITHMS if cls.poolable]
+    names += [(n, RULES[n].description) for n in INDICATORS.names() if n in RULES]
+    return [(prefix + name, help_) for name, help_ in _starting(last, names) if name not in taken]
+
+
 def indicator_specs(incomplete: str) -> Completion:
     """``-i`` specs: indicator names, then ``name:param=`` for their parameters."""
     _plugins_loaded()

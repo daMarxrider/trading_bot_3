@@ -125,6 +125,8 @@ tradebot backtest AAPL macd_cross --bars 2000 -p fast=8 -p slow=21
 tradebot optimize BTC/USDT rsi_threshold --population 1024 --generations 40 --objective calmar
 tradebot optimize BTC/USDT rsi_threshold --method pso          # particle swarm instead of the genetic algorithm
 tradebot optimize BTC/USDT rsi_threshold --method both         # run GA and PSO, then compare them
+tradebot optimize BTC/USDT                                     # also pick which strategies/indicators to use
+tradebot optimize BTC/USDT --pool rsi_threshold,macd_cross,elliott_wave,sma --max-members 3
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50          # dry run
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50 --live   # real orders
 tradebot positions --broker kucoin
@@ -196,6 +198,25 @@ The comparison ends with a verdict:
 
 A separate warning flags overfitting when the in-sample winner does worse out
 of sample. The GUI's Backtest lab offers the same options.
+
+**Picking the strategies.** Without an algorithm, `optimize` also decides *which*
+strategies and indicators to use. It starts from a pool: every strategy and
+indicator (plugins included), or the ones given with `--pool`. Every member gets
+an on/off switch next to its parameters, and the search tunes both.
+- Active strategies vote, as in `vote`, with an optimized threshold.
+- An indicator can't trade on its own, so it joins as a filter with a default
+  rule: a buy also needs every active filter to agree. `sma`/`ema`: close above
+  the average. `rsi`/`stoch`: oversold. `macd`: MACD above zero. `bbands`/`donchian`:
+  breakout. `elliott`: wave 3. Indicators without a rule (`atr`, `ichimoku`, `ssw`)
+  are left out, with a note.
+- `--min-members`/`--max-members` limit how many members are used; at least one
+  strategy always is. Each member costs a small fitness penalty (0.01), so of two
+  equally good combinations the smaller one wins.
+
+The output lists each member as used or dropped, then the parameters of the used
+ones and the command to reuse the result (`tradebot backtest … pool --members …`).
+With `--method both`, the members table also shows whether GA and PSO picked the
+same members. Agreement there is a good sign that the selection is real and not noise.
 
 ## Desktop app
 

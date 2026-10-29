@@ -13,6 +13,12 @@ against :mod:`tradebot.core.ops` gets this for free.
 To limit curve fitting the data is split: parameters are searched on the first
 ``train_fraction`` of the candles and the winner is reported out-of-sample on
 the remainder.
+
+An algorithm can take part in the search through three optional hooks (used
+by the ``pool``, #21): ``canonical(params, genes)`` maps a decoded candidate
+onto its canonical form (equal forms share one cached evaluation),
+``complexity(params)`` is subtracted from the fitness, and
+``vectorized_for(params)`` tells whether that candidate can be batched.
 """
 
 from __future__ import annotations
@@ -103,7 +109,8 @@ class PopulationOptimizer(ABC):
         for gene, key in zip(genome, self.keys):
             spec = self.space[key]
             out[key] = spec.clip(spec.low + gene * (spec.high - spec.low))
-        return out
+        canonical = getattr(self.algorithm, "canonical", None)
+        return canonical(out, dict(zip(self.keys, genome))) if canonical else out
 
     def encode(self, params: dict) -> np.ndarray:
         return np.array([(params[k] - s.low) / ((s.high - s.low) or 1) for k, s in self.space.items()])
@@ -121,13 +128,16 @@ class PopulationOptimizer(ABC):
         decoded = [self.decode(g) for g in genomes]
         keys = [tuple(p.values()) for p in decoded]
         int_keys = [k for k, s in self.algorithm.param_space().items() if s.integer]
-        groups: dict[tuple, list[int]] = {}
         fitness = np.empty(len(genomes))
-        for i, params in enumerate(decoded):
+        pending: dict[tuple, list[int]] = {}  # uncached parameter set -> rows holding it
+        for i in range(len(genomes)):
             if keys[i] in self._cache:  # integer-heavy searches revisit the same sets a lot
                 fitness[i] = self._cache[keys[i]]
             else:
-                groups.setdefault(tuple(params[k] for k in int_keys), []).append(i)
+                pending.setdefault(keys[i], []).append(i)
+        groups: dict[tuple, list[int]] = {}
+        for rows in pending.values():  # duplicates within the batch are evaluated once
+            groups.setdefault(tuple(decoded[rows[0]][k] for k in int_keys), []).append(rows[0])
 
         def run(indices):
             fitness[indices] = self._evaluate_group([decoded[i] for i in indices])
@@ -141,13 +151,16 @@ class PopulationOptimizer(ABC):
         else:
             for job in jobs:
                 run(job)
+        for rows in pending.values():
+            fitness[rows] = fitness[rows[0]]
         self.evaluations += sum(map(len, jobs))
         return fitness
 
     def _positions(self, group: list[dict]):
         """Target positions ``[len(group), T]`` for a group sharing integer params."""
         o = self.ohlc
-        if not getattr(self.algorithm, "vectorized", True):
+        vectorized_for = getattr(self.algorithm, "vectorized_for", None)
+        if not (vectorized_for(group[0]) if vectorized_for else getattr(self.algorithm, "vectorized", True)):
             # loop-based algorithm: one NumPy evaluation per candidate, then back to the backend
             if self._ohlc_np is None:
                 self._ohlc_np = OHLC.from_frame(self.train_df)
@@ -177,7 +190,9 @@ class PopulationOptimizer(ABC):
         changes = ops.abs_(pos - ops.shift(pos, 1, fill=0.0)) > 0
         n_trades = changes.sum(-1) / 2
         fit = ops.where(n_trades < self.min_trades, -1e9, ops.nan_to_num(fit, -1e9))
-        return fit.cpu().numpy() if ops.is_torch(fit) else np.asarray(fit)
+        fit = fit.cpu().numpy() if ops.is_torch(fit) else np.asarray(fit)
+        complexity = getattr(self.algorithm, "complexity", None)
+        return fit - np.array([complexity(p) for p in group]) if complexity else fit
 
     # -- result ---------------------------------------------------------------------------------
     def finish(self, best_genome: np.ndarray, best_fitness: float, history: list[float]) -> OptimizationResult:

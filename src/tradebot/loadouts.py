@@ -15,6 +15,7 @@ are skipped and reported, and unknown or out-of-range parameters fall back to va
 from __future__ import annotations
 
 from tradebot.algorithms import ALGORITHMS, build_algorithm
+from tradebot.algorithms.pool import RULES  # pool members can be indicators
 from tradebot.indicators import INDICATORS
 
 KEY = "chart.loadouts"
@@ -45,7 +46,7 @@ def restore(data: dict):
     signal = data.get("signal")
     if signal:
         members = signal.get("members") or None
-        missing = [n for n in [signal.get("name"), *(members or [])] if n not in ALGORITHMS]
+        missing = [n for n in [signal.get("name"), *(members or [])] if n not in ALGORITHMS and n not in RULES]
         if missing:
             skipped += missing
         else:

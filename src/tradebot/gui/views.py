@@ -138,7 +138,7 @@ class MemberPicker(QWidget):
         lay.addWidget(self.all)
         self.boxes: dict[str, QCheckBox] = {}
         for name in ALGORITHMS.names():
-            if ALGORITHMS.get(name) is VotingEnsemble:
+            if issubclass(ALGORITHMS.get(name), VotingEnsemble):  # vote and pool can't be members
                 continue
             box = self.boxes[name] = QCheckBox(name)
             box.setToolTip(tooltip(STRATEGIES.get(name) or ALGORITHMS.get(name).description))
