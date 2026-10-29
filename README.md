@@ -201,6 +201,10 @@ of sample. The GUI's Backtest lab offers the same options.
   dragging, scrolling and pinching only move the time axis, and not past the
   first or last candle, so the chart always stays in view. Switch it off to move
   the price axis freely. The app remembers the setting between sessions.
+  The **log** button next to it switches the price pane to a logarithmic scale, where equal percentage moves
+  have equal height. Use it for assets that rose a lot, like Bitcoin. The axis still shows prices, and
+  overlays, markers and drawings stay at their prices. Indicator panes stay linear. The app remembers this
+  setting too. Data with prices at or below 0 is shown on a linear scale.
 * **Screener**: filter any universe by technicals, volume and market cap using
   expressions or presets. Double-click a row to open it in the chart.
 * **Backtest lab**: parameter forms generated from each algorithm, equity vs.
