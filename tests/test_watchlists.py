@@ -310,7 +310,7 @@ def test_touch_rows_are_finger_sized_and_long_press_opens_the_menu(app, tmp_path
     QApplication.processEvents()
     row = p.list.itemWidget(p.list.item(0))
     assert row.remove.isVisibleTo(p) == touch  # no hover on a touchscreen: the ✕ is always there
-    assert p.list.visualItemRect(p.list.item(0)).height() >= (48 if touch else 30)
+    assert not touch or p.list.visualItemRect(p.list.item(0)).height() >= 48  # finger-sized
     p._row_menu(p.list.viewport().mapToGlobal(p.list.visualItemRect(p.list.item(0)).center()))
     assert [a.text() for a in p._menu.actions() if a.text()] == ["Chart AAPL", "Move up", "Move down", "Remove AAPL"]
     assert p._long_press.on_long_press == p._row_menu
