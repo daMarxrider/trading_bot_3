@@ -100,7 +100,19 @@ TERMS = {
                 "then tests the winner on the out-of-sample part and fills it in.",
     "show_on_chart": "Opens the symbol in the chart with this strategy's buy and sell signals.",
     "equity": "What the account would have been worth over time, compared with simply buying at the start and "
-              "holding (dashed line).",
+              "holding (dashed line) and with investing the same money in monthly parts (dotted line).",
+    "buy & hold": "The simplest alternative: buy on the first day with all the money and never sell. A strategy "
+                  "that doesn't beat this isn't worth its effort.",
+    "monthly investing": "Investing a fixed amount on the first trading day of every month (a savings plan, also "
+                         "called DCA). By default the money is split evenly, so it is all invested by the end.",
+    "xirr": "The yearly return on the money while it was actually invested (money-weighted, XIRR). It makes "
+            "monthly investing comparable with putting everything in at the start.",
+    "vs buy & hold": "How much more per year the strategy made than buy & hold, by XIRR. Negative means simply "
+                     "holding would have done better.",
+    "vs monthly investing": "How much more per year the strategy made than monthly investing, by XIRR. Negative "
+                            "means the savings plan would have done better.",
+    "dca_amount": "How much the monthly-investing comparison puts in each month. Auto splits the money evenly "
+                  "over the months tested.",
     "verdict": "Whether GA and PSO agree. Consistent: same settings, similar score, the optimum is solid. "
                "Fragile: different settings, similar score, the exact values are mostly noise. Divergent: one "
                "method found clearly better settings than the other.",

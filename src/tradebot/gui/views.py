@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
 
 from tradebot.algorithms import ALGORITHMS, build_algorithm
 from tradebot.algorithms.builtin import VotingEnsemble
+from tradebot.backtest.baselines import BUY_HOLD, MONTHLY, baselines, buy_and_hold, monthly_investing
 from tradebot.backtest.metrics import fmt
 from tradebot.config import Settings
 from tradebot.brokers import BROKERS, create_broker
@@ -89,7 +90,7 @@ def _explained_row(form: QFormLayout, label: str, widget: QWidget, term: str):
 
 def _results_tip(column: str) -> str:
     """Results-table header: "GA out-of-sample" -> the out-of-sample explanation."""
-    for term in ("out-of-sample", "in-sample", "backtest"):
+    for term in (BUY_HOLD, MONTHLY, "out-of-sample", "in-sample", "backtest"):
         if term in column:
             return tooltip(explain(term))
     return tooltip("Point at a row to see what that number means.") if column == "metric" else ""
@@ -461,6 +462,10 @@ class BacktestView(QWidget):
         self.fee.setDecimals(4)
         self.fee.setRange(0, 0.05)
         self.fee.setValue(0.001)
+        self.dca_amount = QDoubleSpinBox()  # the monthly-investing baseline (#19)
+        self.dca_amount.setRange(0, 1e9)
+        self.dca_amount.setDecimals(2)
+        self.dca_amount.setSpecialValueText("auto")
         self.algo = QComboBox()
         self.algo.addItems(ALGORITHMS.names())
         self.algo.currentTextChanged.connect(self._algo_changed)
@@ -498,7 +503,8 @@ class BacktestView(QWidget):
         form = QFormLayout()
         for label, w, term in (("Symbol", self.symbol, "symbol"), ("Timeframe", self.tf, "timeframe"),
                                ("Candles", self.bars, "candles"), ("Dates", self.dates, "dates"),
-                               ("Fee / side", self.fee, "fee"), ("Algorithm", self.algo, "algorithm")):
+                               ("Fee / side", self.fee, "fee"), ("Monthly amount", self.dca_amount, "dca_amount"),
+                               ("Algorithm", self.algo, "algorithm")):
             _explained_row(form, label, w, term)
         opt_form = QFormLayout()
         for label, w, term in (("Method", self.method, "method"), ("Population / swarm", self.population, "population"),
@@ -567,9 +573,13 @@ class BacktestView(QWidget):
         self.metrics_view = metrics_view = _table(self.metrics)
         metrics_view.setMaximumHeight(300)
         right = QVBoxLayout()
-        equity_title = QLabel("Equity curve vs. buy & hold")
+        equity_title = QLabel("Equity curve vs. buy & hold and monthly investing")
         equity_title.setToolTip(tooltip(explain("equity")))
         right.addWidget(card(equity_title, self.plot), 3)
+        self.baseline_note = QLabel()  # shown when the strategy loses to a baseline (#19)
+        self.baseline_note.setWordWrap(True)
+        self.baseline_note.hide()
+        right.addWidget(self.baseline_note)
         right.addWidget(metrics_view, 2)
         self.verdict = QLabel()
         self.verdict.setWordWrap(True)
@@ -627,15 +637,25 @@ class BacktestView(QWidget):
         self.progress.setRange(0, maximum)
         self.progress.setVisible(on)
 
+    @property
+    def _amount(self) -> float | None:
+        return self.dca_amount.value() or None  # 0 shows as "auto": capital / months
+
+    def _plot_baselines(self, df, fee, amount) -> dict:
+        """Runs in the worker thread: both baselines over all candles, for the equity chart."""
+        return {BUY_HOLD: buy_and_hold(df, fee), MONTHLY: monthly_investing(df, fee, amount=amount)}
+
     def run_backtest(self):
         from tradebot.backtest import backtest
 
-        algo, fee = self._algorithm(), self.fee.value()
+        algo, fee, amount = self._algorithm(), self.fee.value(), self._amount
         self._busy(True)
 
         def work():
             df = self._data()
-            return df, {"backtest": backtest(df, algo, fee=fee)}
+            res = backtest(df, algo, fee=fee)
+            return df, {"backtest": res, "_baselines": {"backtest": baselines(df, res, fee, amount=amount)},
+                        "_plot_baselines": self._plot_baselines(df, fee, amount)}
 
         run_async(work, self._show, self._fail)
 
@@ -645,7 +665,7 @@ class BacktestView(QWidget):
         algo, fee = self._algorithm(), self.fee.value()
         method = self.method.currentData()
         kwargs = dict(population=self.population.value(), generations=self.generations.value(),
-                      objective=self.objective.currentText(), fee=fee, min_trades=4)
+                      objective=self.objective.currentText(), fee=fee, min_trades=4, dca_amount=self._amount)
         gens = kwargs["generations"]
         self._busy(True, gens * (2 if method == "both" else 1))
         self._phase = {"name": method.upper(), "offset": 0}
@@ -659,13 +679,19 @@ class BacktestView(QWidget):
 
         def work():
             df = self._data()
+            plot = self._plot_baselines(df, fee, kwargs["dca_amount"])
             if method == "both":
                 cmp = run_comparison(algo, df, progress=report, on_phase=phase, **kwargs)
                 return df, {"GA in-sample": cmp.ga.train, "GA out-of-sample": cmp.ga.test,
                             "PSO in-sample": cmp.pso.train, "PSO out-of-sample": cmp.pso.test,
-                            "_params": cmp.better.best_params, "_comparison": cmp}
+                            "_params": cmp.better.best_params, "_comparison": cmp, "_plot_baselines": plot,
+                            "_baselines": {f"{r.method.upper()} {period}": getattr(r, f"{attr}_baselines")
+                                           for period, attr in (("in-sample", "train"), ("out-of-sample", "test"))
+                                           for r in (cmp.ga, cmp.pso)}}
             res = OPTIMIZERS[method](algo, df, **kwargs).run(report)
-            return df, {"in-sample": res.train, "out-of-sample": res.test, "_params": res.best_params}
+            return df, {"in-sample": res.train, "out-of-sample": res.test, "_params": res.best_params,
+                        "_baselines": {"in-sample": res.train_baselines, "out-of-sample": res.test_baselines},
+                        "_plot_baselines": plot}
 
         run_async(work, self._show, self._fail)
 
@@ -682,17 +708,27 @@ class BacktestView(QWidget):
         self._busy(False)
         params = results.pop("_params", None)
         comparison = results.pop("_comparison", None)
+        bases = results.pop("_baselines", {})
+        plot_bases = results.pop("_plot_baselines", None) or self._plot_baselines(df, self.fee.value(), self._amount)
         self._show_comparison(comparison)
+        self._show_not_beaten(bases)
         if params:
             self.params.set_space(self._algorithm().param_space(), params)
         t = self.themes.current
-        first = next(r for r in results.values() if r is not None)
         self._x = x_all = epoch_seconds(df.index)
-        hold = first.equity.iloc[0] * df["close"] / df["close"].iloc[0]
-        self._fit_series = [hold.to_numpy(dtype=float)]
-        self._curves = [("buy & hold", x_all, hold.to_numpy(dtype=float),
-                         pg.mkPen(qcolor(t.muted), width=1, style=Qt.PenStyle.DashLine))]
-        rows = {}
+        self._fit_series, self._curves = [], []
+        for name, style in ((BUY_HOLD, Qt.PenStyle.DashLine), (MONTHLY, Qt.PenStyle.DotLine)):
+            if name in plot_bases:
+                values = plot_bases[name].equity.to_numpy(dtype=float)
+                self._fit_series.append(values)
+                self._curves.append((name, x_all, values, pg.mkPen(qcolor(t.muted), width=1, style=style)))
+        rows, base_rows = {}, {}
+        for name, res in results.items():  # the strategy's columns first, then one per baseline and period
+            if res is not None and bases.get(name) is not None:
+                period = name.removeprefix("GA ").removeprefix("PSO ")
+                for col, metrics in bases[name].columns(name, res).items():
+                    target = rows if col == name else base_rows
+                    target[col if col == name or period == "backtest" else f"{col} {period}"] = metrics
         for (name, res), color in zip(results.items(), t.series):
             if res is None:
                 continue
@@ -700,9 +736,10 @@ class BacktestView(QWidget):
             if name.endswith("out-of-sample"):  # continue from where the matching in-sample curve ended
                 eq = eq / eq.iloc[0] * results[name.replace("out-of-sample", "in-sample")].equity.iloc[-1]
             self._curves.append((name, epoch_seconds(eq.index), eq.to_numpy(dtype=float), pg.mkPen(color, width=2)))
-            rows[name] = {k: fmt(k, v) for k, v in res.metrics.items()}
+            rows.setdefault(name, res.metrics)
             self._fit_series.append(eq.reindex(df.index).to_numpy(dtype=float))
-        self.metrics.set_frame(pd.DataFrame(rows).rename_axis("metric").reset_index())
+        columns = {name: {k: fmt(k, v) for k, v in metrics.items()} for name, metrics in {**rows, **base_rows}.items()}
+        self.metrics.set_frame(pd.DataFrame(columns).fillna("–").rename_axis("metric").reset_index())
         self._draw()
         self._lock_view()
         self.reset_view()
@@ -797,6 +834,20 @@ class BacktestView(QWidget):
             self.fit_btn.move(8, bottom)
             self.log_btn.move(8 + self.fit_btn.width() + 4, bottom)
         return super().eventFilter(obj, event)
+
+    def _show_not_beaten(self, bases: dict):
+        """A plain warning when the strategy loses to a baseline on unseen data (or in a plain backtest)."""
+        lines = []
+        for name, bl in bases.items():
+            if bl is None or not bl.not_beaten or not (name == "backtest" or "out-of-sample" in name):
+                continue
+            where = "Over this period" if name == "backtest" else "Out-of-sample"
+            who = "the strategy" if name in ("backtest", "out-of-sample") else f"the {name.split()[0]} result"
+            lines.append(f"{where}, {who} does not beat {' or '.join(bl.not_beaten)}.")
+        self.baseline_note.setText("<b>" + "<br>".join(lines) + "</b>")
+        self.baseline_note.setStyleSheet(f"color: {self.themes.current.down};")
+        self.baseline_note.setVisible(bool(lines))
+        self.baseline_note.setToolTip(tooltip(explain("xirr")))
 
     def _show_comparison(self, cmp):
         """Verdict card for GA-vs-PSO runs: parameter differences, fitness gap and interpretation."""

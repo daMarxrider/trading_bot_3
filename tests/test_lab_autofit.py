@@ -72,7 +72,7 @@ def test_on_by_default_in_bottom_left(lab):
 
 
 def test_a_run_fits_all_curves(lab):
-    assert len(curves(lab)) == 3  # buy & hold, in-sample, out-of-sample
+    assert len(curves(lab)) == 4  # buy & hold, monthly investing, in-sample, out-of-sample
     assert_fits(lab, *vb(lab).viewRange()[0])
 
 
