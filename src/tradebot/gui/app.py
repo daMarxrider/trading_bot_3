@@ -58,7 +58,7 @@ class MainWindow(QMainWindow):
         self.screener = ScreenerView(engine, themes, symbols)
         self.news = NewsView(themes, lambda: list(dict.fromkeys(symbols + self.portfolio_symbols)))
         self.portfolio = PortfolioView(engine, themes)
-        self.lab = BacktestView(engine, themes, symbols, search)
+        self.lab = BacktestView(engine, themes, symbols, search, settings)
         pages = [("Chart", "📈", self.chart), ("Screener", "🔎", self.screener), ("Backtest", "🧪", self.lab),
                  ("Portfolio", "💼", self.portfolio), ("News", "📰", self.news)]
 
