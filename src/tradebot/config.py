@@ -49,11 +49,12 @@ def load_config() -> dict:
         return tomllib.load(fh)
 
 
-def save_config_value(key: str, value: str) -> bool:
-    """Set a top-level string ``key = "value"`` in the config file, preserving everything else.
+def save_config_value(key: str, value: str | None, table: str | None = None) -> bool:
+    """Set ``key = "value"`` at the top level or in ``[table]`` of the config file, preserving everything else.
 
-    Only that key's line changes (a trailing comment on it is kept); a missing key is added before
-    the first ``[table]``; a missing file is created. Returns False (and logs) if it can't be written.
+    Only that key's line changes (a trailing comment on it is kept); a missing key is added at the end of its
+    section (top-level keys before the first ``[table]``), a missing table at the end of the file, a missing file
+    is created. ``value=None`` removes the key. Returns False (and logs) if it can't be written.
     """
     path = config_path()
     try:
@@ -61,14 +62,16 @@ def save_config_value(key: str, value: str) -> bool:
     except OSError as exc:
         log.warning("could not read %s: %s", path, exc)
         return False
-    entry = f"{key} = {json.dumps(value)}"  # a JSON string of plain text is a valid TOML basic string
-    top, rest = _split_top_level(text)
-    line = re.compile(rf"(?m)^[ \t]*{re.escape(key)}[ \t]*=[^\n#]*?(?P<comment>[ \t]*#[^\n]*)?$")
-    if line.search(top):
-        top = line.sub(lambda m: entry + (m.group("comment") or ""), top, count=1)
+    entry = None if value is None else f"{key} = {json.dumps(value)}"  # a JSON string is a valid TOML basic string
+    before, section, after = _section(text, table)
+    if section is None:  # no such table yet
+        if entry is None:
+            return True
+        new = text + ("\n" if text and not text.endswith("\n") else "") + ("\n" if text else "") + f"[{table}]\n{entry}\n"
     else:
-        top = (top if top.endswith("\n") or not top else top + "\n") + entry + "\n" + ("\n" if rest else "")
-    new = top + rest
+        new = before + _set_line(section, key, entry, gap=bool(after) if table is None else None) + after
+    if new == text:
+        return True
     try:
         tomllib.loads(new)  # never write a file the app couldn't read back
     except tomllib.TOMLDecodeError as exc:
@@ -83,6 +86,36 @@ def save_config_value(key: str, value: str) -> bool:
         log.warning("could not save %s to %s: %s", key, path, exc)
         return False
     return True
+
+
+def _set_line(section: str, key: str, entry: str | None, gap: bool | None) -> str:
+    """``section`` with ``key``'s line replaced by ``entry`` (None: removed), or ``entry`` appended.
+
+    ``gap``: top level only, whether a blank line must separate the new key from the first table (None: a table).
+    """
+    line = re.compile(rf"(?m)^[ \t]*{re.escape(key)}[ \t]*=[^\n#]*?(?P<comment>[ \t]*#[^\n]*)?$\n?")
+    if line.search(section):
+        return line.sub(lambda m: "" if entry is None else entry + (m.group("comment") or "") + "\n", section, count=1)
+    if entry is None:
+        return section
+    if gap is None:  # a table: right after its last key, keeping the blank lines before the next table
+        body = section.rstrip("\n")
+        return (body + "\n" if body else "") + entry + "\n" + section[len(body) + 1:]
+    return (section if section.endswith("\n") or not section else section + "\n") + entry + "\n" + ("\n" if gap else "")
+
+
+def _section(text: str, table: str | None) -> tuple[str, str | None, str]:
+    """``(before, section, after)``: the top-level keys (``table=None``) or the body of ``[table]``;
+    section is None if the table doesn't exist."""
+    if table is None:
+        top, rest = _split_top_level(text)
+        return "", top, rest
+    header = re.search(rf"(?m)^[ \t]*\[[ \t]*{re.escape(table)}[ \t]*\][ \t]*(#[^\n]*)?(\n|$)", text)
+    if header is None:
+        return text, None, ""
+    nxt = re.search(r"(?m)^[ \t]*\[", text[header.end():])
+    stop = header.end() + nxt.start() if nxt else len(text)
+    return text[: header.end()], text[header.end(): stop], text[stop:]
 
 
 def _split_top_level(text: str) -> tuple[str, str]:
