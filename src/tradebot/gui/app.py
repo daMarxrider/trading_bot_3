@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QStackedWidget,
     QStatusBar,
@@ -27,6 +28,7 @@ from tradebot.core.registry import load_plugins
 from tradebot.data import MarketDataEngine
 from tradebot.data.providers import quiet_yfinance
 from tradebot.gui.chart import ChartView
+from tradebot.legal import NOT_AFFILIATED, NO_WARRANTY
 from tradebot.gui.theme import GlassBackdrop, ThemeManager
 from tradebot.gui.touch import has_touchscreen
 from tradebot.gui.views import BacktestView, NewsView, PortfolioView, ScreenerView
@@ -75,6 +77,9 @@ class MainWindow(QMainWindow):
             if i == 0:
                 btn.setChecked(True)
         side.addStretch()
+        about = QPushButton("ⓘ  About", objectName="Nav")  # disclaimers and licence (#58)
+        about.clicked.connect(self.show_about)
+        side.addWidget(about)
         side.addWidget(QLabel("Theme", objectName="Muted"))
         self.theme_box = QComboBox()
         for key, theme in themes.themes.items():
@@ -115,6 +120,13 @@ class MainWindow(QMainWindow):
         self.theme_box.blockSignals(False)
         themes.apply(self.theme_box.currentData())
         self.chart.load()
+
+    def show_about(self):
+        QMessageBox.about(self, "About tradebot",
+                          f"<h3>tradebot v{__version__}</h3><p>{NOT_AFFILIATED}</p><p>{NO_WARRANTY}</p>"
+                          "<p>Licensed under the GNU GPL v3.0 or later. Licences of the bundled libraries: "
+                          "THIRD_PARTY_NOTICES.txt next to the program. Source code: "
+                          "<a href='https://github.com/daMarxrider/trading_bot_3'>github.com/daMarxrider/trading_bot_3</a></p>")
 
     def _theme_chosen(self, key: str):
         """Apply a theme picked in the sidebar and remember it as ``theme`` in the config file (#49)."""

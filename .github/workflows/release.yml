@@ -73,6 +73,10 @@ jobs:
           ./tradebot --help
           ./tradebot list algorithms | grep donchian_breakout  # built-ins plus a directory plugin
           find "$GITHUB_WORKSPACE/dist" -path '*/plotext/_kernel/cpp/kernel.*' | grep .  # the terminal charts need plotext's C++ kernel
+          find "$GITHUB_WORKSPACE/dist" -name THIRD_PARTY_NOTICES.txt | grep .  # licences of the bundled libraries (#58)
+          find "$GITHUB_WORKSPACE/dist" -name LICENSE | grep -E '/(_internal|Resources)/LICENSE$'  # tradebot's own GPL text
+          ! find "$GITHUB_WORKSPACE/dist" -iname 'pytr*' | grep .  # integrated third-party tools are never bundled
+          ./tradebot --version | grep -q "not affiliated"
           if [[ "$RUNNER_OS" == macOS ]]; then  # opening the .app must start the GUI, not the CLI
             /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' ../Info.plist | grep -x tradebot-gui
             codesign --verify --deep --strict ../..  # the ad-hoc signature Apple Silicon requires
@@ -85,6 +89,9 @@ jobs:
       - name: Package
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then version=$GITHUB_REF_NAME; else version=dev-${GITHUB_SHA::7}; fi
+          if [[ "$RUNNER_OS" != macOS ]]; then  # also next to the binary, not only in _internal/ (the .app has them in Resources/)
+            cp LICENSE build/tradebot/THIRD_PARTY_NOTICES.txt dist/tradebot/
+          fi
           if [[ "$RUNNER_OS" == Windows ]]; then
             asset=tradebot-$version-${{ matrix.platform }}.zip
             (cd dist && 7z a -tzip -bd "../$asset" tradebot >/dev/null)
