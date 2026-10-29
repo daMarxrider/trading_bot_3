@@ -109,3 +109,29 @@ def test_completion_replaces_only_the_last_symbol(lab):
     assert lab.symbols._query() == "so"
     lab.symbols._chosen("SOL/USDT")
     assert lab.symbol.text() == "AAPL, SOL/USDT"
+
+
+def test_optional_beating_and_random_windows(lab, monkeypatch):
+    from tradebot.optimize import GeneticOptimizer
+
+    assert lab.min_beating.text() == "off" and lab.samples.text() == "off (all candles)"
+    assert not lab.sample_length.isEnabled()
+    captured = {}
+    real = GeneticOptimizer.__init__
+
+    def spy(self, *args, **kwargs):
+        captured.update(kwargs)
+        real(self, *args, **kwargs)
+
+    monkeypatch.setattr(GeneticOptimizer, "__init__", spy)
+    lab.symbol.setText("AAPL, MSFT")
+    lab.algo.setCurrentText("rsi_threshold")
+    lab.run_optimizer()
+    assert captured["min_symbols_beating"] == 0 and captured["samples"] == 0  # off by default
+    lab.min_beating.setValue(1)
+    lab.samples.setValue(2)
+    assert lab.sample_length.isEnabled()
+    lab.sample_length.setValue(100)
+    lab.run_optimizer()
+    assert (captured["min_symbols_beating"], captured["samples"], captured["sample_length"]) == (1, 2, 100)
+    assert lab.per_symbol_card.isVisible()

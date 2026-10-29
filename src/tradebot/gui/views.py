@@ -525,6 +525,20 @@ class BacktestView(QWidget):
         self.aggregate.addItems(list(AGGREGATES))
         _explain_choices(self.aggregate, explain("aggregate"), AGGREGATES)
         self.align = QCheckBox("Common date range only")
+        self.min_beating = QSpinBox()  # 0 = off
+        self.min_beating.setRange(0, 1000)
+        self.min_beating.setSpecialValueText("off")
+        self.min_beating.setSuffix(" symbols")
+        self.samples = QSpinBox()  # random windows per symbol and generation; 0 = off
+        self.samples.setRange(0, 1000)
+        self.samples.setSpecialValueText("off (all candles)")
+        self.samples.setSuffix(" per symbol")
+        self.sample_length = QSpinBox()
+        self.sample_length.setRange(20, 20000)
+        self.sample_length.setValue(250)
+        self.sample_length.setSuffix(" candles")
+        self.samples.valueChanged.connect(lambda n: self.sample_length.setEnabled(n > 0))
+        self.sample_length.setEnabled(False)
         self.method = QComboBox()
         for label, key in (("Genetic algorithm (GA)", "ga"), ("Particle swarm (PSO)", "pso"),
                            ("Both + compare", "both")):
@@ -555,7 +569,10 @@ class BacktestView(QWidget):
         for label, w, term in (("Method", self.method, "method"), ("Population / swarm", self.population, "population"),
                                ("Generations / iterations", self.generations, "generations"),
                                ("Objective", self.objective, "objective"),
-                               ("Several symbols", self.aggregate, "aggregate"), ("Align dates", self.align, "align")):
+                               ("Several symbols", self.aggregate, "aggregate"), ("Align dates", self.align, "align"),
+                               ("Beat buy & hold on", self.min_beating, "min_symbols_beating"),
+                               ("Random windows", self.samples, "samples"),
+                               ("Window length", self.sample_length, "sample_length")):
             _explained_row(opt_form, label, w, term)
         from tradebot.optimize import select_backend
 
@@ -791,7 +808,9 @@ class BacktestView(QWidget):
         method = self.method.currentData()
         kwargs = dict(population=self.population.value(), generations=self.generations.value(),
                       objective=self.objective.currentText(), fee=fee, min_trades=4, dca_amount=self._amount,
-                      aggregate=self.aggregate.currentText(), align=self.align.isChecked())
+                      aggregate=self.aggregate.currentText(), align=self.align.isChecked(),
+                      min_symbols_beating=self.min_beating.value(), samples=self.samples.value(),
+                      sample_length=self.sample_length.value())
         gens = kwargs["generations"]
         self._busy(True, gens * (2 if method == "both" else 1))
         self._phase = {"name": method.upper(), "offset": 0}

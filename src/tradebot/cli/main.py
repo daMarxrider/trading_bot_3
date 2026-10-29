@@ -263,6 +263,12 @@ def optimize(
         autocompletion=complete.choices(("mean", ""), ("median", "robust to one outlier"),
                                         ("min", "the worst symbol counts"), ("mean-std", "mean minus spread")))] = "mean",
     align: Annotated[bool, typer.Option(help="With several symbols: cut all of them to their common date range")] = False,
+    min_symbols_beating: Annotated[int, typer.Option(
+        help="Reject parameter sets that beat buy & hold (in-sample, on the objective) on fewer symbols (0 = off)")] = 0,
+    samples: Annotated[int, typer.Option(
+        help="Score each generation on this many random windows per symbol instead of all in-sample candles; "
+             "new windows every generation, batched in one go on the GPU (0 = off)")] = 0,
+    sample_length: Annotated[int, typer.Option(help="Candles per random window (with --samples)")] = 250,
 ):
     """Optimize algorithm parameters with a genetic algorithm and/or particle swarm (GPU accelerated
     when available) and report out-of-sample results. ``--method both`` also measures how much the two
@@ -302,9 +308,11 @@ def optimize(
         backend = "numpy"  # loop-based algorithms (e.g. elliott_wave) run on the CPU anyway
     kwargs = dict(population=population, generations=generations, objective=objective, train_fraction=train,
                   backend=select_backend(backend), fee=fee, seed=seed, fixed=parse_kv(fix), min_trades=min_trades,
-                  dca_amount=dca_amount, aggregate=aggregate, align=align)
+                  dca_amount=dca_amount, aggregate=aggregate, align=align, min_symbols_beating=min_symbols_beating,
+                  samples=samples, sample_length=sample_length)
     n_genes = len([k for k in algorithm.param_space() if k not in kwargs["fixed"]])
-    console.print(f"backend: [bold]{kwargs['backend'].description}[/] · {size} · {n_genes} parameters")
+    console.print(f"backend: [bold]{kwargs['backend'].description}[/] · {size} · {n_genes} parameters"
+                  + (f" · {samples} random windows of {sample_length} candles per symbol and generation" if samples else ""))
     symbol = symbols[0]
     with Progress(console=console) as progress:
         task = progress.add_task("optimizing", total=generations)

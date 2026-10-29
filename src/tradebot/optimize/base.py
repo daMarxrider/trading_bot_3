@@ -27,6 +27,22 @@ worst symbol) or ``mean-std`` (mean minus one standard deviation). Parameters th
 chart score badly on the rest, so the winner is more likely to generalize. Symbols with much less
 history than the longest one are skipped (``min_history``), or every symbol is cut to the common date
 range first (``align``).
+
+Two optional extras:
+
+* ``min_symbols_beating``: a candidate whose in-sample objective doesn't beat buy & hold's (same
+  objective, same candles) on at least that many symbols gets the rejection fitness, like one with
+  too few trades.
+* ``samples`` (random windows, GPU batching): instead of the whole in-sample part, every generation
+  scores the candidates on ``samples`` random windows of ``sample_length`` candles per symbol, each
+  with its own random start (so the dates differ between windows and between symbols, and change
+  every generation). All windows have the same length, so a vectorized algorithm scores
+  ``[windows, candidates, T]`` in one call - one big batch for the GPU instead of one per symbol.
+  Each window gets ``warmup`` extra candles before it (the largest integer parameter, usually the
+  longest indicator window) so indicators are warmed up; only the window itself is scored. Fitness
+  then changes from generation to generation, so the survivors (GA elites, PSO personal bests) are
+  scored again on each generation's windows, and the winner is picked from the final population on
+  the whole in-sample part. The history is therefore noisy instead of monotonic.
 """
 
 from __future__ import annotations
@@ -98,6 +114,19 @@ class _Data:
     ppy: float
     ohlc: OHLC
     ohlc_np: OHLC | None = None
+    buy_hold: float = float("nan")  #: buy & hold's in-sample objective (for ``min_symbols_beating``)
+
+
+@dataclass
+class _Windows:
+    """One generation's random windows, stacked: ``ohlc`` fields are ``[K, 1, warmup + length]``."""
+
+    ohlc: OHLC
+    ohlc_np: list[OHLC]  #: per window, for loop-based algorithms
+    ppy: object  #: ``[K, 1]``
+    symbol: np.ndarray  #: ``[K]`` index into the optimizer's data
+    buy_hold: np.ndarray  #: ``[K]``
+    warmup: int
 
 
 @dataclass
@@ -180,6 +209,9 @@ class PopulationOptimizer(ABC):
         aggregate: str = "mean",
         align: bool = False,
         min_history: float = 0.5,
+        min_symbols_beating: int = 0,
+        samples: int = 0,
+        sample_length: int = 250,
     ):
         self.algorithm = algorithm
         self.dca_amount = dca_amount  # monthly investing baseline; None = capital / months
@@ -204,6 +236,25 @@ class PopulationOptimizer(ABC):
             train_df = frame.iloc[:split]
             self.data.append(_Data(symbol, train_df, frame.iloc[split:], infer_periods_per_year(frame.index),
                                    OHLC.from_frame(train_df, device=self.backend.device)))
+        if not 0 <= min_symbols_beating <= len(self.data):
+            raise ValueError(f"min_symbols_beating must be between 0 and the number of symbols ({len(self.data)})")
+        self.min_symbols_beating = min_symbols_beating
+        for d in self.data:
+            d.buy_hold = float(self._buy_hold(d.ohlc.close, d.ppy, 0))
+        if samples < 0 or sample_length < 2:
+            raise ValueError("samples must be 0 (off) or more, and sample_length at least 2 candles")
+        self.samples, self.sample_length = samples, sample_length
+        self.warmup = int(max((s.high for s in algorithm.param_space().values() if s.integer), default=0))
+        self._windows: _Windows | None = None
+        if samples:
+            total = self.warmup + sample_length
+            self._sampled = [i for i, d in enumerate(self.data) if len(d.train_df) >= total]
+            if not self._sampled:
+                raise ValueError(f"windows of {sample_length} candles plus {self.warmup} for warm-up need {total} "
+                                 f"in-sample candles; the longest has {max(len(d.train_df) for d in self.data)}")
+            for d in self.data:
+                if len(d.train_df) < total:
+                    log.info("optimize: %s is too short for windows of %d candles, not sampled", d.symbol, sample_length)
         self.evaluations = 0
         self._cache: dict[tuple, float] = {}
 
@@ -229,6 +280,40 @@ class PopulationOptimizer(ABC):
         pop = self.rng.random((self.population, len(self.keys)))
         pop[0] = np.clip(self.encode(self.algorithm.values), 0.0, 1.0)
         return pop
+
+    # -- random windows -------------------------------------------------------------------------
+    def resample(self) -> bool:
+        """With ``samples``: draw this generation's windows (and forget the cached fitness). False without."""
+        if not self.samples:
+            return False
+        total = self.warmup + self.sample_length
+        rows, symbols = [], []
+        for i in self._sampled:
+            d = self.data[i]
+            arrays = np.stack([d.train_df[c].to_numpy(dtype=np.float64) for c in ("open", "high", "low", "close")])
+            for start in self.rng.integers(0, len(d.train_df) - total + 1, self.samples):
+                rows.append(arrays[:, start:start + total])
+                symbols.append(i)
+        stack = np.stack(rows)[:, :, None, :]  # [K, 4, 1, total]
+        cols = [np.ascontiguousarray(stack[:, j]) for j in range(4)]  # 4 x [K, 1, total]
+        device = self.backend.device
+        ohlc = OHLC(*[ops.torch.tensor(c, dtype=ops.torch.float64, device=device) for c in cols]) if device else OHLC(*cols)
+        ppy = ops.asarray(np.array([[self.data[i].ppy] for i in symbols]), ohlc.close)
+        buy_hold = self._buy_hold(ohlc.close, ppy, self.warmup)
+        buy_hold = buy_hold.cpu().numpy() if ops.is_torch(buy_hold) else np.asarray(buy_hold)
+        self._windows = _Windows(ohlc, [OHLC(*r) for r in rows], ppy, np.array(symbols), buy_hold.reshape(-1),
+                                 self.warmup)
+        self._cache.clear()
+        return True
+
+    def pick(self, genomes: np.ndarray, fitness: np.ndarray) -> tuple[np.ndarray, float]:
+        """The best genome; with ``samples`` re-scored on the whole in-sample part first."""
+        if self.samples:
+            self._windows = None
+            self._cache.clear()
+            fitness = self.evaluate(genomes)
+        best = int(np.argmax(fitness))
+        return genomes[best], float(fitness[best])
 
     # -- fitness --------------------------------------------------------------------------------
     def evaluate(self, genomes: np.ndarray) -> np.ndarray:
@@ -266,15 +351,24 @@ class PopulationOptimizer(ABC):
 
     def _positions(self, d: _Data, group: list[dict]):
         """Target positions ``[len(group), T]`` on one symbol for a group sharing integer params."""
-        o = d.ohlc
-        vectorized_for = getattr(self.algorithm, "vectorized_for", None)
-        if not (vectorized_for(group[0]) if vectorized_for else getattr(self.algorithm, "vectorized", True)):
+        if not self._vectorized(group):
             # loop-based algorithm: one NumPy evaluation per candidate, then back to the backend
             if d.ohlc_np is None:
                 d.ohlc_np = OHLC.from_frame(d.train_df)
-            rows = [np.nan_to_num(np.broadcast_to(np.asarray(self.algorithm.signals(d.ohlc_np, p), float),
-                                                  (len(d.train_df),))) for p in group]
-            return ops.asarray(np.stack(rows), o.close)
+            return ops.asarray(self._loop_signals(d.ohlc_np, group), d.ohlc.close)
+        return self._signals(d.ohlc, group)
+
+    def _vectorized(self, group: list[dict]) -> bool:
+        vectorized_for = getattr(self.algorithm, "vectorized_for", None)
+        return vectorized_for(group[0]) if vectorized_for else getattr(self.algorithm, "vectorized", True)
+
+    def _loop_signals(self, o: OHLC, group: list[dict]) -> np.ndarray:
+        length = o.close.shape[-1]
+        return np.stack([np.nan_to_num(np.broadcast_to(np.asarray(self.algorithm.signals(o, p), float), (length,)))
+                         for p in group])
+
+    def _signals(self, o: OHLC, group: list[dict]):
+        """One call of the algorithm for the whole group: float params become ``[group, 1]`` arrays."""
         params = {}
         for key in self.algorithm.param_space():
             values = [p[key] for p in group]
@@ -286,25 +380,52 @@ class PopulationOptimizer(ABC):
         return self.algorithm.signals(o, params)
 
     def _evaluate_group(self, group: list[dict]) -> np.ndarray:
-        """Fitness per candidate: the per-symbol fitness values combined by ``aggregate``, minus complexity."""
-        fit = AGGREGATES[self.aggregate](np.stack([self._symbol_fitness(d, group) for d in self.data]))
+        """Fitness per candidate: the per-symbol (or per-window) fitness values combined by ``aggregate``,
+        minus complexity; rejected if it beats buy & hold on fewer than ``min_symbols_beating`` symbols."""
+        if (w := self._windows) is not None:
+            if self._vectorized(group):
+                pos = self._signals(w.ohlc, group)  # [K, group, T]: all windows in one call
+            else:
+                pos = ops.asarray(np.stack([self._loop_signals(o, group) for o in w.ohlc_np]), w.ohlc.close)
+            fits = self._score(w.ohlc.close, pos, w.ppy, w.warmup, len(group))
+            fits = fits.cpu().numpy() if ops.is_torch(fits) else np.asarray(fits)
+            symbol, buy_hold = w.symbol, w.buy_hold
+        else:
+            fits = np.stack([self._symbol_fitness(d, group) for d in self.data])
+            symbol, buy_hold = np.arange(len(self.data)), np.array([d.buy_hold for d in self.data])
+        fit = AGGREGATES[self.aggregate](fits)
+        if self.min_symbols_beating:
+            beating = sum(fits[symbol == i].mean(0) > buy_hold[symbol == i].mean() for i in np.unique(symbol))
+            fit = np.where(beating < self.min_symbols_beating, -1e9, fit)
         complexity = getattr(self.algorithm, "complexity", None)
         return fit - np.array([complexity(p) for p in group]) if complexity else fit
 
     def _symbol_fitness(self, d: _Data, group: list[dict]) -> np.ndarray:
-        o = d.ohlc
-        pos = self._positions(d, group)
+        fit = self._score(d.ohlc.close, self._positions(d, group), d.ppy, 0, len(group))
+        return fit.cpu().numpy() if ops.is_torch(fit) else np.asarray(fit)
+
+    def _score(self, close, pos, ppy, warmup: int, n: int):
+        """Fitness of positions on ``close``: ``[T]`` -> ``[n]``, or stacked windows ``[K, 1, T]`` -> ``[K, n]``.
+        The first ``warmup`` candles only warm up the indicators and are not scored."""
         lo = -1.0 if self.algorithm.allow_short else 0.0
         pos = ops.nan_to_num(pos)
         pos = pos.clamp(lo, 1.0) if ops.is_torch(pos) else np.clip(pos, lo, 1.0)
-        if pos.ndim == 1 or pos.shape[0] != len(group):
-            pos = pos.reshape(1, -1).expand(len(group), -1) if ops.is_torch(pos) else np.broadcast_to(pos, (len(group), pos.shape[-1]))
-        returns = simulate(o.close, pos, self.fee)
-        fit = batch_fitness(returns, d.ppy, self.objective)
+        shape = (*close.shape[:-2], n, close.shape[-1])
+        if tuple(pos.shape) != shape:
+            pos = pos.expand(shape) if ops.is_torch(pos) else np.broadcast_to(pos, shape)
+        close, pos = close[..., warmup:], pos[..., warmup:]
+        returns = simulate(close, pos, self.fee)
+        fit = batch_fitness(returns, ppy, self.objective)
         changes = ops.abs_(pos - ops.shift(pos, 1, fill=0.0)) > 0
         n_trades = changes.sum(-1) / 2
-        fit = ops.where(n_trades < self.min_trades, -1e9, ops.nan_to_num(fit, -1e9))
-        return fit.cpu().numpy() if ops.is_torch(fit) else np.asarray(fit)
+        return ops.where(n_trades < self.min_trades, -1e9, ops.nan_to_num(fit, -1e9))
+
+    def _buy_hold(self, close, ppy, warmup: int):
+        """Buy & hold's objective on ``close`` (``[T]`` -> scalar, ``[K, 1, T]`` -> ``[K, 1]``)."""
+        close = close[..., warmup:]
+        returns = simulate(close, ops.full(tuple(close.shape), 1.0, close), self.fee)
+        fit = ops.nan_to_num(batch_fitness(returns, ppy, self.objective), -1e9)
+        return fit.cpu() if ops.is_torch(fit) else fit
 
     # -- result ---------------------------------------------------------------------------------
     def finish(self, best_genome: np.ndarray, best_fitness: float, history: list[float]) -> OptimizationResult:

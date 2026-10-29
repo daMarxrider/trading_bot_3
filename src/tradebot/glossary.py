@@ -86,6 +86,12 @@ TERMS = {
     "aggregate": "With several symbols: how their scores become one for the optimizer.",
     "align": "With several symbols: cut all of them to the dates every one of them has, so they cover the same "
              "period. Otherwise a symbol with much less history than the rest is left out.",
+    "min_symbols_beating": "Only accept settings that do better than buy & hold (on the objective, in-sample) on at "
+                           "least this many symbols. Off accepts any.",
+    "samples": "Instead of all in-sample candles, score each round on this many random stretches per symbol, "
+               "with new random dates every round. Settings that only fit one period lose, and all stretches "
+               "are computed in one batch, which suits a graphics card. The winner is checked on all candles.",
+    "sample_length": "How many candles each random stretch covers. Shorter is faster but noisier.",
     "per_symbol": "The tuned settings on each symbol. Settings that only shine on one or two symbols are probably "
                   "luck. Click a row to see that symbol's curves.",
     "timeframe": "How much time one candle covers: 1d is one candle per day, 1h one per hour. Shorter "

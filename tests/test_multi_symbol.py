@@ -141,3 +141,114 @@ def test_watchlist_completion(monkeypatch):
     monkeypatch.setattr("tradebot.config.watchlists", lambda: {"Main": ["A", "B"], "Crypto": ["C"]})
     assert [v for v, _ in complete.watchlists("")] == ["Main", "Crypto", "all"]
     assert [v for v, _ in complete.watchlists("cr")] == ["Crypto"]
+
+
+# -- min_symbols_beating ------------------------------------------------------------------------------
+def test_min_symbols_beating_rejects_candidates_that_lose_to_buy_and_hold():
+    data = frames()
+    algo = build_algorithm("rsi_threshold")
+    genomes = np.random.default_rng(3).random((48, 3))
+    plain = GeneticOptimizer(algo, data, backend="numpy", min_trades=0)
+    per = np.stack([GeneticOptimizer(algo, df, backend="numpy", min_trades=0).evaluate(genomes) for df in data.values()])
+    buy_hold = np.array([d.buy_hold for d in plain.data])[:, None]
+    for n in (1, 2, 3):
+        fit = GeneticOptimizer(algo, data, backend="numpy", min_trades=0, min_symbols_beating=n).evaluate(genomes)
+        rejected = (per > buy_hold).sum(0) < n
+        assert (fit[rejected] == -1e9).all()
+        np.testing.assert_allclose(fit[~rejected], per.mean(0)[~rejected])
+    with pytest.raises(ValueError, match="min_symbols_beating"):
+        GeneticOptimizer(algo, data, backend="numpy", min_symbols_beating=4)
+
+
+# -- random windows -----------------------------------------------------------------------------------
+def test_windows_are_random_per_symbol_and_generation():
+    data = frames(2, 800)
+    opt = GeneticOptimizer(build_algorithm("sma_cross"), data, backend="numpy", seed=0, samples=3, sample_length=100)
+    assert opt.warmup == 300  # sma_cross.slow goes up to 300
+    opt.resample()
+    w = opt._windows
+    assert w.ohlc.close.shape == (6, 1, 400) and list(w.symbol) == [0, 0, 0, 1, 1, 1]
+    starts = lambda w: [o.close[0] for o in w.ohlc_np]  # noqa: E731 (first close identifies the start)
+    first = starts(w)
+    assert len(set(first)) == 6  # different dates within a generation and between symbols
+    opt.resample()
+    assert starts(opt._windows) != first  # and new ones next generation
+
+
+@pytest.mark.parametrize("name", ["rsi_threshold", "sma_cross", "vote"])
+def test_batched_windows_match_one_window_at_a_time(name):
+    opt = GeneticOptimizer(build_algorithm(name), frames(3, 1000), backend="numpy", seed=1, min_trades=0,
+                           samples=2, sample_length=120, aggregate="median")
+    genomes = np.random.default_rng(0).random((32, len(opt.keys)))
+    opt.resample()
+    batched = opt.evaluate(genomes)
+    opt._cache.clear()
+    opt._vectorized = lambda group: False  # the per-window loop used for loop-based algorithms
+    np.testing.assert_allclose(batched, opt.evaluate(genomes))
+
+
+def test_window_scores_only_the_window():
+    """The warm-up candles before a window are not scored: the fitness equals a backtest of the window alone."""
+    from tradebot.backtest import backtest
+
+    df = make_ohlc(800, seed=5)
+    opt = GeneticOptimizer(build_algorithm("rsi_threshold"), {"X": df}, backend="numpy", seed=0, min_trades=0,
+                           samples=1, sample_length=200, objective="return")
+    opt.resample()
+    params = opt.algorithm.values
+    fit = opt.evaluate(opt.encode(params)[None])[0]
+    o = opt._windows.ohlc_np[0]
+    start = int(np.flatnonzero(df["close"].to_numpy() == o.close[0])[0])
+    window = df.iloc[start:start + opt.warmup + 200]
+    positions = backtest(window, opt.algorithm).positions.iloc[opt.warmup:]
+    returns = window["close"].pct_change().iloc[opt.warmup:].fillna(0).to_numpy()
+    held = np.r_[0.0, positions.to_numpy()[:-1]]
+    turnover = np.abs(positions.to_numpy() - held)
+    expected = np.prod(1 + held * np.r_[0.0, returns[1:]] - 0.001 * turnover) - 1
+    assert fit == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("method", ["ga", "pso"])
+def test_sampled_search_picks_the_winner_on_all_candles(method):
+    from tradebot.optimize import OPTIMIZERS
+
+    data = frames(2, 700)
+    opt = OPTIMIZERS[method](build_algorithm("rsi_threshold"), data, backend="numpy", population=16, generations=3,
+                             seed=0, min_trades=0, samples=2, sample_length=150)
+    res = opt.run()
+    assert opt._windows is None  # the final pick ran on the whole in-sample part
+    check = OPTIMIZERS[method](build_algorithm("rsi_threshold"), data, backend="numpy", min_trades=0)
+    assert res.best_fitness == pytest.approx(check.evaluate(check.encode(res.best_params)[None])[0])
+    assert len(res.symbols) == 2 and len(res.history) == 4
+
+
+def test_windows_too_long():
+    with pytest.raises(ValueError, match="warm-up"):
+        GeneticOptimizer(build_algorithm("sma_cross"), frames(2, 500), backend="numpy", samples=2, sample_length=250)
+    with pytest.raises(ValueError, match="samples"):
+        GeneticOptimizer(build_algorithm("sma_cross"), frames(2, 300), backend="numpy", samples=-1)
+
+
+def test_cli_min_symbols_beating_and_samples(monkeypatch):
+    from typer.testing import CliRunner
+
+    from tradebot.cli import main as cli
+
+    seeds = iter(range(100))
+    monkeypatch.setattr(cli, "load_data", lambda s, *a, **k: make_ohlc(900, seed=next(seeds)))
+    captured = {}
+    real = GeneticOptimizer.__init__
+
+    def spy(self, *args, **kwargs):
+        captured.update(kwargs)
+        real(self, *args, **kwargs)
+
+    monkeypatch.setattr(GeneticOptimizer, "__init__", spy)
+    args = ["optimize", "A,B", "rsi_threshold", "--population", "12", "--generations", "2", "--backend", "numpy",
+            "--min-trades", "0"]
+    res = CliRunner().invoke(cli.app, [*args, "--min-symbols-beating", "1", "--samples", "2", "--sample-length", "100"],
+                             env={"COLUMNS": "160"})
+    assert res.exit_code == 0, res.output
+    assert "2 random windows of 100 candles" in res.output
+    assert captured["min_symbols_beating"] == 1 and captured["samples"] == 2 and captured["sample_length"] == 100
+    assert CliRunner().invoke(cli.app, [*args, "--min-symbols-beating", "3"]).exit_code != 0  # only 2 symbols

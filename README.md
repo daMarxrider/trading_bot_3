@@ -130,6 +130,7 @@ tradebot optimize BTC/USDT --pool rsi_threshold,macd_cross,elliott_wave,sma --ma
 tradebot optimize AAPL,MSFT,NVDA,SAP.DE macd_cross --aggregate median   # one parameter set for several symbols
 tradebot optimize -w Crypto sma_cross                          # every symbol of a watchlist (-w all: of all of them)
 tradebot backtest AAPL,MSFT,NVDA macd_cross -p fast=8           # one row per symbol
+tradebot optimize -w all rsi_threshold --min-symbols-beating 5 --samples 4 --sample-length 300
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50          # dry run
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50 --live   # real orders
 tradebot positions --broker kucoin
@@ -218,6 +219,20 @@ baseline, trades), the aggregate, on how many symbols each baseline was beaten,
 and a warning when one or two symbols carry the result (the median far below the
 mean). The reuse command is a `backtest` on the same symbols, which then prints
 one row per symbol.
+
+Two optional extras, off by default (CLI and Backtest lab):
+- `--min-symbols-beating N`: parameter sets whose in-sample objective doesn't
+  beat buy & hold's on at least N symbols are rejected, like those with too few trades.
+- `--samples K --sample-length L` (random windows): each generation scores the
+  candidates on K random stretches of L candles per symbol instead of all
+  in-sample candles. Every window gets its own random start (different between
+  windows and symbols, and new every generation), plus warm-up candles before it
+  for the indicators. Because all windows have the same length, a vectorized
+  strategy computes `[windows × candidates × candles]` in one batch, which suits
+  the GPU. Settings that only fit one period lose. GA elites and PSO personal bests
+  are scored again on every generation's windows, and the winner is chosen from
+  the final population on all in-sample candles. The progress score is therefore
+  noisy rather than rising steadily.
 
 **Picking the strategies.** Without an algorithm, `optimize` also decides *which*
 strategies and indicators to use. It starts from a pool: every strategy and
