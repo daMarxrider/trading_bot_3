@@ -5,6 +5,7 @@
 import os
 import subprocess
 import sys
+import threading
 import time
 import types
 from pathlib import Path
@@ -55,7 +56,6 @@ def test_symbols_watchlist_offline_and_prefix_only(monkeypatch, tmp_path):
     import tradebot.symbols as symbols
 
     monkeypatch.setattr("tradebot.config.watchlist", lambda: ["AAPL", "SAP.DE", "AAPL"])
-    monkeypatch.setattr("tradebot.config.os_cache_dir", lambda: tmp_path)
     remote = [SymbolMatch("SOL/USDT", "SOL / USDT", "binance", "crypto"), SymbolMatch("APLE", "Apple Hospitality")]
     monkeypatch.setattr(symbols, "cli_symbol_search",
                         lambda local, cache_dir: symbols.SymbolSearch(local, remote=[lambda q: remote]))
@@ -73,10 +73,29 @@ def test_crypto_pairs_disk_cache(tmp_path):
     again._fetch = lambda: pytest.fail("should come from the disk cache")
     assert again.load()[0].symbol == "SOL/USDT"  # a new process reads the file
     os.utime(cache, (time.time() - 2 * 86400,) * 2)
+    fetched = threading.Event()
+
+    def outage():
+        fetched.set()
+        return []
+
     stale = CryptoPairs([], cache=cache)
-    stale._fetch = lambda: []
-    assert stale.load() == []  # a day old: refetched (and an empty outage result isn't cached)
-    assert cache.is_file()
+    stale._fetch = outage
+    assert stale.load()[0].symbol == "SOL/USDT"  # a day old: still answers right away (#63) ...
+    assert fetched.wait(5)  # ... while a refresh runs in the background
+    time.sleep(0.05)
+    assert stale.load()[0].symbol == "SOL/USDT" and cache.is_file()  # an empty outage result isn't cached
+
+    os.utime(cache, (time.time() - 2 * 86400,) * 2)
+    newer = CryptoPairs([], cache=cache)
+    newer._fetch = lambda: [SymbolMatch("ETH/USDT", "ETH / USDT", "binance", "crypto")]
+    newer.load()
+    for _ in range(100):
+        if newer.load()[0].symbol == "ETH/USDT":
+            break
+        time.sleep(0.02)
+    assert newer.load()[0].symbol == "ETH/USDT"  # the refreshed list replaces the old one
+    assert CryptoPairs([], cache=cache).load()[0].symbol == "ETH/USDT"  # and is saved
 
 
 def test_query_cache(tmp_path):
@@ -147,6 +166,7 @@ def test_completion_skips_torch():
 def test_cache_dir_per_os(monkeypatch):
     from tradebot.config import os_cache_dir
 
+    monkeypatch.delenv("TRADEBOT_CACHE_DIR")  # set for every test (conftest)
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setenv("XDG_CACHE_HOME", "/xdg-cache")
     assert os_cache_dir() == Path("/xdg-cache/tradebot")
@@ -155,3 +175,5 @@ def test_cache_dir_per_os(monkeypatch):
     assert os_cache_dir() == Path("/local/tradebot/Cache")
     monkeypatch.setattr(sys, "platform", "darwin")
     assert os_cache_dir() == Path("~/Library/Caches/tradebot").expanduser()
+    monkeypatch.setenv("TRADEBOT_CACHE_DIR", "/custom")  # overrides the OS default
+    assert os_cache_dir() == Path("/custom")

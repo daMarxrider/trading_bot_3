@@ -137,6 +137,10 @@ class _PriceFormat:
         return f"{self.chart.price_at(value):.6g}"
 
 
+def _offline_note(df) -> str:
+    return " · offline: showing cached candles, they may be outdated" if df.attrs.get("offline") else ""
+
+
 class CandlestickItem(pg.GraphicsObject):
     """Candles pre-rendered into a QPicture (fast pan/zoom for thousands of bars)."""
 
@@ -302,11 +306,19 @@ class ChartView(QWidget):
             return
         self.status.emit(f"loading {symbol} {tf} …")
         start, end = self.dates.range()
+        cached = self.engine.peek(symbol, tf, start=start, end=end, bars=bars)  # from disk, no network (#63)
+        if cached is not None:
+            self._loaded(symbol, cached, " · from the cache, updating …")
         run_async(lambda: self.engine.get_ohlc(symbol, tf, start=start, end=end, bars=bars),
-                  lambda df: self._loaded(symbol, df, shortfall(df, bars, start)),
+                  lambda df: self._loaded(symbol, df, shortfall(df, bars, start) + _offline_note(df),
+                                          refresh=cached is not None),
                   lambda err: self.status.emit(f"{symbol}: {err}"))
 
-    def _loaded(self, symbol, df, note=""):
+    def _loaded(self, symbol, df, note="", refresh=False):
+        """Show loaded candles; ``refresh``: newer candles for what the chart already shows from the cache,
+        so the view stays where it is."""
+        if refresh and (symbol != self._loaded_symbol or self.df is None):
+            return  # the user moved on to another symbol meanwhile
         self.df = df
         self._loaded_symbol = symbol
         note, self._pending_note = note + self._pending_note, ""
@@ -315,7 +327,7 @@ class ChartView(QWidget):
         self._hover = None
         run_async(lambda: symbol_name(symbol), lambda name: self._named(symbol, tf, name))
         self.status.emit(f"{symbol}: {len(df)} candles {df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d %H:%M}{note}")
-        self.redraw(autorange=True)
+        self.redraw(autorange=not refresh)
 
     def _named(self, symbol, tf, name):
         """Full instrument name for the price pane's title, if the chart still shows that symbol."""

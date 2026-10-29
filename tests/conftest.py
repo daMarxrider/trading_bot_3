@@ -54,3 +54,19 @@ def make_ohlc(n: int = 400, seed: int = 0, freq: str = "D") -> pd.DataFrame:
 @pytest.fixture
 def ohlc() -> pd.DataFrame:
     return make_ohlc()
+
+
+@pytest.fixture(autouse=True)
+def _private_cache_dir(tmp_path_factory, monkeypatch):
+    """Each test gets its own empty disk cache (#63), never the user's."""
+    monkeypatch.setenv("TRADEBOT_CACHE_DIR", str(tmp_path_factory.mktemp("cache")))
+
+
+@pytest.fixture(autouse=True)
+def _no_warm_up(monkeypatch):
+    """The GUI preloads the watchlist from the network after startup (#63); tests stay offline."""
+    try:
+        import tradebot.gui.app
+    except ImportError:  # no PyQt6
+        return
+    monkeypatch.setattr(tradebot.gui.app, "warm_up", lambda engine, symbols: None)

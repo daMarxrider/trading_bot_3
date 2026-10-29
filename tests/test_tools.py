@@ -185,8 +185,8 @@ def test_gear_button_is_at_the_bottom_of_the_sidebar(app, config_file, tmp_path,
 
 # -- categories and broker API keys ---------------------------------------------------------------------
 def test_categories_on_the_left_switch_pages(dialog):
-    names = [b.text().split("  ", 1)[1] for b in dialog.nav_group.buttons()]
-    assert names == ["Appearance", "Integrations"]
+    assert dialog.page_names == ["Appearance", "Integrations", "Data & cache"]
+    assert dialog.nav_group.buttons()[2].text().endswith("Data && cache")  # shown as "&", not a shortcut
     assert dialog.nav_group.checkedButton() is dialog.nav_group.buttons()[0]  # opens on Appearance
     appearance = dialog.pages.currentWidget()
     assert appearance.isAncestorOf(dialog.theme_box)
