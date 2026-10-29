@@ -131,6 +131,8 @@ tradebot positions --broker kucoin
 tradebot portfolio --broker scalable --broker binance
 tradebot screen -f "rsi < 35" -f "close > sma200"
 tradebot news AAPL NVDA BTC/USDT
+tradebot cache info                 # cache folder, size, number of cached series
+tradebot cache clear [--ohlc|--symbols]
 ```
 
 `--bars N` returns exactly N candles, also for stocks, whose markets close on
@@ -238,6 +240,9 @@ Lists and tables scroll with a kinetic flick. With a touchscreen present, contro
     saved under `[brokers.<name>]`. They're stored in plain text. A key set as an environment variable
     (`TRADEBOT_<BROKER>_<KEY>`) takes precedence and is shown greyed out. Use API keys without
     withdrawal rights.
+* **Data & cache**: switch the disk cache on or off and set its maximum size. The page shows how much
+  chart data and how many symbol lists are cached, and where. *Clear chart data*, *Clear symbol lists*
+  and *Clear all* delete them after asking.
 
 Changes are saved to `config.toml` right away.
 
@@ -277,6 +282,32 @@ The settings dialog writes `theme`, the `[tools]` paths and the broker keys to t
 starts with them next time. Only those lines change; your comments and other
 settings stay as they are, and a missing file is created. An empty field
 removes its line.
+
+**Cache.** Candles and symbol lists are kept on disk, so the app and the CLI start without waiting for the
+network:
+
+* **Candles**: one file per symbol and timeframe. The chart shows the cached candles right away, then fetches
+  only the newest ones in the background. The last two cached candles are always fetched again, because the
+  newest may not have been complete yet.
+* **Adjusted history**: if a fresh candle differs from the cached one by more than 0.5 %, the history was
+  split- or dividend-adjusted, and the series is downloaded again in full.
+* **Offline**: the cached candles are shown, with a note that they may be outdated.
+* **Symbol search**: crypto pairs are kept for 24 h; an older list still answers right away while a fresh
+  one loads. Yahoo results are kept per query for 7 days (at most 5,000 queries). Instrument names are kept
+  for 30 days. The CLI's tab completion and the app share these files.
+* **Cleanup**: once a day at most, in the background. Series not used for 60 days are deleted, and 1m–30m
+  candles after 14 days. Over the size cap, the least recently used series go first, until the cache is at
+  80 % of the cap. A series keeps at most 50,000 candles.
+
+The cache lives in the OS cache folder (`~/.cache/tradebot/`, `~/Library/Caches/tradebot/`,
+`%LOCALAPPDATA%\tradebot\Cache\`, or `$TRADEBOT_CACHE_DIR`), and the whole folder is safe to delete.
+In `config.toml`:
+
+```toml
+[cache]
+enabled = true    # false: keep candles in memory only
+max_mb = 500
+```
 
 Settings the app remembers by itself (such as the chart's auto-fit toggle) are
 saved in `settings.json` in the OS config folder, not in `config.toml`:

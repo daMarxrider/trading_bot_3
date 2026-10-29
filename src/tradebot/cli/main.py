@@ -24,6 +24,8 @@ app = typer.Typer(help="Algorithmic trading platform: charts, backtests, optimiz
                          "Details: tradebot --version")
 bot_app = typer.Typer(help="Automated trading bots.", no_args_is_help=True)
 app.add_typer(bot_app, name="bot")
+cache_app = typer.Typer(help="The disk cache of candles and symbol lists.", no_args_is_help=True)
+app.add_typer(cache_app, name="cache")
 console = Console()
 
 Params = Annotated[list[str], typer.Option("--param", "-p", help="Algorithm parameter, e.g. -p lower=30",
@@ -78,7 +80,13 @@ def load_data(symbol: str, tf: str, start: str | None, end: str | None, bars: in
     from tradebot.data import MarketDataEngine
 
     with console.status(f"fetching {symbol} {tf} ..."):  # a short history is logged as a warning by the engine
-        return MarketDataEngine().get_ohlc(symbol, tf, start, end, bars=bars)
+        engine = MarketDataEngine()
+        if engine.disk is not None:
+            engine.disk.maybe_cleanup()  # at most once a day
+        df = engine.get_ohlc(symbol, tf, start, end, bars=bars)
+    if df.attrs.get("offline"):
+        console.print("[yellow]offline: using cached candles, they may be outdated[/]")
+    return df
 
 
 def make_algo(name: str, params: list[str], members: str | None):
@@ -415,3 +423,34 @@ def gui():
 
 if __name__ == "__main__":
     app()
+
+
+@cache_app.command("info")
+def cache_info():
+    """Where the cache is, how big it is and what it holds."""
+    from tradebot.data.cache import DiskCache, human_size
+
+    cache = DiskCache.from_config()
+    info = (cache or DiskCache()).info()
+    t = Table(show_header=False)
+    t.add_row("folder", str(info.folder))
+    t.add_row("status", f"on, at most {cache.max_bytes // 2**20:,} MB" if cache else "off ([cache] enabled = false)")
+    t.add_row("chart data", f"{human_size(info.ohlc_bytes)} in {info.series} series")
+    t.add_row("symbol lists", human_size(info.symbol_bytes))
+    t.add_row("total", human_size(info.total_bytes))
+    console.print(t)
+
+
+@cache_app.command("clear")
+def cache_clear(
+    ohlc: Annotated[bool, typer.Option("--ohlc", help="Only the chart data (candles)")] = False,
+    symbols: Annotated[bool, typer.Option("--symbols", help="Only the symbol lists")] = False,
+):
+    """Delete cached data (everything unless --ohlc or --symbols); it is downloaded again when needed."""
+    from tradebot.data.cache import DiskCache, human_size
+
+    cache = DiskCache()
+    before = cache.info().total_bytes
+    both = not (ohlc or symbols)
+    cache.clear(ohlc=ohlc or both, symbols=symbols or both)
+    console.print(f"deleted {human_size(before - cache.info().total_bytes)}")

@@ -49,8 +49,10 @@ def load_config() -> dict:
         return tomllib.load(fh)
 
 
-def save_config_value(key: str, value: str | None, table: str | None = None) -> bool:
-    """Set ``key = "value"`` at the top level or in ``[table]`` of the config file, preserving everything else.
+def save_config_value(key: str, value: str | bool | int | float | None, table: str | None = None) -> bool:
+    """Set ``key = value`` at the top level or in ``[table]`` of the config file, preserving everything else.
+
+    Strings, booleans and numbers are written as TOML values (JSON spells them the same way).
 
     Only that key's line changes (a trailing comment on it is kept); a missing key is added at the end of its
     section (top-level keys before the first ``[table]``), a missing table at the end of the file, a missing file
@@ -150,6 +152,8 @@ def os_config_dir() -> Path:
 
 def os_cache_dir() -> Path:
     """The OS's per-user cache folder for tradebot (safe to delete; it's rebuilt on demand)."""
+    if os.environ.get("TRADEBOT_CACHE_DIR"):
+        return Path(os.environ["TRADEBOT_CACHE_DIR"]).expanduser()
     if sys.platform == "win32":
         return Path(os.environ.get("LOCALAPPDATA") or "~/AppData/Local").expanduser() / "tradebot" / "Cache"
     if sys.platform == "darwin":

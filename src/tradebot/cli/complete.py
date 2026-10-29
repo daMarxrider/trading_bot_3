@@ -27,12 +27,14 @@ def _starting(incomplete: str, items: Completion) -> Completion:
 
 
 def symbols(incomplete: str) -> Completion:
-    from tradebot.config import os_cache_dir, watchlist
+    from tradebot.config import watchlist
+    from tradebot.data.cache import DiskCache
     from tradebot.symbols import cli_symbol_search
 
     if not incomplete.strip():  # nothing typed yet: the watchlist, no network
         return [(s, "watchlist") for s in dict.fromkeys(watchlist())]
-    search = cli_symbol_search(watchlist, os_cache_dir())
+    cache = DiskCache.from_config()
+    search = cli_symbol_search(watchlist, cache.symbols_dir if cache else None)
     # one letter: watchlist only; from two letters on also crypto pairs and Yahoo
     matches = search.search(incomplete) if len(incomplete.strip()) >= 2 else search.local(incomplete)
     # shells match suggestions against the typed word, not the description, so a search by company

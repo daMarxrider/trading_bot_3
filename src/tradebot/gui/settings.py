@@ -2,8 +2,8 @@
 # Copyright (C) 2026 daMarxrider
 """The settings dialog behind the sidebar's gear button (#59).
 
-Categories on the left, one page each: Appearance (theme) and Integrations (third-party tools, broker
-API keys). A new category is one more :meth:`SettingsDialog._add_page` call.
+Categories on the left, one page each: Appearance (theme), Integrations (third-party tools, broker
+API keys) and Data & cache (the disk cache, #63). A new category is one more :meth:`SettingsDialog._add_page` call.
 """
 
 from __future__ import annotations
@@ -11,9 +11,11 @@ from __future__ import annotations
 import os
 from html import escape
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, QUrl, pyqtSignal
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -24,8 +26,10 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -33,7 +37,8 @@ from PyQt6.QtWidgets import (
 
 from tradebot import tools
 from tradebot.brokers import BROKERS
-from tradebot.config import config_path, load_config, save_config_value
+from tradebot.config import config_path, load_config, os_cache_dir, save_config_value
+from tradebot.data.cache import DEFAULT_MAX_MB, DiskCache, human_size
 from tradebot.gui.theme import ThemeManager
 
 #: How a credential key is labelled; others read "Some key" from "some_key"
@@ -47,6 +52,7 @@ class SettingsDialog(QDialog):
 
     theme_chosen = pyqtSignal(str)
     message = pyqtSignal(str)  #: e.g. a setting that couldn't be saved, for the status bar
+    cache_changed = pyqtSignal()  #: the cache was switched on/off, resized or cleared
 
     def __init__(self, themes: ThemeManager, theme_key: str, parent=None):
         super().__init__(parent)
@@ -60,9 +66,11 @@ class SettingsDialog(QDialog):
         self.paths: dict[str, QLineEdit] = {}
         self.status: dict[str, QLabel] = {}
         self.credentials: dict[tuple[str, str], QLineEdit] = {}  # (broker, key) -> field
+        self.page_names: list[str] = []  # the categories, in the order of the left bar
 
         self._add_page("Appearance", "🎨", self._appearance(theme_key))
         self._add_page("Integrations", "🔌", self._integrations())
+        self._add_page("Data & cache", "💾", self._cache_page())
         self.nav_group.buttons()[0].setChecked(True)
         self.nav.addStretch()
 
@@ -86,13 +94,14 @@ class SettingsDialog(QDialog):
                              "QScrollArea > QWidget > QWidget { background: transparent; }")
         scroll.setWidget(content)
         self.pages.addWidget(scroll)
-        btn = QPushButton(f"{icon}  {name}", objectName="Nav", checkable=True)
+        btn = QPushButton(f"{icon}  {name.replace('&', '&&')}", objectName="Nav", checkable=True)  # "&": not a shortcut
         btn.clicked.connect(lambda _, w=scroll: self.pages.setCurrentWidget(w))
         self.nav_group.addButton(btn)
         self.nav.addWidget(btn)
+        self.page_names.append(name)
 
     def show_page(self, name: str):
-        next(b for b in self.nav_group.buttons() if b.text().endswith(name)).click()
+        self.nav_group.buttons()[self.page_names.index(name)].click()
 
     # -- Appearance ------------------------------------------------------------------------------
     def _appearance(self, theme_key: str) -> QWidget:
@@ -168,6 +177,90 @@ class SettingsDialog(QDialog):
                 form.addRow(KEY_LABELS.get(key, key.replace("_", " ").capitalize()), field)
         lay.addLayout(form)
         return box
+
+    # -- Data & cache ----------------------------------------------------------------------------
+    def _cache_page(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(0, 0, 4, 0)
+        conf = load_config().get("cache", {})
+
+        box = QGroupBox("Disk cache")
+        form = QFormLayout(box)
+        form.addRow(QLabel("Candles and symbol lists are kept on disk, so charts and symbol search open without "
+                           "waiting for the network. Data not used for 60 days (14 days for 1m–30m candles) is "
+                           "deleted automatically, and the least recently used data goes first when the cache "
+                           "is full.", objectName="Muted", wordWrap=True))
+        self.cache_enabled = QCheckBox("Keep market data on disk")
+        self.cache_enabled.setChecked(bool(conf.get("enabled", True)))
+        self.cache_enabled.toggled.connect(self._save_cache_enabled)
+        form.addRow(self.cache_enabled)
+        self.cache_max = QSpinBox(minimum=50, maximum=50_000, singleStep=100, suffix=" MB")
+        self.cache_max.setValue(int(conf.get("max_mb", DEFAULT_MAX_MB)))
+        self.cache_max.editingFinished.connect(self._save_cache_max)
+        form.addRow("Maximum size", self.cache_max)
+        lay.addWidget(box)
+
+        box = QGroupBox("Cached data")
+        form = QFormLayout(box)
+        self.cache_usage = {k: QLabel() for k in ("ohlc", "symbols", "total")}
+        form.addRow("Chart data", self.cache_usage["ohlc"])
+        form.addRow("Symbol lists", self.cache_usage["symbols"])
+        form.addRow("Total", self.cache_usage["total"])
+        folder = QLabel(escape(str(os_cache_dir())), wordWrap=True)
+        folder.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        open_btn = QPushButton("Open folder")
+        open_btn.clicked.connect(lambda _: QDesktopServices.openUrl(QUrl.fromLocalFile(str(os_cache_dir()))))
+        row = QHBoxLayout()
+        row.addWidget(folder, 1)
+        row.addWidget(open_btn)
+        form.addRow("Folder", row)
+        clear = QHBoxLayout()
+        for label, what in (("Clear chart data", "ohlc"), ("Clear symbol lists", "symbols"), ("Clear all", "all")):
+            btn = QPushButton(label)
+            btn.clicked.connect(lambda _, w=what: self.clear_cache(w))
+            clear.addWidget(btn)
+        clear.addStretch()
+        form.addRow(clear)
+        lay.addWidget(box)
+        lay.addStretch()
+        self._show_cache_usage()
+        return page
+
+    def _show_cache_usage(self):
+        info = DiskCache().info()  # what's on disk, also while the cache is switched off
+        series = f"{info.series} series" if info.series != 1 else "1 series"
+        self.cache_usage["ohlc"].setText(f"{human_size(info.ohlc_bytes)} in {series}")
+        self.cache_usage["symbols"].setText(human_size(info.symbol_bytes))
+        self.cache_usage["total"].setText(f"{human_size(info.total_bytes)} of at most {self.cache_max.value():,} MB")
+
+    def clear_cache(self, what: str, confirm: bool = True):
+        """``what``: "ohlc", "symbols" or "all"."""
+        names = {"ohlc": "the cached chart data", "symbols": "the cached symbol lists", "all": "all cached data"}
+        if confirm:
+            answer = QMessageBox.question(self, "Clear cache", f"Delete {names[what]}? It is downloaded again when "
+                                          "needed.", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                          QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        DiskCache().clear(ohlc=what in ("ohlc", "all"), symbols=what in ("symbols", "all"))
+        self._show_cache_usage()
+        self.cache_changed.emit()
+        self.message.emit(f"deleted {names[what]}")
+
+    def _save_cache_enabled(self, on: bool):
+        if not save_config_value("enabled", on, table="cache"):
+            self.message.emit(f"cache setting not saved: couldn't write {config_path()}")
+        self.cache_changed.emit()
+
+    def _save_cache_max(self):
+        value = self.cache_max.value()
+        if value == int(load_config().get("cache", {}).get("max_mb", DEFAULT_MAX_MB)):
+            return
+        if not save_config_value("max_mb", value, table="cache"):
+            self.message.emit(f"cache size not saved: couldn't write {config_path()}")
+        self._show_cache_usage()
+        self.cache_changed.emit()
 
     def _save_credential(self, broker: str, key: str):
         value = self.credentials[broker, key].text().strip()
