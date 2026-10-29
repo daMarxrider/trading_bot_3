@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
 )
 
 from tradebot.algorithms import ALGORITHMS, build_algorithm
+from tradebot.algorithms.builtin import VotingEnsemble
 from tradebot.backtest.metrics import fmt
 from tradebot.config import Settings
 from tradebot.brokers import BROKERS, create_broker
@@ -117,6 +118,58 @@ def _signed_color(themes: ThemeManager, cols: set[str]):
 
 
 # -- screener -----------------------------------------------------------------------------------------
+class MemberPicker(QWidget):
+    """Checkboxes for the vote ensemble's members (#78): every registered algorithm but the vote itself, plus All.
+
+    Starts with the ensemble's default members; unchecking All goes back to them. One member always stays checked.
+    """
+
+    changed = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.default = [m.name for m in VotingEnsemble().members]
+        self.all = QCheckBox("All")
+        self.all.setToolTip(tooltip("Use every known strategy, plugins included."))
+        self.all.clicked.connect(self._all_clicked)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self.all)
+        self.boxes: dict[str, QCheckBox] = {}
+        for name in ALGORITHMS.names():
+            if ALGORITHMS.get(name) is VotingEnsemble:
+                continue
+            box = self.boxes[name] = QCheckBox(name)
+            box.setToolTip(tooltip(STRATEGIES.get(name) or ALGORITHMS.get(name).description))
+            box.toggled.connect(lambda on, b=box: self._toggled(b, on))
+            lay.addWidget(box)
+        self.set_selected(self.default)
+
+    def selected(self) -> list[str]:
+        return [name for name, box in self.boxes.items() if box.isChecked()]
+
+    def set_selected(self, names):
+        for name, box in self.boxes.items():
+            box.blockSignals(True)
+            box.setChecked(name in names)
+            box.blockSignals(False)
+        self._sync_all()
+        self.changed.emit()
+
+    def _all_clicked(self, on):
+        self.set_selected(list(self.boxes) if on else self.default)
+
+    def _toggled(self, box, on):
+        if not on and not self.selected():
+            box.setChecked(True)  # the vote needs at least one member
+            return
+        self._sync_all()
+        self.changed.emit()
+
+    def _sync_all(self):
+        self.all.setChecked(all(box.isChecked() for box in self.boxes.values()))
+
+
 class ScreenerView(QWidget):
     open_symbol = pyqtSignal(str)
     status = pyqtSignal(str)
@@ -412,6 +465,8 @@ class BacktestView(QWidget):
         self.algo.addItems(ALGORITHMS.names())
         self.algo.currentTextChanged.connect(self._algo_changed)
         self.params = ParamForm({})
+        self.members = MemberPicker()
+        self.members.changed.connect(self._members_changed)
         self.population = QSpinBox()
         self.population.setRange(16, 20000)
         self.population.setValue(512)
@@ -461,6 +516,10 @@ class BacktestView(QWidget):
         setup = card()
         setup.layout().addLayout(form)
         left.addWidget(setup)
+        members_title = QLabel("Members")
+        members_title.setToolTip(tooltip(explain("members")))
+        self.members_card = card(members_title, self.members)
+        left.addWidget(self.members_card)
         params_title = QLabel("Parameters")
         params_title.setToolTip(tooltip(explain("parameters")))
         params_card = card(params_title, self.params)
@@ -539,11 +598,21 @@ class BacktestView(QWidget):
             self.plot.getAxis(name).setPen(pg.mkPen(qcolor(t.panel_border)))
 
     def _algo_changed(self, name):
-        algo = build_algorithm(name)
+        self.members_card.setVisible(ALGORITHMS.get(name) is VotingEnsemble)
+        algo = self._build()
         self.params.set_space(algo.param_space(), algo.values)
 
+    def _members_changed(self):
+        algo = self._build()
+        self.params.set_space(algo.param_space(), {**algo.values, **self.params.values()})  # keep what was set
+
+    def _build(self):
+        """The selected algorithm with default parameters; a vote with the checked members."""
+        name = self.algo.currentText()
+        return build_algorithm(name, members=self.members.selected() if ALGORITHMS.get(name) is VotingEnsemble else None)
+
     def _algorithm(self):
-        return build_algorithm(self.algo.currentText()).with_params(**self.params.values())
+        return self._build().with_params(**self.params.values())
 
     def _data(self):
         """Runs in the worker thread: the last N candles, or the From/To range when set."""
