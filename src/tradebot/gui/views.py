@@ -52,7 +52,7 @@ from tradebot.gui.common import (
     shortfall,
     tooltip,
 )
-from tradebot.gui.chart import visible_y_range
+from tradebot.gui.chart import PriceAxis, visible_y_range
 from tradebot.gui.news import fill_news_list, open_link
 from tradebot.gui.params import ParamForm
 from tradebot.gui.theme import ThemeManager, qcolor
@@ -392,6 +392,8 @@ class BacktestView(QWidget):
         self.engine, self.themes, self.settings = engine, themes, settings
         self._x = np.empty(0)
         self._fit_series: list = []  # the plotted curves on self._x (NaN where a curve has no value), for auto-fit
+        self._curves: list = []  # (name, x, values, pen) of the last run, redrawn when the scale changes
+        self._log = False  # the plot's view y is log10(value) (#76)
         self._adjusting = False  # set while the lab changes the view range itself, as opposed to the user
         self.symbol = QLineEdit(watchlist[0] if watchlist else "BTC/USDT")
         self.symbols = SymbolCompleter(self.symbol, symbol_search or SymbolSearch(lambda: watchlist))
@@ -482,7 +484,8 @@ class BacktestView(QWidget):
         enable_kinetic_scroll(scroll)
         scroll.setStyleSheet("QScrollArea { background: transparent; border: none; } QScrollArea > QWidget > QWidget { background: transparent; }")
 
-        self.plot = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem()})
+        self.value_axis = PriceAxis("left")
+        self.plot = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem(), "left": self.value_axis})
         self.plot.showGrid(x=True, y=True, alpha=0.15)
         self.plot.addLegend()
         self.touch = TouchController(self.plot.viewport(), PlotTouchHandler(self.plot, lambda _: self.plot.getPlotItem(),
@@ -495,6 +498,11 @@ class BacktestView(QWidget):
         size = 40 if themes.touch else 28  # finger-sized in touch mode
         self.fit_btn.setFixedSize(size, size)
         self.fit_btn.toggled.connect(self._autofit_toggled)
+        self.log_btn = QToolButton(self.plot, text="log", checkable=True, toolTip="Logarithmic value scale",
+                                   objectName="ChartCorner")
+        self.log_btn.setChecked(bool(settings.get("backtest.log", False)) if settings else False)
+        self.log_btn.setFixedSize(size, size)
+        self.log_btn.toggled.connect(self._log_toggled)
         self.plot.installEventFilter(self)  # keeps the button in the bottom-left corner
         self.metrics = DataFrameModel(row_tips=lambda row: tooltip(explain(row["metric"])), header_tips=_results_tip)
         self.metrics_view = metrics_view = _table(self.metrics)
@@ -609,12 +617,12 @@ class BacktestView(QWidget):
         if params:
             self.params.set_space(self._algorithm().param_space(), params)
         t = self.themes.current
-        self.plot.clear()
         first = next(r for r in results.values() if r is not None)
         self._x = x_all = epoch_seconds(df.index)
         hold = first.equity.iloc[0] * df["close"] / df["close"].iloc[0]
         self._fit_series = [hold.to_numpy(dtype=float)]
-        self.plot.plot(x_all, hold.to_numpy(), pen=pg.mkPen(qcolor(t.muted), width=1, style=Qt.PenStyle.DashLine), name="buy & hold")
+        self._curves = [("buy & hold", x_all, hold.to_numpy(dtype=float),
+                         pg.mkPen(qcolor(t.muted), width=1, style=Qt.PenStyle.DashLine))]
         rows = {}
         for (name, res), color in zip(results.items(), t.series):
             if res is None:
@@ -622,13 +630,45 @@ class BacktestView(QWidget):
             eq = res.equity
             if name.endswith("out-of-sample"):  # continue from where the matching in-sample curve ended
                 eq = eq / eq.iloc[0] * results[name.replace("out-of-sample", "in-sample")].equity.iloc[-1]
-            self.plot.plot(epoch_seconds(eq.index), eq.to_numpy(), pen=pg.mkPen(color, width=2), name=name)
+            self._curves.append((name, epoch_seconds(eq.index), eq.to_numpy(dtype=float), pg.mkPen(color, width=2)))
             rows[name] = {k: fmt(k, v) for k, v in res.metrics.items()}
             self._fit_series.append(eq.reindex(df.index).to_numpy(dtype=float))
         self.metrics.set_frame(pd.DataFrame(rows).rename_axis("metric").reset_index())
+        self._draw()
         self._lock_view()
         self.reset_view()
         self.status.emit("done" + (f" · best params {params}" if params else ""))
+
+    def _draw(self):
+        """Plot the curves of the last run: log10 of the values while the log scale is on and all are above 0."""
+        positive = all((y > 0).all() for _, _, y, _ in self._curves)
+        self._log = self.value_axis.log = self.log_btn.isChecked() and positive
+        if self.log_btn.isChecked() and not positive:
+            self.status.emit("log scale needs values above 0: showing a linear scale")
+        self.value_axis.picture = None  # re-generate the ticks
+        self.plot.clear()
+        for name, x, y, pen in self._curves:
+            self.plot.plot(x, self._ty(y), pen=pen, name=name)
+
+    def _ty(self, values):
+        """Value -> the plot's view y: log10(value) on the log scale."""
+        if not self._log:
+            return values
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return np.log10(values)
+
+    def _log_toggled(self, on):
+        if self.settings:
+            self.settings.set("backtest.log", on)
+        x_range = self.plot.getPlotItem().vb.viewRange()[0]
+        self._adjusting = True
+        try:
+            self._draw()
+            if self._curves:
+                self.plot.setXRange(*x_range, padding=0)  # same time range on the other scale
+        finally:
+            self._adjusting = False
+        self.fit_y(force=True)  # the old y-range means nothing on the other scale
 
     def reset_view(self):
         """Everything in view, still fitted while auto-fit is on (double tap, a new run)."""
@@ -646,16 +686,16 @@ class BacktestView(QWidget):
     def autofit(self) -> bool:
         return self.fit_btn.isChecked()
 
-    def fit_y(self):
-        """Fit the y-axis to the curves inside the visible time range (while auto-fit is on)."""
-        if not self.autofit:
+    def fit_y(self, force: bool = False):
+        """Fit the y-axis to the curves inside the visible time range (while auto-fit is on, or ``force``)."""
+        if not (self.autofit or force):
             return
         plot = self.plot.getPlotItem()
         x0, x1 = plot.vb.viewRange()[0]
         self._adjusting = True
         try:
             plot.enableAutoRange(y=False)  # pyqtgraph would otherwise fit y to all data
-            bounds = visible_y_range(self._x, self._fit_series, x0, x1)
+            bounds = visible_y_range(self._x, [self._ty(s) for s in self._fit_series], x0, x1)
             if bounds is not None:
                 plot.setYRange(*bounds, padding=0)
         finally:
@@ -684,7 +724,9 @@ class BacktestView(QWidget):
 
     def eventFilter(self, obj, event):
         if obj is self.plot and event.type() == QEvent.Type.Resize:
-            self.fit_btn.move(8, self.plot.height() - self.fit_btn.height() - 8)
+            bottom = self.plot.height() - self.fit_btn.height() - 8
+            self.fit_btn.move(8, bottom)
+            self.log_btn.move(8 + self.fit_btn.width() + 4, bottom)
         return super().eventFilter(obj, event)
 
     def _show_comparison(self, cmp):
