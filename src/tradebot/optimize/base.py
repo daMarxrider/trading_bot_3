@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 
 from tradebot.algorithms.base import BaseAlgorithm
-from tradebot.backtest import BacktestResult, backtest, batch_fitness, simulate
+from tradebot.backtest import BacktestResult, Baselines, backtest, baselines, batch_fitness, simulate
 from tradebot.backtest.metrics import infer_periods_per_year
 from tradebot.core import ops
 from tradebot.core.series import OHLC
@@ -50,6 +50,8 @@ class OptimizationResult:
     evaluations: int = 0
     method: str = "ga"
     extra: dict = field(default_factory=dict)
+    train_baselines: Baselines | None = None  #: buy & hold and monthly investing on the same split (#19)
+    test_baselines: Baselines | None = None
 
 
 class PopulationOptimizer(ABC):
@@ -69,8 +71,10 @@ class PopulationOptimizer(ABC):
         backend: str | Backend = "auto",
         seed: int | None = None,
         fixed: dict | None = None,
+        dca_amount: float | None = None,
     ):
         self.algorithm = algorithm
+        self.dca_amount = dca_amount  # monthly investing baseline; None = capital / months
         self.fee, self.objective = fee, objective
         self.population, self.generations = population, generations
         self.min_trades = min_trades
@@ -181,5 +185,8 @@ class PopulationOptimizer(ABC):
         tuned = self.algorithm.with_params(**best_params)
         train = backtest(self.train_df, tuned, self.fee, periods_per_year=self.ppy)
         test = backtest(self.test_df, tuned, self.fee, periods_per_year=self.ppy) if len(self.test_df) > 2 else None
+        kw = dict(fee=self.fee, amount=self.dca_amount, periods_per_year=self.ppy)
         return OptimizationResult(best_params, float(best_fitness), history, self.backend, train, test,
-                                  self.evaluations, self.method)
+                                  self.evaluations, self.method,
+                                  train_baselines=baselines(self.train_df, train, **kw),
+                                  test_baselines=baselines(self.test_df, test, **kw) if test is not None else None)

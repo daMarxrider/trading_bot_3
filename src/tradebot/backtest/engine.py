@@ -77,15 +77,28 @@ def backtest(
     """Run ``algorithm`` over the OHLC frame ``df`` and compute performance metrics."""
     if len(df) < 2:
         raise ValueError("need at least two candles to backtest")
-    positions = algorithm.run(df)
+    return from_positions(df, algorithm.run(df), algorithm.name, dict(algorithm.values), fee, initial_capital,
+                          periods_per_year)
+
+
+def from_positions(
+    df: pd.DataFrame,
+    positions: pd.Series,
+    name: str,
+    params: dict | None = None,
+    fee: float = 0.001,
+    initial_capital: float = 10_000.0,
+    periods_per_year: float | None = None,
+) -> BacktestResult:
+    """Backtest a given series of target positions (one per candle of ``df``)."""
     close = df["close"].to_numpy(dtype=float)
     returns = pd.Series(simulate(close, positions.to_numpy(), fee), index=df.index, name="returns")
     equity = initial_capital * (1 + returns).cumprod()
     ppy = periods_per_year or m.infer_periods_per_year(df.index)
     trades = m.extract_trades(positions, returns)
     return BacktestResult(
-        algorithm=algorithm.name,
-        params=dict(algorithm.values),
+        algorithm=name,
+        params=params or {},
         positions=positions,
         returns=returns,
         equity=equity.rename("equity"),

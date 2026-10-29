@@ -167,6 +167,19 @@ Charts are rendered with plotext, so they work in fish, bash and zsh.
 remaining 30 % out-of-sample. Candidates with fewer than `--min-trades` round
 trips are rejected.
 
+**Baselines.** `backtest` and `optimize` (in- and out-of-sample) show the strategy
+next to two things it has to beat, on the same candles and with the same fee:
+- *buy & hold*: everything invested on the first candle and held.
+- *monthly investing*: a fixed amount on the first candle of every month, each
+  purchase paying the fee. `--dca-amount` sets the amount; by default the capital
+  is split evenly over the months.
+
+Money that goes in gradually makes total return and CAGR misleading, so every
+column also shows the money-weighted return (`xirr`), and the strategy column
+shows its lead over each baseline by XIRR (`vs buy & hold`, `vs monthly
+investing`). When the strategy doesn't beat a baseline (out-of-sample, for
+`optimize`), the output says so in red.
+
 **GA, PSO, or both.** `--method` chooses the search:
 - `ga`: genetic algorithm, the default.
 - `pso`: particle swarm.
@@ -218,7 +231,8 @@ of sample. The GUI's Backtest lab offers the same options.
 * **Screener**: filter any universe by technicals, volume and market cap using
   expressions or presets. Double-click a row to open it in the chart.
 * **Backtest lab**: parameter forms generated from each algorithm, equity vs.
-  buy & hold, metrics, and the GA optimizer with live progress.
+  buy & hold and monthly investing, metrics with both baselines, and the GA
+  optimizer with live progress.
 * **Portfolio & dividends**: total equity, allocation donuts, and per-holding
   and total current dividend yield, trailing annual yield and yield on cost.
 * **News**: headlines for watchlist and portfolio symbols, auto-refreshed
