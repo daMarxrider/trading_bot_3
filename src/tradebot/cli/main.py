@@ -30,8 +30,9 @@ console = Console()
 
 Params = Annotated[list[str], typer.Option("--param", "-p", help="Algorithm parameter, e.g. -p lower=30",
                                            autocompletion=complete.algorithm_params)]
-Members = Annotated[Optional[str], typer.Option(help="Comma-separated members for the 'vote' ensemble",
-                                                autocompletion=complete.members)]
+Members = Annotated[Optional[str], typer.Option(
+    help="Comma-separated members for the 'vote' ensemble, or for the 'pool' (strategies and indicators)",
+    autocompletion=complete.members)]
 TF = Annotated[str, typer.Option("--tf", help="Timeframe: 1m 5m 15m 30m 1h 4h 1d 1w", autocompletion=complete.timeframes)]
 Symbol = Annotated[str, typer.Argument(help="e.g. AAPL, SAP.DE, BTC/USDT", autocompletion=complete.symbols)]
 Algo = Annotated[str, typer.Argument(help="Algorithm name (tradebot list)", autocompletion=complete.algorithms)]
@@ -92,7 +93,10 @@ def load_data(symbol: str, tf: str, start: str | None, end: str | None, bars: in
 
 
 def make_algo(name: str, params: list[str], members: str | None):
-    return build_algorithm(name, parse_kv(params), members.split(",") if members else None)
+    try:
+        return build_algorithm(name, parse_kv(params), members.split(",") if members else None)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
 
 
 def results_table(title: str, columns: dict[str, dict]) -> Table:
@@ -194,12 +198,19 @@ def backtest(
 @app.command()
 def optimize(
     symbol: Symbol,
-    algo: Algo,
+    algo: Annotated[Optional[str], typer.Argument(
+        help="Algorithm name (tradebot list); leave it out to let the optimizer pick from all of them (see --pool)",
+        autocompletion=complete.algorithms)] = None,
     tf: TF = "1d",
     start: Optional[str] = None,
     end: Optional[str] = None,
     bars: Annotated[int, typer.Option(help="Number of candles (ignored with --start)")] = 2000,
     members: Members = None,
+    pool: Annotated[Optional[str], typer.Option(
+        help="Comma-separated strategies and indicators the optimizer picks from (default: all)",
+        autocompletion=complete.pool_members)] = None,
+    min_members: Annotated[int, typer.Option(help="Use at least this many pool members")] = 1,
+    max_members: Annotated[Optional[int], typer.Option(help="Use at most this many pool members")] = None,
     fix: Annotated[list[str], typer.Option(help="Keep a parameter fixed, e.g. --fix period=14",
                                            autocompletion=complete.algorithm_params)] = [],
     method: Annotated[str, typer.Option(help="ga | pso | both (run both and compare them)", autocompletion=complete.choices(
@@ -218,14 +229,23 @@ def optimize(
 ):
     """Optimize algorithm parameters with a genetic algorithm and/or particle swarm (GPU accelerated
     when available) and report out-of-sample results. ``--method both`` also measures how much the two
-    methods disagree - large disagreement means a fragile optimum."""
+    methods disagree - large disagreement means a fragile optimum.
+
+    Without an algorithm, the optimizer also picks *which* strategies vote and which indicators filter
+    the entries, from all of them or from ``--pool``."""
     from rich.progress import Progress
 
     from tradebot.optimize import OPTIMIZERS, run_comparison, select_backend
 
     if method not in (*OPTIMIZERS, "both"):
         raise typer.BadParameter("method must be ga, pso or both")
-    algorithm = make_algo(algo, [], members)
+    if algo in (None, "pool"):
+        algorithm = _make_pool(pool or members, min_members, max_members)
+        algo = "pool"
+    elif pool or min_members != 1 or max_members is not None:
+        raise typer.BadParameter("--pool, --min-members and --max-members need the pool: leave out the algorithm")
+    else:
+        algorithm = make_algo(algo, [], members)
     df = load_data(symbol, tf, start, end, bars)
     if backend == "auto" and not algorithm.vectorized:
         backend = "numpy"  # loop-based algorithms (e.g. elliott_wave) run on the CPU anyway
@@ -250,27 +270,79 @@ def optimize(
         else:
             res = OPTIMIZERS[method](algorithm, df, **kwargs).run(report)
     if method == "both":
-        _print_comparison(cmp, symbol, algo)
+        _print_comparison(cmp, symbol, algorithm)
         return
+    if hasattr(algorithm, "selected"):
+        _print_members(algorithm, {method.upper(): res.best_params})
     t = Table(title=f"best parameters ({method.upper()})")
     t.add_column("param")
     t.add_column("value")
-    for k, v in res.best_params.items():
+    for k, v in _reused(algorithm, res.best_params).items():
         t.add_row(k, f"{v:g}")
     console.print(t)
     console.print(results_table("in-sample", res.train_baselines.columns("strategy", res.train)))
     if res.test is not None:
         console.print(results_table("out-of-sample", res.test_baselines.columns("strategy", res.test)))
     warn_not_beaten(res.test_baselines, "Out-of-sample")
-    flags = " ".join(f"-p {k}={v:g}" for k, v in res.best_params.items())
-    console.print(f"{res.evaluations} evaluations · reuse with: [cyan]tradebot backtest {symbol} {algo} {flags}[/]")
+    console.print(f"{res.evaluations} evaluations · reuse with: [cyan]{_reuse_command(symbol, algorithm, res.best_params)}[/]")
 
 
-def _print_comparison(cmp, symbol: str, algo: str) -> None:
+def _make_pool(names: str | None, min_members: int, max_members: int | None):
+    from tradebot.algorithms.pool import PoolEnsemble, default_pool
+
+    if not names:
+        names, skipped = default_pool()
+        if skipped:
+            console.print(f"[dim]left out of the pool (no default rule): {', '.join(skipped)}[/]")
+    try:
+        algorithm = PoolEnsemble(names.split(",") if isinstance(names, str) else names,
+                                 min_members=min_members, max_members=max_members)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+    console.print(f"pool: {', '.join(m.name for m in algorithm.members)}"
+                  + (f" · filters: {', '.join(m.name for m in algorithm.filters)}" if algorithm.filters else ""))
+    return algorithm
+
+
+def _reused(algorithm, params: dict) -> dict:
+    """The parameters worth showing and reusing (for a pool: those of the selected members)."""
+    return algorithm.reuse_params(params) if hasattr(algorithm, "reuse_params") else params
+
+
+def _reuse_command(symbol: str, algorithm, params: dict) -> str:
+    flags = " ".join(f"-p {k}={v:g}" for k, v in _reused(algorithm, params).items())
+    members = f" --members {','.join(algorithm.selected(params))}" if hasattr(algorithm, "selected") else ""
+    return f"tradebot backtest {symbol} {algorithm.name}{members} {flags}"
+
+
+def _print_members(algorithm, results: dict[str, dict]) -> None:
+    """Which pool members each method selected; with two methods, whether they agree (#21)."""
+    t = Table(title="pool members")
+    t.add_column("member")
+    t.add_column("kind")
+    for name in results:
+        t.add_column(name, justify="center")
+    if len(results) > 1:
+        t.add_column("agree", justify="center")
+    chosen = [set(algorithm.selected(p)) for p in results.values()]
+    for m in algorithm.pool:
+        used = [m.name in c for c in chosen]
+        row = ["[green]used[/]" if u else "[dim]dropped[/]" for u in used]
+        if len(results) > 1:
+            row.append("[green]yes[/]" if len(set(used)) == 1 else "[red]no[/]")
+        t.add_row(m.name, "filter" if m in algorithm.filters else "strategy", *row)
+    console.print(t)
+
+
+def _print_comparison(cmp, symbol: str, algorithm) -> None:
+    if hasattr(algorithm, "selected"):
+        _print_members(algorithm, {"GA": cmp.ga.best_params, "PSO": cmp.pso.best_params})
     t = Table(title="GA vs PSO: parameters")
     for col in ("param", "GA", "PSO", "difference (% of range)"):
         t.add_column(col, justify="left" if col == "param" else "right")
     for k, d in cmp.param_diff.items():
+        if k.startswith("use."):  # shown in the members table
+            continue
         color = "green" if d <= 0.10 else "yellow" if d <= 0.25 else "red"
         t.add_row(k, f"{cmp.ga.best_params[k]:g}", f"{cmp.pso.best_params[k]:g}", f"[{color}]{d:.0%}[/]")
     console.print(t)
@@ -292,8 +364,8 @@ def _print_comparison(cmp, symbol: str, algo: str) -> None:
                   f"in-sample {cmp.objective} gap {cmp.fitness_gap:.1%}")
     console.print(f"verdict: [bold {color}]{cmp.verdict.upper()}[/] - {cmp.explanation()}")
     best = cmp.better
-    flags = " ".join(f"-p {k}={v:g}" for k, v in best.best_params.items())
-    console.print(f"better in-sample: {best.method.upper()} · reuse with: [cyan]tradebot backtest {symbol} {algo} {flags}[/]")
+    console.print(f"better in-sample: {best.method.upper()} · reuse with: "
+                  f"[cyan]{_reuse_command(symbol, algorithm, best.best_params)}[/]")
 
 
 @bot_app.command("run")

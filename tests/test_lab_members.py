@@ -46,7 +46,7 @@ def test_shown_only_for_the_vote(lab):
 
 
 def test_every_algorithm_but_the_vote_itself(lab):
-    assert list(lab.members.boxes) == [n for n in ALGORITHMS.names() if n != "vote"]
+    assert list(lab.members.boxes) == [n for n in ALGORITHMS.names() if n not in ("vote", "pool")]
 
 
 def test_default_members_unchanged(lab):

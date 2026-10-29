@@ -56,6 +56,8 @@ class BaseAlgorithm(ABC):
     #: False for loop-based algorithms that cannot take ``[population, 1]`` parameter arrays;
     #: the optimizer then evaluates candidates one by one on the CPU.
     vectorized: ClassVar[bool] = True
+    #: False keeps it out of the optimizer's automatic member selection (the ``pool``), e.g. for composites.
+    poolable: ClassVar[bool] = True
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
