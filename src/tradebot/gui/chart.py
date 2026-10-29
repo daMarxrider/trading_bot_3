@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QWidgetAction,
 )
 
-from tradebot.algorithms import ALGORITHMS, build_algorithm
+from tradebot.algorithms import ALGORITHMS, algorithm_names, build_algorithm
 from tradebot.config import Settings
 from tradebot.core.timeframes import TIMEFRAMES
 from tradebot.gui.common import (
@@ -343,7 +343,7 @@ class ChartView(QWidget):
 
         self.algo_box = QComboBox()
         self.algo_box.addItem("No signals")
-        self.algo_box.addItems(ALGORITHMS.names())
+        self.algo_box.addItems(algorithm_names())
         self.algo_box.currentTextChanged.connect(self._choose_algorithm)
 
         self.tools: dict[str, QToolButton] = {}

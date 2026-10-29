@@ -94,3 +94,9 @@ def test_optimize_pool_shows_selection(lab, monkeypatch):
     lab.run_optimizer()
     lab._show(results["payload"])
     assert lab.selection_card.isVisible() and "Selection" in lab.selection.text()
+
+
+def test_ensembles_at_the_bottom_of_the_dropdown(lab):
+    names = [lab.algo.itemText(i) for i in range(lab.algo.count())]
+    assert names[-2:] == ["pool", "vote"]
+    assert names[:-2] == sorted(names[:-2])

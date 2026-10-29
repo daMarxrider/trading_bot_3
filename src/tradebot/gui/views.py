@@ -34,7 +34,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from tradebot.algorithms import ALGORITHMS, build_algorithm
+from tradebot.algorithms import ALGORITHMS, algorithm_names, build_algorithm
 from tradebot.algorithms.builtin import VotingEnsemble
 from tradebot.algorithms.pool import RULES, PoolEnsemble, default_pool
 from tradebot.backtest.baselines import BUY_HOLD, MONTHLY, baselines, buy_and_hold, monthly_investing
@@ -485,7 +485,7 @@ class BacktestView(QWidget):
         self.dca_amount.setDecimals(2)
         self.dca_amount.setSpecialValueText("auto")
         self.algo = QComboBox()
-        self.algo.addItems(ALGORITHMS.names())
+        self.algo.addItems(algorithm_names())
         self.algo.currentTextChanged.connect(self._algo_changed)
         self.params = ParamForm({})
         self.members = MemberPicker()
