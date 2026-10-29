@@ -63,6 +63,12 @@ def _private_cache_dir(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _private_config(tmp_path_factory, monkeypatch):
+    """Each test gets its own (missing) config.toml, never the user's: the chart's watchlists write to it (#67)."""
+    monkeypatch.setenv("TRADEBOT_CONFIG", str(tmp_path_factory.mktemp("config") / "config.toml"))
+
+
+@pytest.fixture(autouse=True)
 def _no_warm_up(monkeypatch):
     """The GUI preloads the watchlist from the network after startup (#63); tests stay offline."""
     try:

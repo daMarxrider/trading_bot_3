@@ -447,19 +447,20 @@ def portfolio(broker: Annotated[list[str], typer.Option(help="Broker(s) to aggre
 
 @app.command()
 def screen(
-    symbols: Annotated[Optional[list[str]], typer.Argument(help="Defaults to the configured watchlist",
+    symbols: Annotated[Optional[list[str]], typer.Argument(help="Defaults to the watchlists",
                                                            autocompletion=complete.symbols)] = None,
     filter: Annotated[list[str], typer.Option("--filter", "-f", help='e.g. -f "rsi < 30" -f "close > sma200"')] = [],
     sort: str = "change_1d",
+    watchlist: Annotated[Optional[str], typer.Option("--watchlist", "-w", help=WATCHLIST_HELP)] = None,
 ):
     """Screen symbols by technicals, volume and market cap."""
-    from tradebot.config import watchlist
     from tradebot.data import MarketDataEngine
     from tradebot.screener import run_screen
 
+    symbols = symbols or _watchlist(watchlist)
     engine = MarketDataEngine()
     with console.status("screening ..."):
-        table = run_screen(symbols or watchlist(), lambda s: engine.get_ohlc(s, "1d", start=pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=420)), filter)
+        table = run_screen(symbols, lambda s: engine.get_ohlc(s, "1d", start=pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=420)), filter)
     table = table.sort_values(sort, ascending=False)
     t = Table(title=f"screener ({len(table)} matches)")
     for c in table.columns:
@@ -467,6 +468,18 @@ def screen(
     for _, row in table.iterrows():
         t.add_row(*[_fmt_cell(c, row[c]) for c in table.columns])
     console.print(t)
+
+
+WATCHLIST_HELP = "Without symbols: only this watchlist's (default: all watchlists)"
+
+
+def _watchlist(name: str | None) -> list[str]:
+    from tradebot.config import watchlist
+
+    try:
+        return watchlist(name)
+    except KeyError as e:
+        raise typer.BadParameter(e.args[0], param_hint="--watchlist") from None
 
 
 def _fmt_cell(col, v):
@@ -483,13 +496,14 @@ def _fmt_cell(col, v):
 
 
 @app.command()
-def news(symbols: Annotated[Optional[list[str]], typer.Argument(autocompletion=complete.symbols)] = None, limit: int = 25):
-    """Latest headlines for symbols (defaults to the watchlist)."""
-    from tradebot.config import watchlist
+def news(symbols: Annotated[Optional[list[str]], typer.Argument(autocompletion=complete.symbols)] = None, limit: int = 25,
+         watchlist: Annotated[Optional[str], typer.Option("--watchlist", "-w", help=WATCHLIST_HELP)] = None):
+    """Latest headlines for symbols (defaults to the watchlists)."""
     from tradebot.news import fetch_news
 
+    symbols = symbols or _watchlist(watchlist)
     with console.status("fetching news ..."):
-        items = fetch_news(symbols or watchlist(), limit)
+        items = fetch_news(symbols, limit)
     for n in items:
         console.print(f"[dim]{n.published:%Y-%m-%d %H:%M}[/] [cyan]{n.symbol:>9}[/] [bold]{n.title}[/] "
                       f"[dim]({n.publisher})[/]\n           [link={n.url}]{n.url}[/link]")

@@ -52,11 +52,12 @@ class MainWindow(QMainWindow):
         self.portfolio_symbols: list[str] = []
 
         # own symbols first, then crypto pairs and Yahoo, from the disk cache when they can (#63)
-        search = disk_symbol_search(lambda: symbols + self.portfolio_symbols,
+        search = disk_symbol_search(lambda: self.chart.watchlists.all_symbols() + self.portfolio_symbols,
                                     engine.disk.symbols_dir if engine.disk else None, yahoo=yahoo_search)
         self.chart = ChartView(engine, themes, symbols, settings, search)
         self.screener = ScreenerView(engine, themes, symbols)
-        self.news = NewsView(themes, lambda: list(dict.fromkeys(symbols + self.portfolio_symbols)))
+        self.news = NewsView(themes, lambda: list(dict.fromkeys(self.chart.watchlists.all_symbols()
+                                                                + self.portfolio_symbols)))
         self.portfolio = PortfolioView(engine, themes)
         self.lab = BacktestView(engine, themes, symbols, search, settings)
         pages = [("Chart", "📈", self.chart), ("Screener", "🔎", self.screener), ("Backtest", "🧪", self.lab),

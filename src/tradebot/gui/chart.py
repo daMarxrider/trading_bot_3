@@ -44,6 +44,7 @@ from tradebot.gui.params import ParamDialog
 from tradebot.gui.sidebar import ChartSidebar
 from tradebot.gui.theme import Theme, ThemeManager, qcolor, resolve_color
 from tradebot.gui.touch import PlotTouchHandler, TouchController
+from tradebot.gui.watchlists import WatchlistPanel
 from tradebot.indicators import INDICATORS, Style
 from tradebot.loadouts import LoadoutStore, capture, restore
 from tradebot.symbols import SymbolSearch, symbol_name
@@ -405,10 +406,14 @@ class ChartView(QWidget):
         self.log_btn.toggled.connect(self._log_toggled)
         self.canvas.installEventFilter(self)  # keeps the button in the bottom-left corner
 
-        # -- sidebar at the right (#41): news for the charted symbol, more categories to come ----------
+        # -- sidebar at the right (#41): news for the charted symbol, the watchlists (#67) ----------------
         self.sidebar = ChartSidebar(settings, touch=themes.touch)
         self.news = NewsPanel(themes)
         self.sidebar.add_category("news", "📰", "News", self.news)
+        self.watchlists = WatchlistPanel(engine, themes, settings, symbol_search)
+        self.watchlists.open_symbol.connect(self.open_symbol)
+        self.watchlists.status.connect(self.status)
+        self.sidebar.add_category("watchlists", "⭐", "Watchlists", self.watchlists)
         self.sidebar.shown.connect(self._sidebar_shown)
         self.sidebar.toggle.clicked.connect(self._sidebar_toggled)
 
@@ -456,6 +461,7 @@ class ChartView(QWidget):
         self._title = f"{symbol} · {tf}"  # the ticker until the full name arrives
         self._hover = None
         self.news.set_symbol(symbol)
+        self.watchlists.set_symbol(symbol)
         run_async(lambda: symbol_name(symbol), lambda name: self._named(symbol, tf, name))
         self.status.emit(f"{symbol}: {len(df)} candles {df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d %H:%M}{note}")
         self.redraw(autorange=not refresh)
@@ -470,10 +476,12 @@ class ChartView(QWidget):
     # -- sidebar ---------------------------------------------------------------------------------
     def _sidebar_shown(self, key: str):
         self.news.set_visible(key == "news")
+        self.watchlists.set_visible(key == "watchlists")
 
     def _sidebar_toggled(self):
         if not self.sidebar.is_open:
             self.news.set_visible(False)  # collapsed: no fetching in the background
+            self.watchlists.set_visible(False)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -483,6 +491,7 @@ class ChartView(QWidget):
     def hideEvent(self, event):
         super().hideEvent(event)
         self.news.set_visible(False)  # another page of the app is open
+        self.watchlists.set_visible(False)
 
     # -- indicators & algorithms -----------------------------------------------------------------
     def _fill_indicator_menu(self):
@@ -944,6 +953,10 @@ class ChartView(QWidget):
                 menu.addAction(f"Draw {btn.text().split(' ', 1)[-1].lower()}", lambda k=key: self.tools[k].setChecked(True))
         if self.drawings:
             menu.addAction("Clear drawings", self.clear_drawings)
+        if self._loaded_symbol:
+            lists = menu.addMenu("Add to watchlist")
+            for name in self.watchlists.lists:
+                lists.addAction(name, lambda n=name, s=self._loaded_symbol: self.watchlists.add_symbol(s, n))
         menu.addSeparator()
         menu.addAction("Line chart" if not self.style_btn.isChecked() else "Candles", self.style_btn.toggle)
         menu.popup(global_pos)
