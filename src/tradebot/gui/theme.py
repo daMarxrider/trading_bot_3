@@ -88,6 +88,7 @@ QPushButton#Nav:checked {{ background: {selection}; color: {text}; font-weight: 
 QToolButton {{ background: {input_bg}; border: 1px solid {panel_border}; border-radius: {radius_sm}px; padding: 5px 9px; }}
 QToolButton:checked {{ background: {accent}; color: #ffffff; }}
 QToolButton::menu-indicator {{ image: none; }}
+QToolButton#ChartCorner {{ padding: 0; }}
 QLineEdit, QComboBox, QAbstractSpinBox, QPlainTextEdit {{
     background: {input_bg}; border: 1px solid {panel_border}; border-radius: {radius_sm}px; padding: 5px 8px;
     selection-background-color: {selection};
