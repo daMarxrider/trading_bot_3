@@ -7,6 +7,28 @@ app, and a terminal CLI.
 
 Licensed under the **GNU GPL v3.0 or later** (see `LICENSE`).
 
+## Disclaimer
+
+**Not affiliated.** tradebot is independent software. It is not affiliated with, endorsed, sponsored or
+approved by any broker, exchange or data provider it supports, such as Binance, KuCoin, Pionex,
+Scalable Capital, Trade Republic or Yahoo. Their names and trademarks belong to their owners. tradebot
+uses them only to say which services it works with.
+
+**No warranty, no liability.** tradebot is provided "as is", without any warranty (GNU GPL v3, sections 15
+and 16). It is not financial advice, and backtest or optimizer results don't predict future returns. You
+use it at your own risk. To the extent permitted by law, the author is not liable for any loss. That
+includes losses from bugs, wrong signals, failed, delayed, duplicated or wrongly sized orders, broker
+or API outages, wrong market data, or misconfiguration. You are responsible for your accounts and API keys
+and for checking every order. Run a strategy as a dry run, and on a testnet (`--sandbox`), before you use
+`--live`.
+
+The first `tradebot bot run ... --live` shows this notice and asks you to accept it. Your answer is saved
+as `live_risk_accepted = "<date>"` in `config.toml`, so it asks only once. `tradebot --version` and the
+desktop app's **About** button show the disclaimer too.
+
+Market data comes from third-party services under their own terms; Yahoo Finance data, for example, is
+meant for personal use. Check each broker's API terms before automating trades with it.
+
 ## Install
 
 ```sh
@@ -18,12 +40,21 @@ uv run tradebot gui
 Extras: `gui` (PyQt6, pyqtgraph), `gpu` (PyTorch), `traderepublic` (pytr).
 The core (CLI, backtests, CPU optimizer) needs none of them.
 
+**Third-party tools are not included.** tradebot works with some external tools but never ships them,
+neither in the package nor in the binaries. To use one, install it yourself; its own licence and terms
+apply:
+
+| Tool | Needed for | Get it |
+|---|---|---|
+| `pytr` | Trade Republic login | `uv sync --extra traderepublic` (source install only; the binaries don't contain it) |
+
 ## Download / run the binary
 
 Every release on the [Releases page](https://github.com/daMarxrider/trading_bot_3/releases)
 has standalone builds for Linux, Windows and macOS that need no Python. One binary is both the CLI and the
 desktop app (`tradebot gui`). The builds are CPU-only (no `gpu` extra) and
-**unsigned**. Each archive has a `.sha256` checksum next to it.
+**unsigned**. Each archive has a `.sha256` checksum next to it, and contains `LICENSE` plus
+`THIRD_PARTY_NOTICES.txt`, the licences of all bundled libraries.
 
 **Linux (x86_64).** Built on Ubuntu 22.04, so it runs on that and newer
 distributions (glibc 2.35+).
@@ -371,6 +402,11 @@ For venues without an API, subclass `ManualExecutionBroker` or
 ```sh
 uv run pytest
 ```
+
+Don't add third-party tools or broker assets to the repo or the binaries. Integrations call a tool the
+user installed (found on `PATH` or via a configured path) and fail with a clear message and a download
+link if it's missing. Add a row for the tool to the table under *Install*. Broker names appear only as
+plain text, never as logos.
 
 The tests cover indicator accuracy against pandas reference implementations,
 backtest math on hand-checked series, NumPy/torch-CPU/CUDA parity of batched

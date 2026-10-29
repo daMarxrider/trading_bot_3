@@ -5,6 +5,6 @@
 Importing the package registers all built-in indicators, algorithms and brokers.
 """
 
-__version__ = "0.1.0"
+__version__ = "1.1.0"
 
 from tradebot import algorithms, brokers, indicators  # noqa: E402,F401  (populate registries)
