@@ -185,3 +185,15 @@ def test_narrow_range_uses_linear_steps(axis):
 
 def test_price_label():
     assert [price_label(p) for p in (100_000, 1000, 250, 0.05, 1.5)] == ["100,000", "1,000", "250", "0.05", "1.5"]
+
+
+@pytest.mark.parametrize("touch", [False, True])
+def test_log_and_autofit_buttons_are_the_same_square(app, tmp_path, touch):
+    themes = ThemeManager(user_dir=tmp_path, touch=touch)
+    themes.apply("glass")
+    c = ChartView(None, themes, ["TEST"])
+    c.resize(800, 600)
+    c.show()
+    QApplication.processEvents()
+    side = 40 if touch else 28
+    assert c.fit_btn.size() == c.log_btn.size() and (c.log_btn.width(), c.log_btn.height()) == (side, side)

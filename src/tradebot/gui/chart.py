@@ -267,14 +267,16 @@ class ChartView(QWidget):
         self.canvas.scene().sigMouseClicked.connect(self._mouse_clicked)
         self.price.vb.sigRangeChanged.connect(self._range_changed)
 
-        self.fit_btn = QToolButton(self.canvas, text="↕", checkable=True, toolTip="Auto-fit price axis to visible candles")
+        # the chart-corner buttons: no padding or min-height from the theme, so both are exactly `size` square
+        self.fit_btn = QToolButton(self.canvas, text="↕", checkable=True, toolTip="Auto-fit price axis to visible candles",
+                                   objectName="ChartCorner")
         # on by default (a checked= keyword is applied before checkable and lost)
         self.fit_btn.setChecked(bool(settings.get("chart.autofit", True)) if settings else True)
         size = 40 if themes.touch else 28  # finger-sized in touch mode
         self.fit_btn.setFixedSize(size, size)
         self.fit_btn.toggled.connect(self._autofit_toggled)
         self.log_btn = QToolButton(self.canvas, text="log", checkable=True, toolTip="Logarithmic price scale",
-                                   objectName="ChartCorner")  # no padding: "log" fits the small square
+                                   objectName="ChartCorner")
         self.log_btn.setChecked(bool(settings.get("chart.log", False)) if settings else False)
         self.log_btn.setFixedSize(size, size)
         self.log_btn.toggled.connect(self._log_toggled)
