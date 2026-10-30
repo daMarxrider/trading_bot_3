@@ -117,6 +117,13 @@ def timeframes(incomplete: str) -> Completion:
     return _starting(incomplete, [(tf, "") for tf in TIMEFRAMES])
 
 
+def watchlists(incomplete: str) -> Completion:
+    """``--watchlist`` for optimize: the list names, and ``all`` for every list."""
+    from tradebot.config import watchlists as lists
+
+    return _starting(incomplete, [(n, f"{len(s)} symbols") for n, s in lists().items()] + [("all", "every watchlist")])
+
+
 def choices(*items: tuple[str, str]):
     """Completion for a fixed set of values, e.g. ``--method``."""
     return lambda incomplete: _starting(incomplete, list(items))

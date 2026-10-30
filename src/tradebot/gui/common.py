@@ -303,7 +303,8 @@ class SymbolCompleter(QObject):
     """Autocompletion for a symbol field: local matches while typing, network matches after a pause.
 
     The popup lists ``symbol — name · exchange · type``; choosing a row inserts the plain
-    symbol and emits :attr:`chosen`.
+    symbol and emits :attr:`chosen`. With ``multi`` the field holds comma-separated symbols:
+    only the last one is searched for and replaced.
     """
 
     chosen = pyqtSignal(str)
@@ -311,9 +312,9 @@ class SymbolCompleter(QObject):
     DEBOUNCE_MS = 250
     MIN_REMOTE_CHARS = 2
 
-    def __init__(self, edit: QLineEdit, search: SymbolSearch):
+    def __init__(self, edit: QLineEdit, search: SymbolSearch, multi: bool = False):
         super().__init__(edit)
-        self.edit, self.search = edit, search
+        self.edit, self.search, self.multi = edit, search, multi
         self.model = QStandardItemModel(self)
         self.completer = QCompleter(self.model, self)
         # the search already filters and ranks, so show the rows as they are
@@ -322,13 +323,22 @@ class SymbolCompleter(QObject):
         self.completer.popup().setObjectName("SymbolPopup")
         self.completer.popup().setMinimumWidth(440)
         self.completer.activated[str].connect(self._chosen)
-        edit.setCompleter(self.completer)
+        if multi:
+            self.completer.setWidget(edit)  # not setCompleter: that would replace the whole text on a choice
+        else:
+            edit.setCompleter(self.completer)
         self._timer = QTimer(self, singleShot=True, interval=self.DEBOUNCE_MS, timeout=self._search_remote)
         self._pending: str | None = None  # query of the network search whose results are still wanted
         edit.textEdited.connect(self._edited)
         edit.editingFinished.connect(self._cancel)  # Enter or leaving the field: no late popup
 
-    def _edited(self, text: str):
+    def _query(self) -> str:
+        """What is searched for: the field's text, or with ``multi`` the symbol after the last comma."""
+        text = self.edit.text()
+        return text.rpartition(",")[2].strip() if self.multi else text
+
+    def _edited(self, _text: str):
+        text = self._query()
         self._show(self.search.local(text))  # instant and offline
         if len(text.strip()) >= self.MIN_REMOTE_CHARS:
             self._timer.start()  # restarts while typing: one network search per pause
@@ -336,11 +346,11 @@ class SymbolCompleter(QObject):
             self._timer.stop()
 
     def _search_remote(self):
-        query = self._pending = self.edit.text()
+        query = self._pending = self._query()
         run_async(lambda: self.search.search(query), lambda found: self._remote_done(query, found))
 
     def _remote_done(self, query: str, found):
-        if query == self._pending == self.edit.text():  # drop results for text already changed or done
+        if query == self._pending == self._query():  # drop results for text already changed or done
             self._show(found)
 
     def _cancel(self):
@@ -349,7 +359,11 @@ class SymbolCompleter(QObject):
 
     def _chosen(self, symbol: str):
         self._cancel()
-        self.edit.setText(symbol)  # this slot runs before QLineEdit's own one, so the field still holds the query
+        if self.multi:
+            head = self.edit.text().rpartition(",")[0].strip()
+            self.edit.setText(f"{head}, {symbol}" if head else symbol)
+        else:
+            self.edit.setText(symbol)  # this slot runs before QLineEdit's own one, so the field still holds the query
         self.chosen.emit(symbol)
 
     def _show(self, matches):

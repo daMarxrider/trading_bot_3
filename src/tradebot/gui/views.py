@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import re
 
 import numpy as np
 import pandas as pd
@@ -23,6 +24,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QMenu,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
@@ -39,10 +41,10 @@ from tradebot.algorithms.builtin import VotingEnsemble
 from tradebot.algorithms.pool import RULES, PoolEnsemble, default_pool
 from tradebot.backtest.baselines import BUY_HOLD, MONTHLY, baselines, buy_and_hold, monthly_investing
 from tradebot.backtest.metrics import fmt
-from tradebot.config import Settings
+from tradebot.config import Settings, watchlists
 from tradebot.brokers import BROKERS, create_broker
 from tradebot.core.timeframes import TIMEFRAMES
-from tradebot.glossary import METHODS, OBJECTIVES, STRATEGIES, explain
+from tradebot.glossary import AGGREGATES, METHODS, OBJECTIVES, STRATEGIES, explain
 from tradebot.gui.common import (
     DataFrameModel,
     DateRange,
@@ -82,7 +84,9 @@ def _explain_choices(combo: QComboBox, intro: str, texts: dict):
 
 
 def _explained_row(form: QFormLayout, label: str, widget: QWidget, term: str):
-    """A form row whose label and field both explain ``term`` on hover."""
+    """A form row whose label and field both explain ``term`` on hover. A field too wide to sit next to its
+    label goes below it, so the lab's fixed-width side panel never scrolls sideways."""
+    form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
     form.addRow(label, widget)
     text = tooltip(explain(term))
     form.labelForField(widget).setToolTip(text)
@@ -459,16 +463,29 @@ class BacktestView(QWidget):
     generation = pyqtSignal(int, float)  # emitted from the worker thread, delivered queued
 
     def __init__(self, engine, themes: ThemeManager, watchlist: list[str], symbol_search: SymbolSearch | None = None,
-                 settings: Settings | None = None):
+                 settings: Settings | None = None, watchlists_fn=None):
         super().__init__()
         self.engine, self.themes, self.settings = engine, themes, settings
+        self.watchlists_fn = watchlists_fn or watchlists  #: name -> symbols, for the list button (#84)
+        self._symbol_payloads: dict = {}  # symbol -> its (df, results) after a multi-symbol run
+        self._shown_symbol = ""
         self._x = np.empty(0)
         self._fit_series: list = []  # the plotted curves on self._x (NaN where a curve has no value), for auto-fit
         self._curves: list = []  # (name, x, values, pen) of the last run, redrawn when the scale changes
         self._log = False  # the plot's view y is log10(value) (#76)
         self._adjusting = False  # set while the lab changes the view range itself, as opposed to the user
-        self.symbol = QLineEdit(watchlist[0] if watchlist else "BTC/USDT")
-        self.symbols = SymbolCompleter(self.symbol, symbol_search or SymbolSearch(lambda: watchlist))
+        self.symbol = QLineEdit(watchlist[0] if watchlist else "BTC/USDT", placeholderText="AAPL, MSFT, BTC/USDT …")
+        self.symbols = SymbolCompleter(self.symbol, symbol_search or SymbolSearch(lambda: watchlist), multi=True)
+        self.lists_btn = QToolButton(text="☰", toolTip="Use a watchlist's symbols, or those of all watchlists")
+        self.lists_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.lists_menu = QMenu(self.lists_btn)
+        self.lists_menu.aboutToShow.connect(self._fill_lists_menu)
+        self.lists_btn.setMenu(self.lists_menu)
+        symbol_row = QWidget()
+        row = QHBoxLayout(symbol_row)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(self.symbol, 1)
+        row.addWidget(self.lists_btn)
         self.tf = QComboBox()
         self.tf.addItems(list(TIMEFRAMES))
         self.tf.setCurrentText("1d")
@@ -506,6 +523,24 @@ class BacktestView(QWidget):
         self.generations.setValue(20)
         self.objective = QComboBox()
         self.objective.addItems(["sharpe", "calmar", "return"])
+        self.aggregate = QComboBox()  # several symbols (#84)
+        self.aggregate.addItems(list(AGGREGATES))
+        _explain_choices(self.aggregate, explain("aggregate"), AGGREGATES)
+        self.align = QCheckBox("Common date range only")
+        self.min_beating = QSpinBox()  # 0 = off
+        self.min_beating.setRange(0, 1000)
+        self.min_beating.setSpecialValueText("off")
+        self.min_beating.setSuffix(" symbols")
+        self.samples = QSpinBox()  # random windows per symbol and generation; 0 = off
+        self.samples.setRange(0, 1000)
+        self.samples.setSpecialValueText("off (all candles)")
+        self.samples.setSuffix(" per symbol")
+        self.sample_length = QSpinBox()
+        self.sample_length.setRange(20, 20000)
+        self.sample_length.setValue(250)
+        self.sample_length.setSuffix(" candles")
+        self.samples.valueChanged.connect(lambda n: self.sample_length.setEnabled(n > 0))
+        self.sample_length.setEnabled(False)
         self.method = QComboBox()
         for label, key in (("Genetic algorithm (GA)", "ga"), ("Particle swarm (PSO)", "pso"),
                            ("Both + compare", "both")):
@@ -520,14 +555,14 @@ class BacktestView(QWidget):
         opt = QPushButton("Optimize")
         opt.clicked.connect(self.run_optimizer)
         chart = QPushButton("Show on chart")
-        chart.clicked.connect(lambda: self.show_on_chart.emit(self.symbol.text(), self._algorithm()))
+        chart.clicked.connect(lambda: self.show_on_chart.emit(self._chart_symbol(), self._algorithm()))
         for button, term in ((run, "backtest"), (opt, "optimize"), (chart, "show_on_chart")):
             button.setToolTip(tooltip(explain(term)))
         self.progress = QProgressBar()
         self.progress.hide()
 
         form = QFormLayout()
-        for label, w, term in (("Symbol", self.symbol, "symbol"), ("Timeframe", self.tf, "timeframe"),
+        for label, w, term in (("Symbols", symbol_row, "symbol"), ("Timeframe", self.tf, "timeframe"),
                                ("Candles", self.bars, "candles"), ("Dates", self.dates, "dates"),
                                ("Fee / side", self.fee, "fee"), ("Monthly amount", self.dca_amount, "dca_amount"),
                                ("Algorithm", self.algo, "algorithm")):
@@ -535,7 +570,11 @@ class BacktestView(QWidget):
         opt_form = QFormLayout()
         for label, w, term in (("Method", self.method, "method"), ("Population / swarm", self.population, "population"),
                                ("Generations / iterations", self.generations, "generations"),
-                               ("Objective", self.objective, "objective")):
+                               ("Objective", self.objective, "objective"),
+                               ("Several symbols", self.aggregate, "aggregate"), ("Align dates", self.align, "align"),
+                               ("Beat buy && hold on", self.min_beating, "min_symbols_beating"),
+                               ("Random windows", self.samples, "samples"),
+                               ("Window length", self.sample_length, "sample_length")):
             _explained_row(opt_form, label, w, term)
         from tradebot.optimize import select_backend
 
@@ -615,6 +654,17 @@ class BacktestView(QWidget):
         self.baseline_note.hide()
         right.addWidget(self.baseline_note)
         right.addWidget(metrics_view, 2)
+        self.per_symbol = DataFrameModel(header_tips=lambda col: tooltip(explain(col) or explain("per_symbol")),
+                                         colors=_signed_color(themes, {"vs buy & hold", "vs monthly investing"}))
+        self.per_symbol_view = _table(self.per_symbol)
+        self.per_symbol_view.setSortingEnabled(False)  # the aggregate row stays last
+        self.per_symbol_view.clicked.connect(lambda idx: self._show_symbol(self.per_symbol.df.iat[idx.row(), 0]))
+        self.per_symbol_title = QLabel()
+        self.per_symbol_title.setToolTip(tooltip(explain("per_symbol")))
+        self.per_symbol_note = QLabel(wordWrap=True)
+        self.per_symbol_card = card(self.per_symbol_title, self.per_symbol_view, self.per_symbol_note)
+        self.per_symbol_card.hide()
+        right.addWidget(self.per_symbol_card, 2)
         self.selection = QLabel()  # which pool members the optimizer kept (#21)
         self.selection.setWordWrap(True)
         self.selection.setTextFormat(Qt.TextFormat.RichText)
@@ -669,14 +719,49 @@ class BacktestView(QWidget):
     def _algorithm(self):
         return self._build().with_params(**self.params.values())
 
+    def _symbol_list(self) -> list[str]:
+        """The symbols in the field (comma- or space-separated), de-duplicated."""
+        return list(dict.fromkeys(s for s in re.split(r"[,\s]+", self.symbol.text()) if s))
+
+    def _chart_symbol(self) -> str:
+        """The symbol the chart opens: the one shown after a multi-symbol run, else the first."""
+        symbols = self._symbol_list()
+        return self._shown_symbol if self._symbol_payloads and self._shown_symbol in symbols else \
+            (symbols[0] if symbols else "")
+
+    def _fill_lists_menu(self):
+        self.lists_menu.clear()
+        lists = self.watchlists_fn()
+        for name, symbols in lists.items():
+            self.lists_menu.addAction(f"{name} ({len(symbols)})", lambda s=symbols: self.symbol.setText(", ".join(s)))
+        if len(lists) > 1:
+            every = list(dict.fromkeys(s for symbols in lists.values() for s in symbols))
+            self.lists_menu.addSeparator()
+            self.lists_menu.addAction(f"All watchlists ({len(every)})", lambda: self.symbol.setText(", ".join(every)))
+
     def _data(self):
-        """Runs in the worker thread: the last N candles, or the From/To range when set."""
-        symbol, bars = self.symbol.text().strip(), self.bars.value()
+        """Runs in the worker thread: the last N candles, or the From/To range when set. Several symbols:
+        ``{symbol: candles}``, without the ones that failed to load."""
+        symbols, bars = self._symbol_list(), self.bars.value()
+        if not symbols:
+            raise ValueError("enter a symbol")
         start, end = self.dates.range()
-        df = self.engine.get_ohlc(symbol, self.tf.currentText(), start=start, end=end, bars=bars)
-        if note := shortfall(df, bars, start):
-            self.status.emit(f"{symbol}:{note}")
-        return df
+        frames, failed = {}, []
+        for symbol in symbols:
+            try:
+                frames[symbol] = df = self.engine.get_ohlc(symbol, self.tf.currentText(), start=start, end=end, bars=bars)
+            except Exception:
+                if len(symbols) == 1:
+                    raise
+                failed.append(symbol)
+                continue
+            if note := shortfall(df, bars, start):
+                self.status.emit(f"{symbol}:{note}")
+        if failed:
+            self.status.emit(f"could not load {', '.join(failed)}")
+        if not frames:
+            raise ValueError("none of the symbols could be loaded")
+        return frames if len(symbols) > 1 else frames[symbols[0]]
 
     def _busy(self, on: bool, maximum: int = 0):
         self.progress.setRange(0, maximum)
@@ -696,11 +781,25 @@ class BacktestView(QWidget):
         algo, fee, amount = self._algorithm(), self.fee.value(), self._amount
         self._busy(True)
 
-        def work():
-            df = self._data()
+        def one(df):
             res = backtest(df, algo, fee=fee)
             return df, {"backtest": res, "_baselines": {"backtest": baselines(df, res, fee, amount=amount)},
                         "_plot_baselines": self._plot_baselines(df, fee, amount)}
+
+        def work():
+            data = self._data()
+            if isinstance(data, pd.DataFrame):
+                return one(data)
+            per = {s: one(df) for s, df in data.items()}
+            rows = []
+            for s, (_, results) in per.items():
+                res, bl = results["backtest"], results["_baselines"]["backtest"]
+                rows.append({"symbol": s, "total_return": res.metrics["total_return"], "sharpe": res.metrics["sharpe"],
+                             "xirr": bl.strategy_xirr, **{f"vs {k}": v for k, v in bl.excess.items()},
+                             "trades": res.metrics["trades"]})
+            beats = {k: sum(r[f"vs {k}"] > 0 for r in rows) for k in (BUY_HOLD, MONTHLY)}
+            note = " · ".join(f"beats {k} on {v} of {len(rows)}" for k, v in beats.items())
+            return None, {"_per_symbol": per, "_rows": rows, "_title": "Backtest per symbol", "_note": note}
 
         run_async(work, self._show, self._fail)
 
@@ -710,7 +809,10 @@ class BacktestView(QWidget):
         algo, fee = self._algorithm(), self.fee.value()
         method = self.method.currentData()
         kwargs = dict(population=self.population.value(), generations=self.generations.value(),
-                      objective=self.objective.currentText(), fee=fee, min_trades=4, dca_amount=self._amount)
+                      objective=self.objective.currentText(), fee=fee, min_trades=4, dca_amount=self._amount,
+                      aggregate=self.aggregate.currentText(), align=self.align.isChecked(),
+                      min_symbols_beating=self.min_beating.value(), samples=self.samples.value(),
+                      sample_length=self.sample_length.value())
         gens = kwargs["generations"]
         self._busy(True, gens * (2 if method == "both" else 1))
         self._phase = {"name": method.upper(), "offset": 0}
@@ -722,22 +824,43 @@ class BacktestView(QWidget):
         def report(step, best, _params):
             self.generation.emit(self._phase["offset"] + step, best)
 
-        def work():
-            df = self._data()
+        def one(df, single, results):
+            """The (df, results) payload of one symbol; ``single``(result) -> that symbol's part of a result."""
             plot = self._plot_baselines(df, fee, kwargs["dca_amount"])
             if method == "both":
-                cmp = run_comparison(algo, df, progress=report, on_phase=phase, **kwargs)
-                return df, {"GA in-sample": cmp.ga.train, "GA out-of-sample": cmp.ga.test,
-                            "PSO in-sample": cmp.pso.train, "PSO out-of-sample": cmp.pso.test,
+                cmp, (ga, pso) = results, (single(results.ga), single(results.pso))
+                return df, {"GA in-sample": ga.train, "GA out-of-sample": ga.test,
+                            "PSO in-sample": pso.train, "PSO out-of-sample": pso.test,
                             "_params": cmp.better.best_params, "_comparison": cmp, "_plot_baselines": plot,
                             "_selection": (algo, {"GA": cmp.ga.best_params, "PSO": cmp.pso.best_params}),
-                            "_baselines": {f"{r.method.upper()} {period}": getattr(r, f"{attr}_baselines")
+                            "_baselines": {f"{m} {period}": getattr(r, f"{attr}_baselines")
                                            for period, attr in (("in-sample", "train"), ("out-of-sample", "test"))
-                                           for r in (cmp.ga, cmp.pso)}}
-            res = OPTIMIZERS[method](algo, df, **kwargs).run(report)
-            return df, {"in-sample": res.train, "out-of-sample": res.test, "_params": res.best_params,
-                        "_baselines": {"in-sample": res.train_baselines, "out-of-sample": res.test_baselines},
+                                           for m, r in (("GA", ga), ("PSO", pso))}}
+            res, part = results, single(results)
+            return df, {"in-sample": part.train, "out-of-sample": part.test, "_params": res.best_params,
+                        "_baselines": {"in-sample": part.train_baselines, "out-of-sample": part.test_baselines},
                         "_plot_baselines": plot, "_selection": (algo, {method.upper(): res.best_params})}
+
+        def work():
+            data = self._data()
+            if method == "both":
+                results = run_comparison(algo, data, progress=report, on_phase=phase, **kwargs)
+                best = results.better
+            else:
+                results = best = OPTIMIZERS[method](algo, data, **kwargs).run(report)
+            if isinstance(data, pd.DataFrame):
+                return one(data, lambda r: r, results)
+            per = {}
+            for i, sym in enumerate(r.symbol for r in best.symbols):
+                per[sym] = one(data[sym], lambda r, i=i: r.symbols[i], results)
+            obj = best.objective
+            rows = [{"symbol": r["symbol"], f"{obj} in-sample": r["in-sample"], f"{obj} out-of-sample": r["out-of-sample"],
+                     **{k: v for k, v in r.items() if k not in ("symbol", "in-sample", "out-of-sample")}}
+                    for r in best.rows()]
+            rows.append({"symbol": best.aggregate, f"{obj} in-sample": best.aggregated("train"),
+                         f"{obj} out-of-sample": best.aggregated("test")})
+            return None, {"_per_symbol": per, "_rows": rows, "_note": self._multi_note(best),
+                          "_title": f"Per symbol ({best.method.upper()})" if method == "both" else "Per symbol"}
 
         run_async(work, self._show, self._fail)
 
@@ -749,9 +872,44 @@ class BacktestView(QWidget):
         self._busy(False)
         self.status.emit(f"backtest failed: {err}")
 
+    def _multi_note(self, res) -> str:
+        """Skipped symbols, how often the baselines were beaten, and whether one or two symbols carry it."""
+        t, n = self.themes.current, len(res.symbols)
+        lines = [" · ".join(f"beats {k} on {v} of {n}" for k, v in res.beats().items())]
+        if res.carried_by_few:
+            lines.append(f"<b style='color:{t.down}'>Carried by one or two symbols (the median is far below the mean): "
+                         "these settings probably don't generalize.</b>")
+        if res.skipped:
+            lines.append(f"<span style='color:{t.muted}'>Skipped: "
+                         + ", ".join(f"{s} ({why})" for s, why in res.skipped.items()) + "</span>")
+        return "<br>".join(lines)
+
     def _show(self, payload):
         df, results = payload
         self._busy(False)
+        per = results.get("_per_symbol")
+        self._symbol_payloads = per or {}
+        self.per_symbol_card.setVisible(bool(per))
+        if not per:
+            self._render(df, results)
+            return
+        columns = list(dict.fromkeys(k for row in results["_rows"] for k in row))
+        frame = pd.DataFrame(results["_rows"], columns=columns)
+        self.per_symbol.formats = {c: (lambda v: f"{v:.3f}") if "sample" in c else (lambda v: f"{v:.0f}")
+                                   if c == "trades" else (lambda v, c=c: fmt(c, v)) for c in columns if c != "symbol"}
+        self.per_symbol.set_frame(frame)
+        self.per_symbol_title.setText(f"<b>{results['_title']}</b> · click a row to show that symbol")
+        self.per_symbol_note.setText(results["_note"])
+        self._show_symbol(next(iter(per)))
+
+    def _show_symbol(self, symbol: str):
+        """Show one symbol of a multi-symbol run in the plot and the metrics table."""
+        if symbol in self._symbol_payloads:
+            self._shown_symbol = symbol
+            self._render(*self._symbol_payloads[symbol])
+
+    def _render(self, df, results):
+        results = dict(results)  # a multi-symbol run shows the same payload again on a click
         params = results.pop("_params", None)
         comparison = results.pop("_comparison", None)
         selection_algo, selection = results.pop("_selection", (None, {}))

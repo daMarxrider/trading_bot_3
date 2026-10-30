@@ -23,6 +23,7 @@ class GeneticOptimizer(PopulationOptimizer):
 
     def run(self, progress: Progress | None = None) -> OptimizationResult:
         pop = self.initial_population()
+        self.resample()
         fit = self.evaluate(pop)
         history = []
         for gen in range(self.generations):
@@ -32,12 +33,14 @@ class GeneticOptimizer(PopulationOptimizer):
             if progress:
                 progress(gen, float(fit[0]), self.decode(pop[0]))
             children = self._breed(pop, fit, self.population - self.n_elite)
-            child_fit = self.evaluate(children)
             pop = np.vstack([pop[: self.n_elite], children])
-            fit = np.concatenate([fit[: self.n_elite], child_fit])
-        best = int(np.argmax(fit))
-        history.append(float(fit[best]))
-        return self.finish(pop[best], fit[best], history)
+            if self.resample():  # new random windows: the elites are scored again, next to their children
+                fit = self.evaluate(pop)
+            else:
+                fit = np.concatenate([fit[: self.n_elite], self.evaluate(children)])
+        best, best_fit = self.pick(pop, fit)
+        history.append(best_fit)
+        return self.finish(best, best_fit, history)
 
     def _breed(self, pop: np.ndarray, fit: np.ndarray, n: int) -> np.ndarray:
         def pick():

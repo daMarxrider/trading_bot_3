@@ -35,6 +35,7 @@ class ParticleSwarmOptimizer(PopulationOptimizer):
     def run(self, progress: Progress | None = None) -> OptimizationResult:
         x = self.initial_population()
         v = self.rng.uniform(-self.max_velocity, self.max_velocity, x.shape) / 2
+        self.resample()
         fit = self.evaluate(x)
         p_best, p_fit = x.copy(), fit.copy()
         g = int(np.argmax(p_fit))
@@ -50,9 +51,14 @@ class ParticleSwarmOptimizer(PopulationOptimizer):
             hit = (x < 0.0) | (x > 1.0)
             x = np.clip(x, 0.0, 1.0)
             v[hit] = 0.0  # absorbing walls: stop at the range limit
-            fit = self.evaluate(x)
+            if self.resample():  # new random windows: the personal bests are scored again on them
+                both = self.evaluate(np.vstack([x, p_best]))
+                fit, p_fit = both[: len(x)], both[len(x):]
+            else:
+                fit = self.evaluate(x)
             improved = fit > p_fit
             p_best[improved], p_fit[improved] = x[improved], fit[improved]
             g = int(np.argmax(p_fit))
-        history.append(float(p_fit[g]))
-        return self.finish(p_best[g], p_fit[g], history)
+        best, best_fit = self.pick(p_best, p_fit)
+        history.append(best_fit)
+        return self.finish(best, best_fit, history)

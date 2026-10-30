@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 
 from tradebot.algorithms.base import BaseAlgorithm
-from tradebot.optimize.base import OptimizationResult, Progress
+from tradebot.optimize.base import OptimizationResult, Progress, objective_value  # noqa: F401 (re-exported)
 from tradebot.optimize.genetic import GeneticOptimizer
 from tradebot.optimize.pso import ParticleSwarmOptimizer
 
@@ -47,16 +47,6 @@ VERDICTS = {
     "divergent": "The methods ended in different regions with clearly different scores; the weaker one "
                  "probably got stuck in a local optimum. Prefer the better result, but check it out-of-sample.",
 }
-
-
-def objective_value(metrics: dict, objective: str) -> float:
-    """The optimizer's objective computed from backtest metrics (for out-of-sample comparison)."""
-    if objective == "return":
-        return metrics["total_return"]
-    if objective == "calmar":
-        dd = metrics["max_drawdown"]
-        return metrics["cagr"] / dd if dd > 0 else float("inf")
-    return metrics["sharpe"]
 
 
 @dataclass
@@ -95,8 +85,8 @@ class ComparisonResult:
 
     @property
     def oos(self) -> dict[str, float | None]:
-        return {r.method: objective_value(r.test.metrics, self.objective) if r.test else None
-                for r in (self.ga, self.pso)}
+        """Out-of-sample objective per method (several symbols: aggregated like the search)."""
+        return {r.method: r.aggregated("test") if r.test else None for r in (self.ga, self.pso)}
 
     def explanation(self) -> str:
         text = VERDICTS[self.verdict]
