@@ -10,7 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PyQt6")
 pytest.importorskip("pyqtgraph")
 
-from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QScrollArea  # noqa: E402
 
 from tradebot.gui.theme import ThemeManager  # noqa: E402
 from tradebot.gui.views import BacktestView  # noqa: E402
@@ -135,3 +135,11 @@ def test_optional_beating_and_random_windows(lab, monkeypatch):
     lab.run_optimizer()
     assert (captured["min_symbols_beating"], captured["samples"], captured["sample_length"]) == (1, 2, 100)
     assert lab.per_symbol_card.isVisible()
+
+
+def test_side_panel_never_scrolls_sideways(lab):
+    scroll = lab.findChild(QScrollArea)
+    for i in range(lab.algo.count()):  # each algorithm has its own parameter rows; a pool also shows its cards
+        lab.algo.setCurrentIndex(i)
+        QApplication.processEvents()
+        assert scroll.widget().minimumSizeHint().width() <= scroll.viewport().width(), lab.algo.itemText(i)

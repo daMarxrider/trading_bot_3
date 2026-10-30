@@ -84,7 +84,9 @@ def _explain_choices(combo: QComboBox, intro: str, texts: dict):
 
 
 def _explained_row(form: QFormLayout, label: str, widget: QWidget, term: str):
-    """A form row whose label and field both explain ``term`` on hover."""
+    """A form row whose label and field both explain ``term`` on hover. A field too wide to sit next to its
+    label goes below it, so the lab's fixed-width side panel never scrolls sideways."""
+    form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
     form.addRow(label, widget)
     text = tooltip(explain(term))
     form.labelForField(widget).setToolTip(text)
@@ -570,7 +572,7 @@ class BacktestView(QWidget):
                                ("Generations / iterations", self.generations, "generations"),
                                ("Objective", self.objective, "objective"),
                                ("Several symbols", self.aggregate, "aggregate"), ("Align dates", self.align, "align"),
-                               ("Beat buy & hold on", self.min_beating, "min_symbols_beating"),
+                               ("Beat buy && hold on", self.min_beating, "min_symbols_beating"),
                                ("Random windows", self.samples, "samples"),
                                ("Window length", self.sample_length, "sample_length")):
             _explained_row(opt_form, label, w, term)
