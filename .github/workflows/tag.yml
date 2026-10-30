@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Tags every merge into main with the next patch version (v1.0.0, v1.0.1, ...).
-# Bump minor/major by pushing a tag by hand (e.g. v1.1.0); later merges continue from it.
+# Tags every merge into main with the next semantic version, chosen by the merged PR's labels:
+#   release: major  -> breaking change   (v1.4.2 -> v2.0.0)
+#   release: minor  -> new feature       (v1.4.2 -> v1.5.0)
+#   no label        -> bugfix / cosmetic (v1.4.2 -> v1.4.3)
+# A tag pushed by hand also works; later merges continue from it.
 name: tag
 
 on:
@@ -14,6 +17,7 @@ concurrency:
 permissions:
   contents: write
   actions: write  # dispatch release.yml
+  pull-requests: read  # labels of the merged PR
 
 jobs:
   tag:
@@ -23,7 +27,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Create next patch tag
+      - name: Create next version tag
         run: |
           if [ -n "$(git tag --points-at HEAD 'v*')" ]; then
             echo "HEAD already tagged"; exit 0
@@ -33,7 +37,13 @@ jobs:
             next=v1.0.0
           else
             IFS=. read -r major minor patch <<< "${last#v}"
-            next="v$major.$minor.$((patch + 1))"
+            labels=$(gh api "repos/$GITHUB_REPOSITORY/commits/$(git rev-parse HEAD)/pulls" \
+              --jq '[.[].labels[].name] | join(",")' || true)
+            case ",$labels," in
+              *",release: major,"*) next="v$((major + 1)).0.0" ;;
+              *",release: minor,"*) next="v$major.$((minor + 1)).0" ;;
+              *) next="v$major.$minor.$((patch + 1))" ;;
+            esac
           fi
           git tag "$next"
           git push origin "$next"
