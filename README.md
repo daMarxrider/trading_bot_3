@@ -57,6 +57,11 @@ desktop app (`tradebot gui`). The builds are CPU-only (no `gpu` extra) and
 **unsigned**. Each archive has a `.sha256` checksum next to it, and contains `LICENSE` plus
 `THIRD_PARTY_NOTICES.txt`, the licences of all bundled libraries.
 
+Versions follow [semantic versioning](https://semver.org): every merge into `main` is tagged
+automatically, and the merged PR's label picks the bump. `release: major` marks a breaking change
+(v1.4.2 → v2.0.0), `release: minor` a new feature (→ v1.5.0), and no label a bugfix or purely
+cosmetic change (→ v1.4.3).
+
 **Linux (x86_64).** Built on Ubuntu 22.04, so it runs on that and newer
 distributions (glibc 2.35+).
 
