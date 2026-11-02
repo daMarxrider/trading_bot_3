@@ -5,6 +5,7 @@ from tradebot.optimize.compare import ComparisonResult, compare, run_comparison
 from tradebot.optimize.device import Backend, select_backend
 from tradebot.optimize.genetic import GeneticOptimizer
 from tradebot.optimize.pso import ParticleSwarmOptimizer
+from tradebot.optimize.walkforward import Fold, WalkForwardResult, walk_forward
 
 OPTIMIZERS: dict[str, type[PopulationOptimizer]] = {"ga": GeneticOptimizer, "pso": ParticleSwarmOptimizer}
 
@@ -21,5 +22,6 @@ def optimize(algorithm, df, method: str = "ga", **kwargs) -> OptimizationResult:
 
 __all__ = [
     "OPTIMIZERS", "Backend", "ComparisonResult", "GeneticOptimizer", "OptimizationResult",
-    "ParticleSwarmOptimizer", "PopulationOptimizer", "compare", "optimize", "run_comparison", "select_backend",
+    "Fold", "ParticleSwarmOptimizer", "PopulationOptimizer", "WalkForwardResult", "compare", "optimize", "run_comparison",
+    "select_backend", "walk_forward",
 ]
