@@ -469,6 +469,10 @@ number of symbols, and `--permutations N` repeats the whole search N times.
   *Save as plugin…* keeps the result under a name you choose. It appears in the
   Backtest lab's and the chart's strategy lists right away. *Show on chart*
   shows its signals without saving it.
+* **Resizing (Backtest lab and Evolve)**: drag the dividers between the result
+  panes, and between the settings column and the results. Tall cards scroll
+  inside their pane instead of squeezing the plot. The sizes are remembered,
+  and double-clicking a divider resets them.
 * **Portfolio & dividends**: total equity, allocation donuts, and per-holding
   and total current dividend yield, trailing annual yield and yield on cost.
 * **News**: headlines for the watchlists' and portfolio symbols, auto-refreshed

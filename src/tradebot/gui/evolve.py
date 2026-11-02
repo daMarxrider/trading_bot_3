@@ -40,7 +40,17 @@ from tradebot.backtest.metrics import fmt
 from tradebot.config import Settings, watchlists
 from tradebot.core.timeframes import TIMEFRAMES
 from tradebot.glossary import AGGREGATES, OBJECTIVES, explain
-from tradebot.gui.common import DataFrameModel, DateRange, SymbolCompleter, card, epoch_seconds, run_async, shortfall, tooltip
+from tradebot.gui.common import (
+    DataFrameModel,
+    DateRange,
+    Panes,
+    SymbolCompleter,
+    card,
+    epoch_seconds,
+    run_async,
+    shortfall,
+    tooltip,
+)
 from tradebot.gui.theme import ThemeManager, qcolor
 from tradebot.gui.touch import LongPressTooltips, enable_kinetic_scroll
 from tradebot.gui.views import MemberPicker, _explain_choices, _explained_row, _signed_color, _table, _title
@@ -190,7 +200,7 @@ class EvolveView(QWidget):
         scroll = QScrollArea()
         scroll.setWidget(left_w)
         scroll.setWidgetResizable(True)
-        scroll.setFixedWidth(380)
+        scroll.setMinimumWidth(300)
         enable_kinetic_scroll(scroll)
         scroll.setStyleSheet("QScrollArea { background: transparent; border: none; } "
                              "QScrollArea > QWidget > QWidget { background: transparent; }")
@@ -217,7 +227,8 @@ class EvolveView(QWidget):
         self.history.addLegend()
         self.history.setLabel("bottom", "generation")
         self.history.setToolTip(tooltip(explain("evo_history")))
-        plots = QHBoxLayout()
+        plots = Panes(Qt.Orientation.Horizontal, "evolve.plots", settings, themes.touch)
+        self.equity.setMinimumHeight(140)
         equity_title = QLabel("Equity: train, then validation and test (shaded), vs. buy & hold and monthly investing")
         equity_title.setToolTip(tooltip(explain("equity")))
         equity_head = QHBoxLayout()
@@ -228,8 +239,8 @@ class EvolveView(QWidget):
         equity_card.layout().addWidget(self.equity)
         history_title = QLabel("Best score per generation")
         history_title.setToolTip(tooltip(explain("evo_history")))
-        plots.addWidget(equity_card, 3)
-        plots.addWidget(card(history_title, self.history), 1)
+        plots.add(equity_card, 3)
+        plots.add(card(history_title, self.history), 1)
         signed = _signed_color(themes, {"vs buy & hold", "vs monthly"})
         self.per_symbol = DataFrameModel(header_tips=lambda col: tooltip(explain(LONG.get(col, col)) or explain("per_symbol")),
                                          colors=signed)
@@ -242,15 +253,18 @@ class EvolveView(QWidget):
         self.hall_view = _table(self.hall)
         self.hall_title = QLabel("<b>Best strategies in training</b> · → = the one picked on validation")
         self.hall_title.setToolTip(tooltip(explain("hall_of_fame")))
-        right = QVBoxLayout()
-        right.addWidget(card(self.rules, self.info, self.warnings))
-        right.addLayout(plots, 4)
-        right.addWidget(card(self.per_symbol_title, self.per_symbol_view), 2)
-        right.addWidget(card(self.hall_title, self.hall_view), 2)
+        # draggable dividers between all parts (#95); the text cards scroll when made small
+        right = self.panes = Panes(Qt.Orientation.Vertical, "evolve.panes", settings, themes.touch)
+        right.add(card(self.rules, self.info, self.warnings), 1.6, scroll=True)
+        right.add(plots, 4)
+        right.add(card(self.per_symbol_title, self.per_symbol_view), 2, scroll=True)
+        right.add(card(self.hall_title, self.hall_view), 2, scroll=True)
+        self.columns = Panes(Qt.Orientation.Horizontal, "evolve.columns", settings, themes.touch)
+        self.columns.add(scroll, 0, size=380)
+        self.columns.add(right, 1)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(16, 16, 16, 16)
-        lay.addWidget(scroll)
-        lay.addLayout(right, 1)
+        lay.addWidget(self.columns)
         self.generation.connect(self._progress)
         self._tips = LongPressTooltips(self)
         themes.changed.connect(self._style)

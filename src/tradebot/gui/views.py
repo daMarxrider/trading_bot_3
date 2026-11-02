@@ -49,6 +49,7 @@ from tradebot.gui.common import (
     DataFrameModel,
     DateRange,
     Kpi,
+    Panes,
     SymbolCompleter,
     card,
     epoch_seconds,
@@ -634,7 +635,7 @@ class BacktestView(QWidget):
         scroll = QScrollArea()
         scroll.setWidget(left_w)
         scroll.setWidgetResizable(True)
-        scroll.setFixedWidth(380)
+        scroll.setMinimumWidth(300)
         enable_kinetic_scroll(scroll)
         scroll.setStyleSheet("QScrollArea { background: transparent; border: none; } QScrollArea > QWidget > QWidget { background: transparent; }")
 
@@ -660,16 +661,21 @@ class BacktestView(QWidget):
         self.plot.installEventFilter(self)  # keeps the button in the bottom-left corner
         self.metrics = DataFrameModel(row_tips=lambda row: tooltip(explain(row["metric"])), header_tips=_results_tip)
         self.metrics_view = metrics_view = _table(self.metrics)
-        metrics_view.setMaximumHeight(300)
-        right = QVBoxLayout()
+        # every result card is a pane with a draggable divider (#95): tall cards scroll instead of crushing the plot
+        right = Panes(Qt.Orientation.Vertical, "backtest.panes", settings, themes.touch)
+        self.plot.setMinimumHeight(140)
         equity_title = QLabel("Equity curve vs. buy & hold and monthly investing")
         equity_title.setToolTip(tooltip(explain("equity")))
-        right.addWidget(card(equity_title, self.plot), 3)
+        right.add(card(equity_title, self.plot), 5)
         self.baseline_note = QLabel()  # shown when the strategy loses to a baseline (#19)
         self.baseline_note.setWordWrap(True)
         self.baseline_note.hide()
-        right.addWidget(self.baseline_note)
-        right.addWidget(metrics_view, 2)
+        results = QWidget()
+        results_lay = QVBoxLayout(results)
+        results_lay.setContentsMargins(0, 0, 0, 0)
+        results_lay.addWidget(self.baseline_note)
+        results_lay.addWidget(metrics_view)
+        right.add(results, 2)
         self.per_symbol = DataFrameModel(header_tips=lambda col: tooltip(explain(col) or explain("per_symbol")),
                                          colors=_signed_color(themes, {"vs buy & hold", "vs monthly investing"}))
         self.per_symbol_view = _table(self.per_symbol)
@@ -680,7 +686,7 @@ class BacktestView(QWidget):
         self.per_symbol_note = QLabel(wordWrap=True)
         self.per_symbol_card = card(self.per_symbol_title, self.per_symbol_view, self.per_symbol_note)
         self.per_symbol_card.hide()
-        right.addWidget(self.per_symbol_card, 2)
+        right.add(self.per_symbol_card, 2, scroll=True)
         self._wf = None  # the last walk-forward run (#89): (result, algorithm)
         self.folds = DataFrameModel(header_tips=lambda col: tooltip(explain(col) or explain("folds")),
                                     colors=_signed_color(themes, {"vs buy & hold", "vs monthly investing"}))
@@ -693,14 +699,14 @@ class BacktestView(QWidget):
         self.folds_note.setTextFormat(Qt.TextFormat.RichText)
         self.folds_card = card(self.folds_title, self.folds_view, self.folds_note)
         self.folds_card.hide()
-        right.addWidget(self.folds_card, 2)
+        right.add(self.folds_card, 2, scroll=True)
         self.selection = QLabel()  # which pool members the optimizer kept (#21)
         self.selection.setWordWrap(True)
         self.selection.setTextFormat(Qt.TextFormat.RichText)
         self.selection.setToolTip(tooltip(explain("selection")))
         self.selection_card = card(self.selection)
         self.selection_card.hide()
-        right.addWidget(self.selection_card)
+        right.add(self.selection_card, 1, scroll=True)
         self.verdict = QLabel()
         self.verdict.setWordWrap(True)
         self.verdict.setTextFormat(Qt.TextFormat.RichText)
@@ -709,11 +715,14 @@ class BacktestView(QWidget):
             ("Difference (% of range)", "param_diff"))) + "</qt>")
         self.verdict_card = card(self.verdict)
         self.verdict_card.hide()
-        right.addWidget(self.verdict_card)
+        right.add(self.verdict_card, 1, scroll=True)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(16, 16, 16, 16)
-        lay.addWidget(scroll)
-        lay.addLayout(right, 1)
+        columns = self.columns = Panes(Qt.Orientation.Horizontal, "backtest.columns", settings, themes.touch)
+        columns.add(scroll, 0, size=380)
+        columns.add(right, 1)
+        self.panes = right
+        lay.addWidget(columns)
         self._algo_changed(self.algo.currentText())
         self.generation.connect(self._progress)
         self._tips = LongPressTooltips(self)  # touch: press and hold anything to read its explanation
