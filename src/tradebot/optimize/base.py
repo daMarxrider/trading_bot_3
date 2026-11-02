@@ -12,7 +12,7 @@ against :mod:`tradebot.core.ops` gets this for free.
 
 To limit curve fitting the data is split: parameters are searched on the first
 ``train_fraction`` of the candles and the winner is reported out-of-sample on
-the remainder.
+the remainder (or at the date ``split_at``, which :mod:`tradebot.optimize.walkforward` uses).
 
 An algorithm can take part in the search through three optional hooks (used
 by the ``pool``, #21): ``canonical(params, genes)`` maps a decoded candidate
@@ -212,6 +212,7 @@ class PopulationOptimizer(ABC):
         min_symbols_beating: int = 0,
         samples: int = 0,
         sample_length: int = 250,
+        split_at: pd.Timestamp | None = None,
     ):
         self.algorithm = algorithm
         self.dca_amount = dca_amount  # monthly investing baseline; None = capital / months
@@ -232,7 +233,10 @@ class PopulationOptimizer(ABC):
         frames, self.skipped = select_frames(df if self.multi else {"": df}, align, min_history)
         self.data = []
         for symbol, frame in frames.items():
-            split = int(len(frame) * train_fraction) if train_fraction < 1 else len(frame)
+            if split_at is not None:  # walk-forward (#89): every symbol split at the same date
+                split = int(frame.index.searchsorted(split_at))
+            else:
+                split = int(len(frame) * train_fraction) if train_fraction < 1 else len(frame)
             train_df = frame.iloc[:split]
             self.data.append(_Data(symbol, train_df, frame.iloc[split:], infer_periods_per_year(frame.index),
                                    OHLC.from_frame(train_df, device=self.backend.device)))

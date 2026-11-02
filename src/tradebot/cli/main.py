@@ -269,6 +269,17 @@ def optimize(
         help="Score each generation on this many random windows per symbol instead of all in-sample candles; "
              "new windows every generation, batched in one go on the GPU (0 = off)")] = 0,
     sample_length: Annotated[int, typer.Option(help="Candles per random window (with --samples)")] = 250,
+    walk_forward: Annotated[int, typer.Option(
+        help="Walk-forward validation: re-optimize in this many folds, each scored on the next unseen stretch "
+             "(0 = off: one split by --train)")] = 0,
+    wf_train: Annotated[Optional[int], typer.Option(
+        help="Walk-forward: training candles per fold (default: from --train and the data)")] = None,
+    wf_test: Annotated[Optional[int], typer.Option(
+        help="Walk-forward: test candles per fold (default: the folds fill the data)")] = None,
+    anchored: Annotated[bool, typer.Option(
+        help="Walk-forward: every training window starts at the first candle and grows, instead of rolling")] = False,
+    holdout: Annotated[int, typer.Option(
+        help="Walk-forward: keep the last N candles out of every fold and score them once at the end")] = 0,
 ):
     """Optimize algorithm parameters with a genetic algorithm and/or particle swarm (GPU accelerated
     when available) and report out-of-sample results. ``--method both`` also measures how much the two
@@ -319,19 +330,28 @@ def optimize(
         label = {"name": method.upper()}
 
         def phase(name):
-            label["name"] = name.upper()
+            label["name"] = name if walk_forward else name.upper()
             progress.reset(task, total=generations)
 
         def report(step, best, params):
             progress.update(task, advance=1, description=f"{label['name']} step {step + 1} best {objective}={best:.3f}")
 
         try:
-            if method == "both":
+            if walk_forward:
+                from tradebot.optimize import walk_forward as run_walk_forward
+
+                wf =run_walk_forward(algorithm, df, walk_forward, train_length=wf_train, test_length=wf_test,
+                                      anchored=anchored, holdout=holdout, method=method, progress=report,
+                                      on_phase=phase, **kwargs)
+            elif method == "both":
                 cmp = run_comparison(algorithm, df, progress=report, on_phase=phase, **kwargs)
             else:
                 res = OPTIMIZERS[method](algorithm, df, **kwargs).run(report)
         except ValueError as e:  # e.g. no symbol with enough history
             raise typer.BadParameter(str(e)) from None
+    if walk_forward:
+        _print_walk_forward(wf, algorithm, ",".join(symbols))
+        return
     if done := (cmp.ga if method == "both" else res).symbols:
         symbol = ",".join(r.symbol for r in done)  # for the reuse command, without the skipped symbols
     if method == "both":
@@ -417,6 +437,69 @@ def _print_symbols(results: dict) -> None:
             who = f"the {label} result" if len(results) > 1 else "the strategy"
             console.print(f"[bold red]Out-of-sample, {who} beats "
                           f"{' and '.join(f'{k} on only {v} of {n}' for k, v in weak.items())} symbols[/]")
+
+
+def _print_walk_forward(wf, algorithm, symbol: str) -> None:
+    """Per fold: dates, objective in/out, XIRR and lead over the baselines, trades; then the combined
+    out-of-sample score, how much the parameters move between folds, the holdout and the warnings (#89)."""
+    from tradebot.backtest.metrics import fmt
+
+    def cell(v, f):
+        return "–" if v is None else f(v)
+
+    def lead(v):
+        return f"[{'green' if v > 0 else 'red'}]{fmt('vs buy & hold', v)}[/]"
+
+    def day(ts):
+        return "end" if ts is None else f"{ts:%Y-%m-%d}"
+
+    multi = any(f.result.symbols for f in wf.folds)
+    obj = wf.objective
+    kind = "anchored" if wf.anchored else "rolling"
+    t = Table(title=f"walk-forward ({wf.method.upper()}, {kind}: {wf.train_length} train / {wf.test_length} test candles)")
+    for col in ("fold", "train", "test", f"{obj} in", f"{obj} out", "XIRR out", "vs buy & hold", "vs monthly",
+                "trades out"):
+        t.add_column(col, justify="left" if col in ("fold", "train", "test") else "right")
+
+    def row(f, name):
+        s = f.summary()
+        beats = [f" ({k}/{n})" if multi else "" for k, n in s["beats"].values()]
+        t.add_row(name, f"{day(f.start)} – {day(f.split)}", f"{day(f.split)} – {day(f.end)}",
+                  cell(s["in-sample"], "{:.3f}".format), cell(s["out-of-sample"], "{:.3f}".format),
+                  cell(s["xirr"], lambda v: fmt("xirr", v)),
+                  *(cell(s[c], lead) + b for c, b in zip(("vs buy & hold", "vs monthly investing"), beats)),
+                  str(s["trades"]))
+
+    for f in wf.folds:
+        row(f, str(f.index + 1))
+    n = len(wf.folds)
+    counts = wf.beat_counts()
+    t.add_row("[bold]all[/]", "", "", "", f"[bold]{cell(wf.mean, '{:.3f}'.format)}[/]"
+              + (f" ± {wf.std:.3f}" if wf.std is not None else ""), "",
+              *(f"beats in {counts[k]}/{n}" for k in ("buy & hold", "monthly investing")), "")
+    if wf.holdout is not None:
+        row(wf.holdout, "[bold]holdout[/]")
+    console.print(t)
+    if multi:
+        console.print(f"[dim]{obj}: per fold the {wf.aggregate} over the symbols; XIRR and leads: mean over the "
+                      "symbols, (k/n) = beaten on k of n symbols[/]")
+    for s, reason in wf.skipped.items():
+        console.print(f"[dim]skipped {s}: {reason}[/]")
+    if stability := wf.stability():
+        p = Table(title="parameters per fold")
+        p.add_column("param")
+        for f in wf.folds:
+            p.add_column(str(f.index + 1), justify="right")
+        p.add_column("moves", justify="right")
+        for key, spread in stability.items():
+            color = "red" if spread > 0.5 else "yellow" if spread > 0.2 else "green"
+            p.add_row(key, *(f"{f.params[key]:g}" for f in wf.folds), f"[{color}]{spread:.0%}[/]")
+        console.print(p)
+    for w in wf.warnings():
+        console.print(f"[bold red]{w}[/]")
+    latest = wf.holdout or wf.folds[-1]
+    console.print(f"newest parameters (tuned on the stretch {'before the holdout' if wf.holdout else 'of the last fold'})"
+                  f" · reuse with: [cyan]{_reuse_command(symbol, algorithm, latest.params)}[/]")
 
 
 def _make_pool(names: str | None, min_members: int, max_members: int | None):

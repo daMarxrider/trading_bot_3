@@ -136,6 +136,7 @@ tradebot optimize AAPL,MSFT,NVDA,SAP.DE macd_cross --aggregate median   # one pa
 tradebot optimize -w Crypto sma_cross                          # every symbol of a watchlist (-w all: of all of them)
 tradebot backtest AAPL,MSFT,NVDA macd_cross -p fast=8           # one row per symbol
 tradebot optimize -w all rsi_threshold --min-symbols-beating 5 --samples 4 --sample-length 300
+tradebot optimize AAPL macd_cross --walk-forward 5 --holdout 250   # re-optimize in 5 folds, then a holdout
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50          # dry run
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50 --live   # real orders
 tradebot positions --broker kucoin
@@ -238,6 +239,38 @@ Two optional extras, off by default (CLI and Backtest lab):
   are scored again on every generation's windows, and the winner is chosen from
   the final population on all in-sample candles. The progress score is therefore
   noisy rather than rising steadily.
+
+**Walk-forward validation.** One 70/30 split is a single draw: a strategy can look
+good or bad depending on what the market did in that one stretch.
+`--walk-forward N` runs the optimizer N times instead. Each run (a *fold*) tunes
+on a training window and is scored on the next, unseen stretch; then everything
+moves forward:
+
+```
+|-- train 1 --|- test 1 -|
+     |-- train 2 --|- test 2 -|
+          |-- train 3 --|- test 3 -|
+```
+
+- `--wf-train`/`--wf-test`: candles per training window and per test stretch.
+  By default the folds fill the data and keep the `--train` ratio.
+- `--anchored`: every training window starts at the first candle and grows,
+  instead of rolling forward.
+- `--holdout N`: the last N candles stay out of every fold. They are scored once
+  at the end, with parameters tuned on the stretch right before them.
+
+It works with `--method ga|pso|both` (with `both`, each fold keeps the in-sample
+winner), several symbols (every symbol is cut at the same dates), random windows
+and `--min-symbols-beating`. The output has one row per fold (dates, objective in
+and out of sample, XIRR, lead over the baselines, trades), the combined
+out-of-sample score (mean ± spread) and in how many folds each baseline was
+beaten, then the tuned parameters per fold and how far each one moves (as % of
+its range). Warnings in red flag a score that swings more between folds than its
+average, a strategy that beats buy & hold in fewer than half the folds,
+parameters that move across more than half their range, and a holdout that
+doesn't beat buy & hold. The reuse command has the newest parameters (from the
+last fold, or the ones scored on the holdout). The Backtest lab doesn't have
+walk-forward yet.
 
 **Picking the strategies.** Without an algorithm, `optimize` also decides *which*
 strategies and indicators to use. It starts from a pool: every strategy and
