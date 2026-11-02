@@ -466,6 +466,10 @@ number of symbols, and `--permutations N` repeats the whole search N times.
   - a row per symbol (click one to plot it);
   - the best strategies in training, with an arrow at the one picked on validation.
 
+  Both plots have the chart's ↕ auto-fit button in their bottom-left corner. It is
+  on by default and fits the value axis to the curves in view while you zoom or
+  pan. Double-click or double-tap a plot to see all of it again.
+
   *Save as plugin…* keeps the result under a name you choose. It appears in the
   Backtest lab's and the chart's strategy lists right away. *Show on chart*
   shows its signals without saving it.
