@@ -38,6 +38,7 @@ def lab(app, tmp_path, monkeypatch):
     themes = ThemeManager(user_dir=tmp_path)
     themes.apply("dark")
     view = BacktestView(Engine(), themes, ["AAPL"], watchlists_fn=lambda: LISTS)
+    view.wf_folds.setValue(0)  # these tests cover the single train/test split
     view.show()
     view.population.setValue(12)
     view.generations.setValue(2)

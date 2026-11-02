@@ -271,8 +271,10 @@ parameters that move across more than half their range, and a holdout that
 doesn't beat buy & hold. The reuse command has the newest parameters (from the
 last fold, or the ones scored on the holdout).
 
-In the Backtest lab, set *Walk-forward* in the Optimizer card to a number of
-folds (and optionally the windows, *Anchored* and the holdout), then Optimize.
+In the Backtest lab, *Walk-forward* in the Optimizer card is on by default with
+5 rolling folds and automatic windows; *off* goes back to one 70/30 split. The
+holdout is off by default (it's a fixed number of candles, so set it to fit your
+data).
 The plot shows every fold's test stretch shaded and numbered, with one
 *walk-forward* curve through them: each stretch traded with the parameters its
 fold tuned, i.e. what walk-forward trading would have earned. The holdout

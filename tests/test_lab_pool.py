@@ -29,6 +29,7 @@ def lab(app, tmp_path):
     themes = ThemeManager(user_dir=tmp_path)
     themes.apply("dark")
     view = BacktestView(None, themes, ["TEST"])
+    view.wf_folds.setValue(0)  # these tests cover the single train/test split
     view.show()
     view.algo.setCurrentText("pool")
     QApplication.processEvents()

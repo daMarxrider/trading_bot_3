@@ -553,7 +553,7 @@ class BacktestView(QWidget):
             box.setSuffix(" candles")
         self.wf_anchored = QCheckBox("Training grows from the first candle")
         self.wf_folds.valueChanged.connect(self._walk_forward_changed)
-        self._walk_forward_changed(0)
+        self.wf_folds.setValue(5)  # on by default: the honest check; holdout off, since it's a fixed candle count
         self.method = QComboBox()
         for label, key in (("Genetic algorithm (GA)", "ga"), ("Particle swarm (PSO)", "pso"),
                            ("Both + compare", "both")):

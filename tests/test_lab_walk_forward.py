@@ -47,10 +47,12 @@ def regions(lab):
     return [i for i in lab.plot.getPlotItem().items if isinstance(i, pg.LinearRegionItem)]
 
 
-def test_options_only_apply_with_walk_forward(lab):
-    assert not lab.wf_train.isEnabled() and not lab.holdout.isEnabled() and not lab.wf_anchored.isEnabled()
-    lab.wf_folds.setValue(3)
+def test_defaults_and_options_only_apply_with_walk_forward(lab):
+    assert lab.wf_folds.value() == 5 and lab.holdout.value() == 0 and not lab.wf_anchored.isChecked()
+    assert lab.wf_train.value() == 0 and lab.wf_test.value() == 0  # auto
     assert lab.wf_train.isEnabled() and lab.wf_test.isEnabled() and lab.holdout.isEnabled()
+    lab.wf_folds.setValue(0)
+    assert not lab.wf_train.isEnabled() and not lab.holdout.isEnabled() and not lab.wf_anchored.isEnabled()
     assert "unseen" in lab.wf_folds.toolTip() or "never saw" in lab.wf_folds.toolTip()
 
 
