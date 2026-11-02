@@ -160,7 +160,40 @@ def test_cli_error_envelope_raises(broker):
         broker.get_positions()
 
 
-def test_csv_fallback_without_sc(tmp_path):
+def test_failed_confirm_is_not_retried(broker, sc):
+    order = broker.place_order("AAPL", "buy", 1)
+    broker._runner = lambda argv: {"ok": False, "command": "broker.trade",
+                                   "error": {"code": "upstream_error", "message": "timeout"}}
+    with pytest.raises(ScalableCLIError):
+        broker.confirm(order.id)
+    assert order.id not in broker.pending  # the confirmation id is spent even when phase 2 fails
+
+
+def test_fractional_buy_without_quote(broker, sc, monkeypatch):
+    from tradebot.core.models import Ticker
+
+    monkeypatch.setattr(broker, "get_ticker", lambda symbol: Ticker(symbol, None, None, None))
+    with pytest.raises(ScalableCLIError, match="fractional"):
+        broker.place_order("AAPL", "buy", 0.5)
+
+
+def test_sc_found_via_tools(monkeypatch, tmp_path):
+    from tradebot import tools
+
+    monkeypatch.setattr(tools, "locate", lambda key, path=None: "/opt/sc" if path is None else None)
+    assert ScalableCapitalBroker({})._binary() == "/opt/sc"
+    monkeypatch.setattr(tools, "locate", lambda key, path=None: path if path == str(tmp_path) else None)
+    assert ScalableCapitalBroker({"sc_path": str(tmp_path)})._binary() == str(tmp_path)  # old config key
+
+
+def test_settings_fields_are_text_only():
+    assert "symbols" not in ScalableCapitalBroker.credential_keys  # a TOML table, not a text field
+
+
+def test_csv_fallback_without_sc(tmp_path, monkeypatch):
+    from tradebot import tools
+
+    monkeypatch.setattr(tools, "locate", lambda key, path=None: None)  # even if sc is installed here
     csv = tmp_path / "h.csv"
     csv.write_text("symbol,quantity,avg_cost\nAAPL,2,100\n")
     b = ScalableCapitalBroker({"holdings_csv": str(csv), "sc_path": "/nonexistent/sc"})

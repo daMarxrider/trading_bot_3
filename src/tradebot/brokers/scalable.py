@@ -20,9 +20,9 @@ Setup (once, by a human): enable *Profile → Security → Agentic Investing* on
 the Scalable web platform, install ``sc`` and run ``sc login``. Sessions last
 up to seven days. Without ``sc`` the broker falls back to ``holdings_csv``.
 
-Config (``[brokers.scalable]``)::
+The ``sc`` binary is found like every third-party tool (:mod:`tradebot.tools`): ``[tools] sc`` or
+``sc`` on PATH; an older ``[brokers.scalable] sc_path`` still works. Config (``[brokers.scalable]``)::
 
-    sc_path = "sc"                    # deprecated: use [tools] sc (Settings -> Third-party tools)
     portfolio_id = "..."              # only if you have several portfolios
     venue = "gettex"                  # optional execution venue
     holdings_csv = "~/scalable.csv"   # fallback when sc is unavailable
@@ -99,7 +99,9 @@ class ScalableCapitalBroker(HoldingsFileBroker):
     name = "scalable"
     title = "Scalable Capital"
     asset_classes = frozenset({AssetClass.STOCK, AssetClass.CRYPTO})
-    credential_keys = ("sc_path", "portfolio_id", "venue", "symbols", "holdings_csv")
+    # the settings dialog shows these as text fields; ``sc_path`` moved to [tools] and the
+    # ``symbols`` table can't be a text field, so both are only read from config.toml
+    credential_keys = ("portfolio_id", "venue", "holdings_csv")
 
     def __init__(self, credentials=None, data=None, on_intent=None,
                  runner: Callable[[list[str]], dict] | None = None,
@@ -206,6 +208,9 @@ class ScalableCapitalBroker(HoldingsFileBroker):
         if side is Side.BUY and amount != int(amount):
             # buy-side share input is whole shares only; size fractional buys by EUR amount instead
             ref = price or self.get_ticker(isin).last
+            if not ref:
+                raise ScalableCLIError("no_quote", f"no price to size a fractional buy of {isin}; "
+                                       "use whole shares or a limit price")
             args += ["--amount", f"{amount * ref:.2f}"]
         else:
             args += ["--shares", f"{amount:g}"]
@@ -257,9 +262,9 @@ class ScalableCapitalBroker(HoldingsFileBroker):
         args = [*d["args"], "--confirm", d["confirmation_id"]]
         if acknowledge_appropriateness_warning:
             args.append("--acknowledge-appropriateness-warning")
-        data = self.run(*args)
-        # the confirmation is consumed even if submission failed; never resubmit blindly
+        # the confirmation is consumed even if submission fails; never resubmit blindly
         self.pending.pop(intent_id, None)
+        data = self.run(*args)
         submission = self._result(data).get("order_submission") or {}
         if not submission.get("submitted"):
             raise ScalableCLIError("not_submitted", f"order was not submitted: {submission}", "broker trade")
