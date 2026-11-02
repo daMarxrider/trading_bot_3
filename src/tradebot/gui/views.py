@@ -472,6 +472,7 @@ class BacktestView(QWidget):
         self._x = np.empty(0)
         self._fit_series: list = []  # the plotted curves on self._x (NaN where a curve has no value), for auto-fit
         self._curves: list = []  # (name, x, values, pen) of the last run, redrawn when the scale changes
+        self._stretches: list = []  # walk-forward test stretches shaded behind the curves (#89)
         self._log = False  # the plot's view y is log10(value) (#76)
         self._adjusting = False  # set while the lab changes the view range itself, as opposed to the user
         self.symbol = QLineEdit(watchlist[0] if watchlist else "BTC/USDT", placeholderText="AAPL, MSFT, BTC/USDT …")
@@ -541,6 +542,18 @@ class BacktestView(QWidget):
         self.sample_length.setSuffix(" candles")
         self.samples.valueChanged.connect(lambda n: self.sample_length.setEnabled(n > 0))
         self.sample_length.setEnabled(False)
+        self.wf_folds = QSpinBox()  # walk-forward (#89); 0 = off: one train/test split
+        self.wf_folds.setRange(0, 50)
+        self.wf_folds.setSpecialValueText("off (one 70/30 split)")
+        self.wf_folds.setSuffix(" folds")
+        self.wf_train, self.wf_test, self.holdout = QSpinBox(), QSpinBox(), QSpinBox()
+        for box, off in ((self.wf_train, "auto"), (self.wf_test, "auto"), (self.holdout, "off")):
+            box.setRange(0, 100000)
+            box.setSpecialValueText(off)
+            box.setSuffix(" candles")
+        self.wf_anchored = QCheckBox("Training grows from the first candle")
+        self.wf_folds.valueChanged.connect(self._walk_forward_changed)
+        self.wf_folds.setValue(5)  # on by default: the honest check; holdout off, since it's a fixed candle count
         self.method = QComboBox()
         for label, key in (("Genetic algorithm (GA)", "ga"), ("Particle swarm (PSO)", "pso"),
                            ("Both + compare", "both")):
@@ -574,7 +587,10 @@ class BacktestView(QWidget):
                                ("Several symbols", self.aggregate, "aggregate"), ("Align dates", self.align, "align"),
                                ("Beat buy && hold on", self.min_beating, "min_symbols_beating"),
                                ("Random windows", self.samples, "samples"),
-                               ("Window length", self.sample_length, "sample_length")):
+                               ("Window length", self.sample_length, "sample_length"),
+                               ("Walk-forward", self.wf_folds, "walk_forward"),
+                               ("Train window", self.wf_train, "wf_train"), ("Test window", self.wf_test, "wf_test"),
+                               ("Anchored", self.wf_anchored, "anchored"), ("Holdout", self.holdout, "holdout")):
             _explained_row(opt_form, label, w, term)
         from tradebot.optimize import select_backend
 
@@ -665,6 +681,19 @@ class BacktestView(QWidget):
         self.per_symbol_card = card(self.per_symbol_title, self.per_symbol_view, self.per_symbol_note)
         self.per_symbol_card.hide()
         right.addWidget(self.per_symbol_card, 2)
+        self._wf = None  # the last walk-forward run (#89): (result, algorithm)
+        self.folds = DataFrameModel(header_tips=lambda col: tooltip(explain(col) or explain("folds")),
+                                    colors=_signed_color(themes, {"vs buy & hold", "vs monthly investing"}))
+        self.folds_view = _table(self.folds)
+        self.folds_view.setSortingEnabled(False)  # in time order
+        self.folds_view.clicked.connect(lambda idx: self._show_fold(self.folds.df.iat[idx.row(), 0]))
+        self.folds_title = QLabel()
+        self.folds_title.setToolTip(tooltip(explain("folds")))
+        self.folds_note = QLabel(wordWrap=True)
+        self.folds_note.setTextFormat(Qt.TextFormat.RichText)
+        self.folds_card = card(self.folds_title, self.folds_view, self.folds_note)
+        self.folds_card.hide()
+        right.addWidget(self.folds_card, 2)
         self.selection = QLabel()  # which pool members the optimizer kept (#21)
         self.selection.setWordWrap(True)
         self.selection.setTextFormat(Qt.TextFormat.RichText)
@@ -707,6 +736,10 @@ class BacktestView(QWidget):
     def _members_changed(self):
         algo = self._build()
         self.params.set_space(algo.param_space(), {**algo.values, **self.params.values()})  # keep what was set
+
+    def _walk_forward_changed(self, folds: int):
+        for w in (self.wf_train, self.wf_test, self.wf_anchored, self.holdout):
+            w.setEnabled(folds > 0)
 
     def _build(self):
         """The selected algorithm with default parameters; a vote or a pool with the checked members."""
@@ -813,6 +846,9 @@ class BacktestView(QWidget):
                       aggregate=self.aggregate.currentText(), align=self.align.isChecked(),
                       min_symbols_beating=self.min_beating.value(), samples=self.samples.value(),
                       sample_length=self.sample_length.value())
+        if self.wf_folds.value():
+            self._run_walk_forward(algo, method, kwargs)
+            return
         gens = kwargs["generations"]
         self._busy(True, gens * (2 if method == "both" else 1))
         self._phase = {"name": method.upper(), "offset": 0}
@@ -864,6 +900,147 @@ class BacktestView(QWidget):
 
         run_async(work, self._show, self._fail)
 
+    # -- walk-forward (#89) ---------------------------------------------------------------------
+    def _run_walk_forward(self, algo, method: str, kwargs: dict):
+        from tradebot.optimize import walk_forward
+
+        folds, holdout, gens = self.wf_folds.value(), self.holdout.value(), kwargs["generations"]
+        self._busy(True, gens * (folds + bool(holdout)) * (2 if method == "both" else 1))
+        self._phase = {"name": "fold 1", "offset": 0, "runs": 0}
+        self.status.emit("walk-forward …")
+
+        def phase(label):  # called in the worker thread before each optimizer run
+            runs = self._phase["runs"]
+            self._phase = {"name": label, "offset": runs * gens, "runs": runs + 1}
+
+        def report(step, best, _params):
+            self.generation.emit(self._phase["offset"] + step, best)
+
+        def work():
+            wf = walk_forward(algo, self._data(), folds, train_length=self.wf_train.value() or None,
+                              test_length=self.wf_test.value() or None, anchored=self.wf_anchored.isChecked(),
+                              holdout=holdout, method=method, progress=report, on_phase=phase, **kwargs)
+            return wf, algo, {s: self._walk_forward_overview(wf, algo, s) for s in wf.symbols}
+
+        run_async(work, self._show_walk_forward, self._fail)
+
+    @staticmethod
+    def _fold_part(fold, symbol: str):
+        """One symbol's part of a fold's result (train/test with baselines); None if the fold left it out."""
+        if not fold.result.symbols:
+            return fold.result
+        return next((r for r in fold.result.symbols if r.symbol == symbol), None)
+
+    def _walk_forward_overview(self, wf, algo, symbol: str):
+        """Runs in the worker thread: the (df, results) payload of one symbol over all folds: the joined
+        out-of-sample run, the holdout continuing it, the baselines over all candles and the test stretches."""
+        df, results, bases = wf.frames[symbol], {}, {}
+        if (joined := wf.stitched(symbol)) is not None:
+            results["walk-forward"], bases["walk-forward"] = joined
+        if wf.holdout is not None and (part := self._fold_part(wf.holdout, symbol)) is not None and part.test is not None:
+            results["holdout"], bases["holdout"] = part.test, part.test_baselines
+        stretches = [(str(f.index + 1), part.test.equity.index[0], part.test.equity.index[-1]) for f in wf.folds
+                     if (part := self._fold_part(f, symbol)) is not None and part.test is not None]
+        latest = wf.holdout or wf.folds[-1]
+        return df, {**results, "_baselines": bases, "_plot_baselines": self._plot_baselines(df, wf.fee, wf.dca_amount),
+                    "_chain": {"holdout": "walk-forward"}, "_stretches": stretches, "_params": latest.params,
+                    "_selection": (algo, {"newest": latest.params})}
+
+    def _show_walk_forward(self, payload):
+        from tradebot.optimize.base import objective_value
+
+        wf, algo, per = payload
+        self._busy(False)
+        self._wf = (wf, algo)
+        self._symbol_payloads = per
+        multi = wf.symbols != [""]
+        self.per_symbol_card.setVisible(multi)
+        obj = wf.objective
+        if multi:
+            rows = []
+            for s, (_, results) in per.items():
+                res, bl = results.get("walk-forward"), results["_baselines"].get("walk-forward")
+                rows.append({"symbol": s, f"{obj} walk-forward": objective_value(res.metrics, obj) if res else None,
+                             "xirr": bl.strategy_xirr if bl else None,
+                             **{f"vs {k}": bl.excess[k] if bl else None for k in (BUY_HOLD, MONTHLY)},
+                             "trades": res.metrics["trades"] if res else None})
+            beats = {k: sum((r[f"vs {k}"] or 0) > 0 for r in rows) for k in (BUY_HOLD, MONTHLY)}
+            self._set_per_symbol(rows, "Walk-forward per symbol",
+                                 " · ".join(f"beats {k} on {v} of {len(rows)}" for k, v in beats.items()))
+        self._fill_folds(wf, multi)
+        self._show_symbol(next(iter(per)))
+
+    def _fill_folds(self, wf, multi: bool):
+        """The folds table (one row per fold, the combined row, the holdout) and the notes below it."""
+        def day(ts):
+            return "end" if ts is None else f"{ts:%Y-%m-%d}"
+
+        def row(f):
+            s = f.summary()
+            k, n = s["beats"][BUY_HOLD]
+            return {"fold": "holdout" if f.holdout else str(f.index + 1),
+                    "train": f"{day(f.start)} – {day(f.split)}", "test": f"{day(f.split)} – {day(f.end)}",
+                    f"{obj} in": s["in-sample"], f"{obj} out": s["out-of-sample"],
+                    "xirr": s["xirr"], "vs buy & hold": s["vs buy & hold"], "vs monthly investing": s["vs monthly investing"],
+                    **({"beats b&h on": f"{k} of {n}"} if multi else {}), "trades": s["trades"]}
+
+        obj, counts = wf.objective, wf.beat_counts()
+        rows = [row(f) for f in wf.folds]
+        rows.append({"fold": "all", f"{obj} out": wf.mean,
+                     **({"beats b&h on": f"in {counts[BUY_HOLD]} of {len(wf.folds)}"} if multi else {})})
+        if wf.holdout:
+            rows.append(row(wf.holdout))
+        columns = list(dict.fromkeys(k for row in rows for k in row))
+        self.folds.formats = {c: (lambda v: f"{v:.3f}") if c.startswith(obj) else (lambda v: f"{v:.0f}")
+                              if c == "trades" else (lambda v, c=c: fmt(c, v)) for c in columns
+                              if c not in ("fold", "train", "test", "beats b&h on")}
+        self.folds.set_frame(pd.DataFrame(rows, columns=columns))
+        for i in (1, 2):  # the date ranges stay readable; the numbers share the rest
+            self.folds_view.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        kind = "anchored" if wf.anchored else "rolling"
+        self.folds_title.setText(f"<b>Walk-forward</b> ({wf.method.upper()}, {kind}: {wf.train_length} train / "
+                                 f"{wf.test_length} test candles) · click a fold to see it, <i>all</i> for the overview")
+        t = self.themes.current
+        spread = f" ± {wf.std:.3f}" if wf.std is not None else ""
+        lines = [f"Out-of-sample {obj} {wf.mean:.3f}{spread} over {len(wf.folds)} folds · "
+                 + " · ".join(f"beats {k} in {v} of {len(wf.folds)}" for k, v in counts.items())
+                 if wf.mean is not None else "No fold has an out-of-sample stretch."]
+        lines += [f"<b style='color:{t.down}'>{w}</b>" for w in wf.warnings()]
+        stability = {k: v for k, v in wf.stability().items() if not k.startswith("use.")}  # members: see selection
+        if stability:
+            head = "".join(f"<th>{f.index + 1}</th>" for f in wf.folds)
+            body = "".join(
+                f"<tr><td>{k}</td>" + "".join(f"<td align='right'>{f.params[k]:.4g}</td>" for f in wf.folds)
+                + f"<td align='right' style='color:{t.down if v > 0.5 else t.up}'>{v:.0%}</td></tr>"
+                for k, v in stability.items())
+            lines.append(f"<table cellspacing='6'><tr><th align='left'>param</th>{head}<th>moves</th></tr>{body}</table>")
+        if wf.skipped:
+            lines.append(f"<span style='color:{t.muted}'>Skipped: "
+                         + ", ".join(f"{s} ({why})" for s, why in wf.skipped.items()) + "</span>")
+        self.folds_note.setText("<br>".join(lines))
+        self.folds_card.show()
+
+    def _show_fold(self, label: str):
+        """Show one fold (its in- and out-of-sample curves and metrics) of the shown symbol; "all": the overview."""
+        if self._wf is None:
+            return
+        wf, algo = self._wf
+        symbol = self._shown_symbol if wf.symbols != [""] else ""
+        if label == "all":
+            self._render(*self._symbol_payloads[symbol])
+            return
+        fold = wf.holdout if label == "holdout" else wf.folds[int(label) - 1]
+        part = self._fold_part(fold, symbol)
+        if part is None:
+            self.status.emit(f"fold {label} left out {symbol}")
+            return
+        df = wf.frames[symbol]
+        window = df[(df.index >= fold.start) & ((df.index < fold.end) if fold.end is not None else True)]
+        self._render(window, {"in-sample": part.train, "out-of-sample": part.test, "_params": fold.params,
+                              "_baselines": {"in-sample": part.train_baselines, "out-of-sample": part.test_baselines},
+                              "_plot_baselines": self._plot_baselines(window, wf.fee, wf.dca_amount),
+                              "_selection": (algo, {f"fold {label}": fold.params}), "_comparison": fold.comparison})
+
     def _progress(self, step, best):
         self.progress.setValue(step + 1)
         self.status.emit(f"{self._phase['name']} step {step + 1}: best {self.objective.currentText()} = {best:.3f}")
@@ -887,20 +1064,26 @@ class BacktestView(QWidget):
     def _show(self, payload):
         df, results = payload
         self._busy(False)
+        self._wf = None
+        self.folds_card.hide()
         per = results.get("_per_symbol")
         self._symbol_payloads = per or {}
         self.per_symbol_card.setVisible(bool(per))
         if not per:
             self._render(df, results)
             return
-        columns = list(dict.fromkeys(k for row in results["_rows"] for k in row))
-        frame = pd.DataFrame(results["_rows"], columns=columns)
-        self.per_symbol.formats = {c: (lambda v: f"{v:.3f}") if "sample" in c else (lambda v: f"{v:.0f}")
-                                   if c == "trades" else (lambda v, c=c: fmt(c, v)) for c in columns if c != "symbol"}
-        self.per_symbol.set_frame(frame)
-        self.per_symbol_title.setText(f"<b>{results['_title']}</b> · click a row to show that symbol")
-        self.per_symbol_note.setText(results["_note"])
+        self._set_per_symbol(results["_rows"], results["_title"], results["_note"])
         self._show_symbol(next(iter(per)))
+
+    def _set_per_symbol(self, rows: list[dict], title: str, note: str):
+        columns = list(dict.fromkeys(k for row in rows for k in row))
+        frame = pd.DataFrame(rows, columns=columns)
+        self.per_symbol.formats = {c: (lambda v: f"{v:.3f}") if "sample" in c or "walk-forward" in c else
+                                   (lambda v: f"{v:.0f}") if c == "trades" else (lambda v, c=c: fmt(c, v))
+                                   for c in columns if c != "symbol"}
+        self.per_symbol.set_frame(frame)
+        self.per_symbol_title.setText(f"<b>{title}</b> · click a row to show that symbol")
+        self.per_symbol_note.setText(note)
 
     def _show_symbol(self, symbol: str):
         """Show one symbol of a multi-symbol run in the plot and the metrics table."""
@@ -912,6 +1095,8 @@ class BacktestView(QWidget):
         results = dict(results)  # a multi-symbol run shows the same payload again on a click
         params = results.pop("_params", None)
         comparison = results.pop("_comparison", None)
+        chain = results.pop("_chain", {})  # curve -> the curve it continues from (the holdout: the walk-forward)
+        self._stretches = results.pop("_stretches", [])  # (label, first, last date) shaded: walk-forward test stretches
         selection_algo, selection = results.pop("_selection", (None, {}))
         self._show_selection(selection_algo, selection)
         bases = results.pop("_baselines", {})
@@ -939,8 +1124,10 @@ class BacktestView(QWidget):
             if res is None:
                 continue
             eq = res.equity
-            if name.endswith("out-of-sample"):  # continue from where the matching in-sample curve ended
-                eq = eq / eq.iloc[0] * results[name.replace("out-of-sample", "in-sample")].equity.iloc[-1]
+            # an out-of-sample curve continues from where the matching in-sample curve ended
+            prev = results.get(chain.get(name, name.replace("out-of-sample", "in-sample")))
+            if (name.endswith("out-of-sample") or name in chain) and prev is not None:
+                eq = eq / eq.iloc[0] * prev.equity.iloc[-1]
             self._curves.append((name, epoch_seconds(eq.index), eq.to_numpy(dtype=float), pg.mkPen(color, width=2)))
             rows.setdefault(name, res.metrics)
             self._fit_series.append(eq.reindex(df.index).to_numpy(dtype=float))
@@ -961,6 +1148,15 @@ class BacktestView(QWidget):
             self.status.emit("log scale needs values above 0: showing a linear scale")
         self.value_axis.picture = None  # re-generate the ticks
         self.plot.clear()
+        muted = qcolor(self.themes.current.muted)
+        for i, (label, first, last) in enumerate(self._stretches):  # behind the curves, alternating shades
+            fill = QColor(muted)
+            fill.setAlpha(22 if i % 2 else 40)
+            region = pg.LinearRegionItem(epoch_seconds(pd.DatetimeIndex([first, last])), movable=False,
+                                         brush=fill, pen=pg.mkPen(None))
+            region.setZValue(-10)
+            pg.InfLineLabel(region.lines[0], text=label, position=0.95, anchors=[(0, 0), (0, 0)], color=muted)
+            self.plot.addItem(region, ignoreBounds=True)
         for name, x, y, pen in self._curves:
             self.plot.plot(x, self._ty(y), pen=pen, name=name)
 

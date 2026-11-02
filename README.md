@@ -269,8 +269,20 @@ its range). Warnings in red flag a score that swings more between folds than its
 average, a strategy that beats buy & hold in fewer than half the folds,
 parameters that move across more than half their range, and a holdout that
 doesn't beat buy & hold. The reuse command has the newest parameters (from the
-last fold, or the ones scored on the holdout). The Backtest lab doesn't have
-walk-forward yet.
+last fold, or the ones scored on the holdout).
+
+In the Backtest lab, *Walk-forward* in the Optimizer card is on by default with
+5 rolling folds and automatic windows; *off* goes back to one 70/30 split. The
+holdout is off by default (it's a fixed number of candles, so set it to fit your
+data).
+The plot shows every fold's test stretch shaded and numbered, with one
+*walk-forward* curve through them: each stretch traded with the parameters its
+fold tuned, i.e. what walk-forward trading would have earned. The holdout
+continues it. The folds table below has a row per fold, the combined row and
+the holdout, then the warnings and the parameters per fold. Click a fold to see
+its own in- and out-of-sample curves and parameters, and *all* to return to the
+overview. With several symbols, the per-symbol table shows each symbol's
+walk-forward result; click one to switch the plot to it.
 
 **Picking the strategies.** Without an algorithm, `optimize` also decides *which*
 strategies and indicators to use. It starts from a pool: every strategy and

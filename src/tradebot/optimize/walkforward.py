@@ -33,7 +33,10 @@ import numpy as np
 import pandas as pd
 
 from tradebot.algorithms.base import BaseAlgorithm
+from tradebot.backtest import BacktestResult, Baselines, baselines
 from tradebot.backtest.baselines import BUY_HOLD, MONTHLY
+from tradebot.backtest.engine import from_positions
+from tradebot.backtest.metrics import infer_periods_per_year
 from tradebot.optimize.base import AGGREGATES, OptimizationResult, Progress, select_frames
 from tradebot.optimize.compare import ComparisonResult, run_comparison
 from tradebot.optimize.genetic import GeneticOptimizer
@@ -97,6 +100,27 @@ class WalkForwardResult:
     train_length: int = 0
     test_length: int = 0
     skipped: dict[str, str] = field(default_factory=dict)
+    frames: dict[str, pd.DataFrame] = field(default_factory=dict, repr=False)  #: the candles ("" = one symbol)
+    fee: float = 0.001
+    dca_amount: float | None = None
+
+    @property
+    def symbols(self) -> list[str]:
+        return list(self.frames)
+
+    def stitched(self, symbol: str = "") -> tuple[BacktestResult, Baselines] | None:
+        """Every fold's out-of-sample stretch on ``symbol`` joined into one backtest (each stretch traded with its
+        own fold's parameters, without the holdout), with the baselines over the same candles; None when no fold
+        has an out-of-sample stretch on that symbol."""
+        parts = [r.test.positions for f in self.folds for r in (f.result.symbols or [f.result])
+                 if getattr(r, "symbol", "") == symbol and r.test is not None]
+        if not parts:
+            return None
+        positions = pd.concat(parts)
+        df = self.frames[symbol].loc[positions.index]
+        ppy = infer_periods_per_year(self.frames[symbol].index)
+        res = from_positions(df, positions, "walk-forward", {}, self.fee, periods_per_year=ppy)
+        return res, baselines(df, res, self.fee, amount=self.dca_amount, periods_per_year=ppy)
 
     @property
     def scores(self) -> np.ndarray:
@@ -247,4 +271,5 @@ def walk_forward(
     folds_, last = (out[:-1], out[-1]) if holdout else (out, None)
     first = windows[0]
     return WalkForwardResult(folds_, last, space, kwargs.get("objective", "sharpe"), aggregate, method, anchored,
-                             first[1] - first[0], first[2] - first[1], skipped)
+                             first[1] - first[0], first[2] - first[1], skipped, frames, kwargs.get("fee", 0.001),
+                             kwargs.get("dca_amount"))
