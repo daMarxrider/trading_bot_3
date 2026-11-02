@@ -200,7 +200,7 @@ class EvolveView(QWidget):
         scroll = QScrollArea()
         scroll.setWidget(left_w)
         scroll.setWidgetResizable(True)
-        scroll.setMinimumWidth(300)
+        scroll.setMinimumWidth(380)  # the settings never scroll sideways; the divider only widens them
         enable_kinetic_scroll(scroll)
         scroll.setStyleSheet("QScrollArea { background: transparent; border: none; } "
                              "QScrollArea > QWidget > QWidget { background: transparent; }")
