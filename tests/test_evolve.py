@@ -2,6 +2,8 @@
 # Copyright (C) 2026 daMarxrider
 """Strategy evolution (#83): typed trees, simplifier, evaluator, generated plugins, the search and its split."""
 
+import re
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -299,7 +301,7 @@ def test_cli_evolve_and_save(monkeypatch, tmp_path):
     assert again.exit_code != 0 and "exists" in again.output  # never overwritten without --force
     for name in ("sma_cross", "class"):  # an existing algorithm, a Python keyword: refused before the search
         bad = CliRunner().invoke(cli.app, ["evolve", "X", "--save", name, "--plugin-dir", str(tmp_path)])
-        assert bad.exit_code != 0 and "--save" in bad.output
+        assert bad.exit_code != 0 and "--save" in re.sub(r"\x1b\[[0-9;]*m", "", bad.output)  # CI colours the error
     monkeypatch.setenv("TRADEBOT_PLUGIN_DIR", str(tmp_path))
     bt = CliRunner().invoke(cli.app, ["backtest", "X", "evolved_cli", "--no-plot"], env={"COLUMNS": "200"})
     assert bt.exit_code == 0, bt.output
