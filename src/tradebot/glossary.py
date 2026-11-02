@@ -92,6 +92,19 @@ TERMS = {
                "with new random dates every round. Settings that only fit one period lose, and all stretches "
                "are computed in one batch, which suits a graphics card. The winner is checked on all candles.",
     "sample_length": "How many candles each random stretch covers. Shorter is faster but noisier.",
+    "walk_forward": "Instead of one 70/30 split, tune several times: each fold tunes on a stretch of history and "
+                    "is tested on the next stretch it never saw, then everything moves forward. The honest test "
+                    "of whether tuned settings hold up on new data.",
+    "wf_train": "How many candles each fold tunes on. Auto fills the data and keeps the 70/30 ratio.",
+    "wf_test": "How many candles each fold is tested on, right after its training stretch. Auto fills the data.",
+    "anchored": "Every fold tunes on all history from the first candle, so the training stretch grows. "
+                "Otherwise it rolls forward and keeps its length.",
+    "holdout": "The last candles, kept out of every fold and tested once at the end. The final check, since "
+               "nothing was chosen by looking at them.",
+    "folds": "One row per fold: when it tuned and tested, and how it did on its unseen stretch. Scores that swing "
+             "a lot between folds, or settings that change every fold, are likely luck. Click a row to see it.",
+    "walk-forward": "Every fold's unseen stretch joined into one run, each traded with the settings its fold "
+                    "tuned. What walk-forward trading would have earned.",
     "per_symbol": "The tuned settings on each symbol. Settings that only shine on one or two symbols are probably "
                   "luck. Click a row to see that symbol's curves.",
     "timeframe": "How much time one candle covers: 1d is one candle per day, 1h one per hour. Shorter "
