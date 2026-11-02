@@ -158,11 +158,16 @@ def plugin_source(program: Program, name: str, notes: list[str] = ()) -> str:
     return "\n".join(lines) + "\n"
 
 
-def load_plugin(source: str, module_name: str = "tradebot_evolved"):
-    """Execute a generated plugin source; returns its algorithm class (registered like any plugin)."""
+def load_plugin(source: str, module_name: str = "tradebot_evolved", register: bool = True):
+    """Execute a generated plugin source; returns its algorithm class, registered like any plugin unless
+    ``register`` is False (then the registry is left as it was, e.g. for a preview on the chart)."""
+    from tradebot.algorithms.base import ALGORITHMS, BaseAlgorithm
+
+    before = dict(ALGORITHMS._items)
     module = types.ModuleType(module_name)
     exec(compile(source, f"<{module_name}>", "exec"), module.__dict__)  # noqa: S102
-    from tradebot.algorithms.base import BaseAlgorithm
-
+    if not register:
+        ALGORITHMS._items.clear()
+        ALGORITHMS._items.update(before)
     return next(v for v in module.__dict__.values()
                 if isinstance(v, type) and issubclass(v, BaseAlgorithm) and v is not BaseAlgorithm)

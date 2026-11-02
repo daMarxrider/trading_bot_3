@@ -13,6 +13,7 @@ import pandas as pd
 from PyQt6.QtCore import (
     QAbstractTableModel,
     QDate,
+    QEvent,
     QModelIndex,
     QObject,
     QPoint,
@@ -34,6 +35,9 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLayout,
     QLineEdit,
+    QScrollArea,
+    QSplitter,
+    QSplitterHandle,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -138,6 +142,95 @@ class DataFrameModel(QAbstractTableModel):
         self.df = self.df.sort_values(col, ascending=order == Qt.SortOrder.AscendingOrder, na_position="last",
                                       ignore_index=True)
         self.endResetModel()
+
+
+class _PaneHandle(QSplitterHandle):
+    def __init__(self, orientation, splitter):
+        super().__init__(orientation, splitter)
+        self.setToolTip("Drag to resize · double-click to reset")
+
+    def mouseDoubleClickEvent(self, event):
+        self.splitter().reset()
+
+
+class Panes(QSplitter):
+    """Panes with draggable dividers between them (#95), remembered under ``key`` in ``settings``.
+
+    :meth:`add` takes a widget with a stretch (its share of the default sizes). With ``scroll``, the widget
+    sits in a scroll area, so a tall card can be made smaller than its content instead of pushing its
+    neighbours to nothing; the scroll area is shown and hidden together with the widget. Double-clicking a
+    divider goes back to the default sizes.
+    """
+
+    def __init__(self, orientation: Qt.Orientation, key: str | None = None, settings=None, touch: bool = False):
+        super().__init__(orientation)
+        self.key, self.settings = key, settings
+        self.setChildrenCollapsible(False)
+        self.setHandleWidth(14 if touch else 8)  # finger-sized in touch mode
+        self._stretch: list[float] = []
+        self._fixed: list[int | None] = []
+        self._wrapped: dict[QWidget, QScrollArea] = {}
+        self._placed = False
+        self.splitterMoved.connect(self._save)
+
+    def createHandle(self):
+        return _PaneHandle(self.orientation(), self)
+
+    def add(self, widget: QWidget, stretch: float = 1, scroll: bool = False, size: int | None = None) -> QWidget:
+        """Add a pane; ``size`` gives it a fixed default size in pixels instead of a share by ``stretch``."""
+        pane = widget
+        if scroll:
+            # hidden on purpose (a parentless widget that was never shown also counts as hidden)
+            hidden = widget.isHidden() and widget.testAttribute(Qt.WidgetAttribute.WA_WState_ExplicitShowHide)
+            pane = QScrollArea(objectName="Pane")
+            pane.setWidget(widget)  # shows the widget
+            widget.setAutoFillBackground(False)  # the card draws its own background (setWidget turned this on)
+            pane.setWidgetResizable(True)
+            pane.setFrameShape(QFrame.Shape.NoFrame)
+            widget.setVisible(not hidden)
+            pane.setVisible(not hidden)
+            self._wrapped[widget] = pane
+            widget.installEventFilter(self)
+        self.addWidget(pane)
+        self._stretch.append(stretch)
+        self._fixed.append(size)
+        self.setStretchFactor(self.count() - 1, int(stretch * 10))
+        return pane
+
+    def eventFilter(self, obj, event):
+        pane = self._wrapped.get(obj)
+        if pane is not None and event.type() in (QEvent.Type.ShowToParent, QEvent.Type.HideToParent):
+            pane.setVisible(event.type() == QEvent.Type.ShowToParent)
+        return super().eventFilter(obj, event)
+
+    def default_sizes(self) -> list[int]:
+        total = sum(self.sizes()) or 1000
+        rest = max(0, total - sum(f for f in self._fixed if f))
+        weight = sum(w for w, f in zip(self._stretch, self._fixed) if not f) or 1
+        return [f if f else max(1, int(rest * w / weight)) for w, f in zip(self._stretch, self._fixed)]
+
+    def reset(self):
+        """Back to the default sizes (and forget the saved ones)."""
+        self.setSizes(self.default_sizes())
+        if self.settings and self.key:
+            self.settings.set(self.key, None)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._placed:  # sizes need the real total, which exists once shown
+            self._placed = True
+            saved = self.settings.get(self.key) if self.settings and self.key else None
+            ok = isinstance(saved, list) and len(saved) == self.count() and all(isinstance(v, int) for v in saved)
+            self.setSizes(saved if ok else self.default_sizes())
+
+    def _save(self, *_):
+        if not (self.settings and self.key):
+            return
+        old = self.settings.get(self.key) or []
+        sizes = self.sizes()
+        # a hidden pane reports 0: keep its last size, so it comes back as it was
+        merged = [s if s > 0 or i >= len(old) else old[i] for i, s in enumerate(sizes)]
+        self.settings.set(self.key, merged)
 
 
 def card(*widgets, layout_cls=QVBoxLayout) -> QFrame:

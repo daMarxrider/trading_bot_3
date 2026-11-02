@@ -125,6 +125,10 @@ QTableView, QListWidget {{ background: {panel}; border: 1px solid {panel_border}
 QHeaderView {{ background: transparent; }}
 QHeaderView::section {{ background: transparent; color: {muted}; border: none; border-bottom: 1px solid {panel_border}; padding: 6px; }}
 QTableCornerButton::section {{ background: transparent; border: none; }}
+QSplitter::handle {{ background: transparent; }}
+QSplitter::handle:hover, QSplitter::handle:pressed {{ background: {selection}; border-radius: 3px; }}
+QScrollArea#Pane {{ background: transparent; border: none; }}
+QScrollArea#Pane > QWidget#qt_scrollarea_viewport {{ background: transparent; }}
 QScrollBar:vertical, QScrollBar:horizontal {{ background: transparent; width: 10px; height: 10px; }}
 QScrollBar::handle {{ background: {panel_border}; border-radius: 5px; min-height: 24px; min-width: 24px; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}

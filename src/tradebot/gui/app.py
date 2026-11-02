@@ -31,6 +31,7 @@ from tradebot.data.cache import DiskCache
 from tradebot.data.providers import quiet_yfinance
 from tradebot.gui.chart import ChartView
 from tradebot.gui.common import run_async
+from tradebot.gui.evolve import EvolveView
 from tradebot.gui.settings import SettingsDialog
 from tradebot.legal import NOT_AFFILIATED, NO_WARRANTY
 from tradebot.gui.theme import GlassBackdrop, ThemeManager
@@ -60,8 +61,9 @@ class MainWindow(QMainWindow):
                                                                 + self.portfolio_symbols)))
         self.portfolio = PortfolioView(engine, themes)
         self.lab = BacktestView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)
+        self.evolve = EvolveView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)
         pages = [("Chart", "📈", self.chart), ("Screener", "🔎", self.screener), ("Backtest", "🧪", self.lab),
-                 ("Portfolio", "💼", self.portfolio), ("News", "📰", self.news)]
+                 ("Evolve", "🧬", self.evolve), ("Portfolio", "💼", self.portfolio), ("News", "📰", self.news)]
 
         self.stack = QStackedWidget()
         sidebar = QWidget(objectName="Sidebar")
@@ -108,6 +110,14 @@ class MainWindow(QMainWindow):
             self.chart.set_algorithm(algo)
 
         self.lab.show_on_chart.connect(lab_to_chart)
+        self.evolve.show_on_chart.connect(lab_to_chart)
+
+        def strategy_saved(name):  # an evolved strategy saved as a plugin shows up in every list at once (#83)
+            for box in (self.lab.algo, self.chart.algo_box):
+                if box.findText(name) < 0:
+                    box.addItem(name)
+
+        self.evolve.saved.connect(strategy_saved)
 
         root = GlassBackdrop(themes)
         lay = QHBoxLayout(root)

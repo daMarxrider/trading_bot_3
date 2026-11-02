@@ -196,9 +196,10 @@ class EvolutionResult:
     def plugin_source(self, name: str) -> str:
         return plugin_source(self.program, name, self.notes())
 
-    def algorithm(self, name: str = "evolved"):
-        """The result as an algorithm instance (its class is registered under ``name``, like a loaded plugin)."""
-        return load_plugin(self.plugin_source(name), f"tradebot_evolved_{name}")()
+    def algorithm(self, name: str = "evolved", register: bool = True):
+        """The result as an algorithm instance; its class is registered under ``name`` like a loaded plugin,
+        unless ``register`` is False."""
+        return load_plugin(self.plugin_source(name), f"tradebot_evolved_{name}", register)()
 
 
 @dataclass
