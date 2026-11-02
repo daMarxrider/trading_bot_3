@@ -284,6 +284,11 @@ def test_bad_settings_say_why():
         Evolver(make_ohlc(30), segments=5)
 
 
+def plain(result) -> str:
+    """CLI output without colour codes (CI's terminal gets colours, which split words)."""
+    return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", result.output)
+
+
 def test_cli_evolve_and_save(monkeypatch, tmp_path):
     from typer.testing import CliRunner
 
@@ -294,14 +299,15 @@ def test_cli_evolve_and_save(monkeypatch, tmp_path):
             "--save", "evolved_cli", "--plugin-dir", str(tmp_path)]
     res = CliRunner().invoke(cli.app, args, env={"COLUMNS": "200"})
     assert res.exit_code == 0, res.output
-    assert "evolved rules" in res.output and "validation" in res.output and "seed 1" in res.output
-    assert "tradebot backtest X evolved_cli" in res.output
+    out = plain(res)
+    assert "evolved rules" in out and "validation" in out and "seed 1" in out
+    assert "tradebot backtest X evolved_cli" in out
     assert "class EvolvedCli(BaseAlgorithm)" in (tmp_path / "evolved_cli.py").read_text()
     again = CliRunner().invoke(cli.app, args)
-    assert again.exit_code != 0 and "exists" in again.output  # never overwritten without --force
+    assert again.exit_code != 0 and "exists" in plain(again)  # never overwritten without --force
     for name in ("sma_cross", "class"):  # an existing algorithm, a Python keyword: refused before the search
         bad = CliRunner().invoke(cli.app, ["evolve", "X", "--save", name, "--plugin-dir", str(tmp_path)])
-        assert bad.exit_code != 0 and "--save" in re.sub(r"\x1b\[[0-9;]*m", "", bad.output)  # CI colours the error
+        assert bad.exit_code != 0 and "--save" in plain(bad)
     monkeypatch.setenv("TRADEBOT_PLUGIN_DIR", str(tmp_path))
     bt = CliRunner().invoke(cli.app, ["backtest", "X", "evolved_cli", "--no-plot"], env={"COLUMNS": "200"})
     assert bt.exit_code == 0, bt.output
