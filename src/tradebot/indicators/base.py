@@ -25,6 +25,10 @@ How each output is drawn can be set with :attr:`BaseIndicator.styles`::
     styles = {"value": Style(color="#ffd166", width=2), "signal": Style(color="accent", dash="dash")}
 
 Outputs without a style (or colour) get the theme's palette colours.
+
+The strategy evolver (``tradebot evolve``, #83) builds rules from every indicator output whose value on a
+bar depends only on that bar and earlier ones (checked automatically), using :attr:`BaseIndicator.units`
+to know what an output can be compared with.
 """
 
 from __future__ import annotations
@@ -71,6 +75,11 @@ class BaseIndicator(ABC):
     hidden: ClassVar[tuple[str, ...]] = ()
     #: How outputs are drawn: ``{output: Style(...)}``; outputs without a colour use the theme palette.
     styles: ClassVar[dict[str, Style]] = {}
+    #: What each output measures, for the strategy evolver (#83), which only compares like with like:
+    #: ``"price"``, ``"osc"`` (0-100), ``"ratio"`` (0.05 = 5 %), ``"dist"`` (a price distance, like the ATR) or
+    #: any other name. Unset outputs: ``"price"`` on overlays, ``"osc"`` when all ``levels`` are within 0-100,
+    #: otherwise the indicator's own unit (comparable with its other outputs and its ``levels``).
+    units: ClassVar[dict[str, str]] = {}
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)

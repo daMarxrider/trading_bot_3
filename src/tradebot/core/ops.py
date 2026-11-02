@@ -67,6 +67,13 @@ def maximum(a, b):
     return np.maximum(a, b)
 
 
+def minimum(a, b):
+    if is_torch(a) or is_torch(b):
+        like = a if is_torch(a) else b
+        return torch.minimum(asarray(a, like), asarray(b, like))
+    return np.minimum(a, b)
+
+
 def cumsum(x):
     return torch.cumsum(x, dim=-1) if is_torch(x) else np.cumsum(x, axis=-1)
 

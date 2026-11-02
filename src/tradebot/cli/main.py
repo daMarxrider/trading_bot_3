@@ -502,6 +502,173 @@ def _print_walk_forward(wf, algorithm, symbol: str) -> None:
                   f" · reuse with: [cyan]{_reuse_command(symbol, algorithm, latest.params)}[/]")
 
 
+@app.command()
+def evolve(
+    symbol: Annotated[Optional[str], typer.Argument(
+        help="e.g. AAPL, or several separated by commas (can be left out with --watchlist)",
+        autocompletion=complete.symbols)] = None,
+    tf: TF = "1d",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    bars: Annotated[int, typer.Option(help="Number of candles (ignored with --start)")] = 3000,
+    watchlist: Annotated[list[str], typer.Option(
+        "--watchlist", "-w", help="Also evolve on this watchlist's symbols (repeatable; 'all' = every watchlist)",
+        autocompletion=complete.watchlists)] = [],
+    population: Annotated[int, typer.Option(help="Programs per generation")] = 300,
+    generations: int = 40,
+    max_depth: Annotated[int, typer.Option(help="Deepest nesting of a rule")] = 6,
+    max_size: Annotated[int, typer.Option(help="Most building blocks (nodes) per rule")] = 40,
+    objective: Annotated[str, typer.Option(help="sharpe | return | calmar", autocompletion=complete.choices(
+        ("sharpe", ""), ("return", ""), ("calmar", "")))] = "sharpe",
+    aggregate: Annotated[str, typer.Option(
+        help="How the scores of all symbols and segments combine into one (mean | median | min | mean-std)",
+        autocompletion=complete.choices(("mean", ""), ("median", "robust to one outlier"),
+                                        ("min", "the worst one counts"), ("mean-std", "mean minus spread")))] = "mean",
+    align: Annotated[bool, typer.Option(help="With several symbols: cut all of them to their common date range")] = False,
+    validation: Annotated[float, typer.Option(help="Fraction of the data (after training) that picks the result")] = 0.2,
+    test: Annotated[float, typer.Option(help="Fraction of the data (the newest) kept for the final, unseen score")] = 0.2,
+    segments: Annotated[int, typer.Option(
+        help="The training part is scored in this many consecutive stretches; a rule has to work in all of them")] = 3,
+    min_trades: Annotated[int, typer.Option(help="Reject programs with fewer round trips per symbol in training")] = 4,
+    parsimony: Annotated[float, typer.Option(help="Fitness penalty per building block: shorter rules win ties")] = 0.002,
+    state: Annotated[bool, typer.Option(
+        help="Let exit rules use the open trade (bars in trade, stop loss, take profit, trailing stop)")] = True,
+    indicators: Annotated[Optional[str], typer.Option(
+        help="Comma-separated indicators the rules may use (default: all, plugins included)",
+        autocompletion=complete.indicators)] = None,
+    permutations: Annotated[int, typer.Option(
+        help="Also run the search this many times on shuffled candles, to see whether it finds as much in noise")] = 0,
+    fee: float = 0.001,
+    dca_amount: DcaAmount = None,
+    seed: Annotated[Optional[int], typer.Option(help="Random seed (printed when left out, to repeat a run)")] = None,
+    top: Annotated[int, typer.Option(help="Show this many of the best programs with their validation score")] = 5,
+    save: Annotated[Optional[str], typer.Option(
+        help="Save the result as a plugin algorithm with this name (then usable in backtest, chart, lab and bot)")] = None,
+    plugin_dir: Annotated[Optional[str], typer.Option(help="Where --save writes (default: the first plugin folder)")] = None,
+    force: Annotated[bool, typer.Option(help="Let --save overwrite an existing file")] = False,
+):
+    """Evolve a whole strategy from scratch with genetic programming: entry and exit rules built from
+    prices, indicators, arithmetic and logic, with nothing written by hand.
+
+    The data is split by date: rules evolve on the training part (scored in --segments stretches on every
+    symbol), the best ones are compared on the validation part, and the winner is scored once on the
+    newest --test part, next to buy & hold and monthly investing. --save writes it as a plugin."""
+    from pathlib import Path
+
+    from rich.progress import Progress
+
+    from tradebot.core.registry import default_plugin_dirs
+    from tradebot.evolve import evolve as run_evolve, valid_name
+    from tradebot.optimize.base import AGGREGATES
+
+    if aggregate not in AGGREGATES:
+        raise typer.BadParameter(f"aggregate must be one of {', '.join(AGGREGATES)}", param_hint="--aggregate")
+    target = None
+    if save is not None:  # checked before the search, not after it
+        if not valid_name(save):
+            raise typer.BadParameter("lower-case letters, digits and _ only (not a Python keyword)", param_hint="--save")
+        target = (Path(plugin_dir).expanduser() if plugin_dir else default_plugin_dirs()[0]) / f"{save}.py"
+        if target.exists() and not force:
+            raise typer.BadParameter(f"{target} exists; pick another name or add --force", param_hint="--save")
+        if save in ALGORITHMS and not target.exists():
+            raise typer.BadParameter(f"there already is an algorithm {save!r}; pick another name", param_hint="--save")
+    names = [n.strip() for n in indicators.split(",") if n.strip()] if indicators else None
+    for n in names or ():
+        if n not in INDICATORS:
+            raise typer.BadParameter(f"unknown indicator {n!r}", param_hint="--indicators")
+    symbols = _symbols(symbol, watchlist)
+    df = load_data(symbols[0], tf, start, end, bars) if len(symbols) == 1 else _load_many(symbols, tf, start, end, bars)
+    kwargs = dict(population=population, generations=generations, max_depth=max_depth, max_size=max_size,
+                  objective=objective, aggregate=aggregate, align=align, validation=validation, test=test,
+                  segments=segments, min_trades=min_trades, parsimony=parsimony, state=state, indicators=names,
+                  fee=fee, dca_amount=dca_amount, seed=seed)
+    with Progress(console=console) as progress:
+        task = progress.add_task("evolving", total=generations)
+        label = {"name": "evolving"}
+
+        def phase(name):
+            label["name"] = name
+            progress.reset(task, total=generations)
+
+        def report(gen, best, program):
+            progress.update(task, advance=1, description=f"{label['name']}: generation {gen + 1} best {objective}={best:.3f}")
+
+        try:
+            res = run_evolve(df, permutations=permutations, progress=report, on_phase=phase, **kwargs)
+        except ValueError as e:
+            raise typer.BadParameter(str(e)) from None
+    _print_evolution(res, tf, top)
+    shown = ",".join(r.symbol for r in res.symbols) or symbols[0]
+    if target is not None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(res.plugin_source(save))
+        console.print(f"saved as [bold]{save}[/] in {target}\n"
+                      f"use it with: [cyan]tradebot backtest {shown} {save}[/] · fine-tune the constants: "
+                      f"[cyan]tradebot optimize {shown} {save}[/]")
+    else:
+        console.print(f"[dim]keep it with --save NAME (the same --seed {res.seed} repeats this run)[/]")
+
+
+def _print_evolution(res, tf: str, top: int) -> None:
+    """The rules, a row per symbol (objective per part, test XIRR and lead over the baselines, trades), the best
+    programs with their validation score, the permutation test and the warnings (#83)."""
+    from rich.panel import Panel
+
+    from tradebot.backtest.metrics import fmt
+
+    def cell(v, f="{:.3f}".format):
+        return "–" if v is None else f(v)
+
+    def lead(v):
+        return "–" if v is None else f"[{'green' if v > 0 else 'red'}]{fmt('vs buy & hold', v)}[/]"
+
+    def day(ts):
+        return f"{ts:%Y-%m-%d}"
+
+    console.print(Panel(str(res.program), title="evolved rules", expand=False))
+    first = res.symbols[0]
+    parts = [f"train {day(first.train.equity.index[0])} – {day(res.validation_start or res.test_start or first.train.equity.index[-1])}"]
+    if res.validation_start is not None:
+        parts.append(f"validation from {day(res.validation_start)}")
+    if res.test_start is not None:
+        parts.append(f"test from {day(res.test_start)}")
+    unseen = res.unseen or "train"
+    obj = res.objective
+    t = Table(title=f"{obj} per part · {tf} · {' · '.join(parts)}")
+    for col in ("symbol", "train", "validation", "test", f"XIRR {unseen}", "vs buy & hold", "vs monthly",
+                f"trades {unseen}"):
+        t.add_column(col, justify="left" if col == "symbol" else "right")
+    for row in res.rows():
+        t.add_row(row["symbol"] or "–", cell(row["train"]), cell(row["validation"]), cell(row["test"]),
+                  cell(row["xirr"], lambda v: fmt("xirr", v)), lead(row["vs buy & hold"]),
+                  lead(row["vs monthly investing"]), cell(row["trades"], str))
+    if res.multi:
+        n, beats = len(res.symbols), res.beats(unseen) if unseen != "train" else {}
+        t.add_row(f"[bold]{res.aggregate}[/]", *(f"[bold]{cell(res.aggregated(p))}[/]" for p in ("train", "validation", "test")),
+                  "", *(f"beats on {beats.get(k, 0)}/{n}" for k in ("buy & hold", "monthly investing")), "")
+    console.print(t)
+    for s, reason in res.skipped.items():
+        console.print(f"[dim]skipped {s}: {reason}[/]")
+    if top > 0 and len(res.hall_of_fame) > 1:
+        h = Table(title="best programs in training (the one with the best validation score was picked)")
+        for col in ("", "training fitness", "validation", "generation", "entry", "exit"):
+            h.add_column(col, justify="left" if col in ("", "entry", "exit") else "right")
+        best = sorted(res.hall_of_fame, key=lambda c: -c.fitness)
+        shown = best[:top] + [c for c in best[top:] if c.program.key == res.program.key]  # the pick always shows
+        for c in shown:
+            mark = "[bold green]→[/]" if c.program.key == res.program.key else ""
+            h.add_row(mark, f"{c.fitness:.3f}", cell(c.validation), str(c.generation + 1), *c.program.rules().values())
+        console.print(h)
+    console.print(f"found in generation {res.generation + 1} of {len(res.history)} · {res.evaluations} programs "
+                  f"evaluated in {res.seconds:.1f} s · seed {res.seed}")
+    if (pt := res.permutation) is not None:
+        color = "green" if pt.p <= 0.05 else "red"
+        console.print(f"permutation test: on shuffled candles the {pt.part} {obj} was "
+                      f"{', '.join(f'{s:.2f}' for s in pt.shuffled)} (real: {pt.score:.2f}) · [{color}]p = {pt.p:.2f}[/]")
+    for w in res.warnings():
+        console.print(f"[bold red]{w}[/]")
+
+
 def _make_pool(names: str | None, min_members: int, max_members: int | None):
     from tradebot.algorithms.pool import PoolEnsemble, default_pool
 
