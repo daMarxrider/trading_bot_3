@@ -137,6 +137,7 @@ tradebot optimize -w Crypto sma_cross                          # every symbol of
 tradebot backtest AAPL,MSFT,NVDA macd_cross -p fast=8           # one row per symbol
 tradebot optimize -w all rsi_threshold --min-symbols-beating 5 --samples 4 --sample-length 300
 tradebot optimize AAPL macd_cross --walk-forward 5 --holdout 250   # re-optimize in 5 folds, then a holdout
+tradebot evolve AAPL,MSFT,NVDA --generations 60 --save my_rule    # evolve a whole strategy from scratch
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50          # dry run
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50 --live   # real orders
 tradebot positions --broker kucoin
@@ -302,6 +303,102 @@ The output lists each member as used or dropped, then the parameters of the used
 ones and the command to reuse the result (`tradebot backtest … pool --members …`).
 With `--method both`, the members table also shows whether GA and PSO picked the
 same members. Agreement there is a good sign that the selection is real and not noise.
+
+## Evolving strategies from scratch
+
+`tradebot evolve` doesn't tune a strategy you already have. It writes one: the
+entry and exit rules are evolved with genetic programming, including which
+indicators they use, how those are combined, and every number in them. A result
+looks like this:
+
+```
+entry = crosses_above(ema(close, 13), sma(close, 41)) and rsi(9) < 58
+exit  = close < shift(lowest(low, 7), 1) or bars_in_trade >= 30
+```
+
+```sh
+tradebot evolve AAPL                                   # one symbol, default settings
+tradebot evolve AAPL,MSFT,NVDA --generations 60 --population 500
+tradebot evolve -w Crypto --tf 4h --indicators rsi,ema,atr --max-depth 4
+tradebot evolve AAPL --permutations 5                  # also run it 5 times on shuffled prices
+tradebot evolve AAPL --save my_rule                    # keep it as a plugin algorithm
+```
+
+**Building blocks.** The rules are trees made of:
+- the candles (open, high, low, close) and every indicator output, plugins
+  included. An output that looks into the future is left out automatically,
+  like the Elliott zigzag: the evolver checks that its values don't change
+  when later candles are added.
+- `sma`, `ema`, `highest`, `lowest`, `shift`, `max`, `min`, `if_else`,
+  `change(x, n)` (relative change), `gap(a, b)` (a/b − 1), `volatility(n)`,
+  `price + k × atr(n)`;
+- comparisons (`>`, `<`, `crosses_above`, `crosses_below`), `and`, `or`, `not`;
+- in exit rules, the open trade: `bars_in_trade`, `stop_loss`, `take_profit`
+  and `trailing_stop` (fractions of the price; `--no-state` turns them off).
+
+Every part has a unit: a price, a 0–100 oscillator, a relative change, a
+price distance (ATR), or an indicator's own unit like MACD. Only like is
+compared with like, and a price is never compared with a fixed number, because
+"close > 182.5" means nothing on another symbol. Every tree the search builds is
+therefore valid, and it means the same on every chart. Plugin indicators can
+declare their outputs' units with `units = {"value": "osc"}`. Otherwise
+overlays count as prices, and indicators whose `levels` lie within 0–100
+count as oscillators.
+
+**The search.** It starts with 300 random programs (`--population`). In each
+of 40 generations (`--generations`) it keeps the best few, and breeds the rest:
+- by swapping parts between two good programs, or a whole entry or exit rule;
+- by mutation: a new random part, `>` ↔ `<` or `sma` ↔ `ema`, a nudged number,
+  or a part replaced by one of its own sub-parts.
+
+`--max-depth` (6) and `--max-size` (40 building blocks per rule) cap the size, and
+every building block costs a little fitness (`--parsimony`, 0.002). Of two equally
+good rules, the shorter one wins. Equivalent rules are recognised (`a and b` =
+`b and a`, `x > x` is never true, …), so each is scored once.
+
+**Keeping it honest.** A search this large finds patterns in pure noise, so the
+data is split by date, all symbols at the same dates:
+
+```
+|---------- train (3 segments) ----------|-- validation (20 %) --|-- test (20 %) --|
+```
+
+- The fitness only sees the training part. It's scored in `--segments`
+  consecutive stretches on every symbol and combined with `--aggregate`
+  (mean, median, min or mean−std), so a rule has to work in every stretch and
+  on every symbol. Programs with fewer than `--min-trades` round trips on a
+  symbol are rejected.
+- The 30 best programs ever seen are then compared on the validation part, and
+  the best one there is the result. Evolution never sees validation scores.
+- The result is scored once on the test part (`--test`), which no step of the
+  search has seen, next to buy & hold and monthly investing.
+- `--permutations N` runs the same search N more times on shuffled candles:
+  the same moves in random order, so there is no pattern left to find. The
+  p-value is the share of runs (the real one included) that scored at least as
+  well on the test part. A large p means the evolver finds as much in noise.
+
+The output shows the rules, a row per symbol (score on train, validation and
+test, the test XIRR, the lead over each baseline, trades), the best programs
+with their validation scores, and warnings in red. A warning appears when the
+result doesn't beat buy & hold on the test part, scores much worse on unseen data
+than in training, makes fewer than 3 test trades, depends on one or two symbols,
+or fails the permutation test. Every run prints its `--seed`, so it can be
+repeated.
+
+**Using the result.** `--save NAME` writes the program as a plugin file
+(`~/.config/tradebot/plugins/NAME.py`, or `--plugin-dir`). It's ordinary
+strategy code with the rules in its docstring, so it works in `backtest`, the
+chart, the Backtest lab and the bot, and you can read and edit it. Every number
+in the rules becomes a parameter (`n1`, `n2`, … for whole numbers, `c1`, … for
+the rest). `tradebot optimize SYMBOL NAME` can then fine-tune them, with
+walk-forward if you like. Exits that look at the open trade are evaluated trade
+by trade on the CPU. Everything else is batched like any strategy.
+
+The search itself runs on the CPU with NumPy. Different programs can't share
+one batch, but parts that many programs share (such as `rsi(14)` or
+`sma(close, 50)`) are computed once and cached. A run with the defaults on
+2,500 daily candles of one symbol takes under a minute; time grows with the
+number of symbols, and `--permutations N` repeats the whole search N times.
 
 ## Desktop app
 
@@ -484,6 +581,7 @@ src/tradebot/
   brokers/     BaseBroker; ccxt live brokers (Binance, KuCoin, Pionex); semi-automated Scalable / Trade Republic
   backtest/    vectorized engine + metrics (Sharpe, Sortino, max drawdown, win rate, profit factor, CAGR)
   optimize/    backend selection (CUDA → ROCm → CPU), genetic algorithm, particle swarm, GA-vs-PSO comparison
+  evolve/      genetic programming of whole strategies: typed primitives, trees, search, plugin export
   live/        TradingBot (same execution model as the backtester)
   portfolio.py, screener.py, news.py, config.py
   cli/         typer + rich + plotext

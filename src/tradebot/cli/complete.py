@@ -72,6 +72,17 @@ def pool_members(incomplete: str) -> Completion:
     return [(prefix + name, help_) for name, help_ in _starting(last, names) if name not in taken]
 
 
+def indicators(incomplete: str) -> Completion:
+    """Comma-separated indicator names (``evolve --indicators``): completes the last one."""
+    _plugins_loaded()
+    from tradebot.indicators import INDICATORS
+
+    head, _, last = incomplete.rpartition(",")
+    prefix = f"{head}," if head else ""
+    taken = set(head.split(","))
+    return [(prefix + n, d) for n, d in _starting(last, [(c.name, c.description) for c in INDICATORS]) if n not in taken]
+
+
 def indicator_specs(incomplete: str) -> Completion:
     """``-i`` specs: indicator names, then ``name:param=`` for their parameters."""
     _plugins_loaded()

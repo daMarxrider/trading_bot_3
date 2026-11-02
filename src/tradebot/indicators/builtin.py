@@ -85,6 +85,7 @@ class ATR(BaseIndicator):
     description = "Average True Range (Wilder)"
     params = {"period": IntParam(14, 2, 100)}
     overlay = False
+    units = {"value": "dist"}
 
     @classmethod
     def compute(cls, o, period):
