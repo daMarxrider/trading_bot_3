@@ -163,6 +163,41 @@ TERMS = {
                  "(identical).",
     "gap": "How much the two methods' in-sample scores differ. Small means they found equally good settings.",
     "param_diff": "How far apart the two methods' values are, as a share of the range the optimizer searched.",
+    # strategy evolution (#83)
+    "evolve": "Writes a strategy from scratch: random buy and sell rules made of prices, indicators and "
+              "comparisons are combined and changed over many generations, and the best survive.",
+    "evo_population": "How many strategies each generation has. More explores more ideas but takes longer.",
+    "evo_generations": "How many rounds of breeding and selection. More rounds refine the rules but fit the past "
+                       "more closely.",
+    "max_depth": "How deeply parts of a rule may be nested. Deeper allows more complex rules, which overfit "
+                 "more easily.",
+    "max_size": "The most building blocks (prices, indicators, numbers, comparisons) one rule may have.",
+    "train_part": "The oldest candles, which the strategies evolve on. Scores here are flattering by design.",
+    "validation": "Candles after the training part, used only to pick the result among the best strategies. "
+                  "Evolution never sees them.",
+    "test_part": "The newest candles, kept away from the whole search and scored once at the end. The honest "
+                 "number.",
+    "segments": "The training part is scored in this many consecutive stretches, and a rule has to do well in "
+                "all of them, not just on average.",
+    "min_trades": "Strategies with fewer round trips than this on a symbol's training part are thrown out: a "
+                  "few lucky trades prove nothing.",
+    "parsimony": "A small penalty per building block, so of two equally good rules the shorter one wins. "
+                 "Short rules overfit less.",
+    "trade_state": "Let sell rules look at the open trade: how long it has been open, a stop loss, a take "
+                   "profit or a trailing stop.",
+    "evo_indicators": "The indicators the rules may use. Fewer makes the search faster and the rules easier to "
+                      "read.",
+    "permutations": "Also run the same search this many times on shuffled prices, where no pattern is left. If "
+                    "it finds as much there, the result is luck.",
+    "seed": "Starts the random search at a fixed point, so the same settings give the same result. Random "
+            "picks a new one; it is shown after each run.",
+    "rules": "The evolved strategy: buy when the entry rule becomes true, sell when the exit rule does.",
+    "hall_of_fame": "The best strategies in training. The one with the best validation score was picked, which "
+                    "is not always the best in training.",
+    "evo_history": "The best training score per generation, and how that strategy did on validation. Training "
+                   "rising while validation stays flat means overfitting.",
+    "save_plugin": "Keeps the result as a strategy file, usable in backtests, the chart, the Backtest lab and "
+                   "the bot. The optimizer can fine-tune its numbers.",
 }
 
 

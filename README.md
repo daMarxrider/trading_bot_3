@@ -452,6 +452,23 @@ number of symbols, and `--permutations N` repeats the whole search N times.
   its ☰ button fills in a watchlist or all of them. With several symbols, Run
   backtest and Optimize add a per-symbol table (with the aggregate and the
   baselines beaten); click a row to see that symbol's curves and metrics.
+* **Evolve**: `tradebot evolve` with a form (see
+  [Evolving strategies from scratch](#evolving-strategies-from-scratch)): the
+  symbols (☰ for a watchlist), the search settings, the train/validation/test
+  split and the shuffled-price runs, and which indicators the rules may use.
+  Stop ends a run early. The result shows:
+  - the rules, with the dates of the parts and the seed;
+  - the warnings in red;
+  - the equity of the train, validation and test parts (the latter two shaded)
+    against buy & hold and monthly investing;
+  - the best score per generation in training and on validation (training rising
+    while validation stays flat means overfitting);
+  - a row per symbol (click one to plot it);
+  - the best strategies in training, with an arrow at the one picked on validation.
+
+  *Save as plugin…* keeps the result under a name you choose. It appears in the
+  Backtest lab's and the chart's strategy lists right away. *Show on chart*
+  shows its signals without saving it.
 * **Portfolio & dividends**: total equity, allocation donuts, and per-holding
   and total current dividend yield, trailing annual yield and yield on cost.
 * **News**: headlines for the watchlists' and portfolio symbols, auto-refreshed
