@@ -6,6 +6,7 @@ evolved building blocks (modules) and the overfitting safeguards."""
 import re
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from tradebot.backtest.metrics import deflated_sharpe
@@ -271,3 +272,46 @@ def test_cli_from_scratch(monkeypatch):
     assert "deflated Sharpe ratio" in out and "walk-forward" in out and "permutation test" in out
     bad = CliRunner().invoke(cli.app, ["evolve", "X", "--from-scratch", "--indicators", "rsi"])
     assert bad.exit_code != 0 and "indicators" in plain(bad)
+
+
+# -- rediscovery (slow) ----------------------------------------------------------------------------------
+def hidden_rsi(n: int = 3000, seed: int = 0) -> pd.DataFrame:
+    """Prices that drift down, except for the 5 candles after each RSI(14) < 30, which rise strongly."""
+    rng = np.random.default_rng(seed)
+    close, gain, loss, boost = np.empty(n), 0.0, 0.0, 0
+    close[0] = 100.0
+    for t in range(1, n):
+        close[t] = close[t - 1] * np.exp((0.012 if boost > 0 else -0.0015) + rng.normal(0, 0.012))
+        boost -= 1
+        move = close[t] - close[t - 1]
+        if t <= 14:  # Wilder's smoothing starts with a plain average
+            gain, loss = gain + max(move, 0) / 14, loss + max(-move, 0) / 14
+        else:
+            gain, loss = gain + (max(move, 0) - gain) / 14, loss + (max(-move, 0) - loss) / 14
+        if t >= 14 and 100 * gain / (gain + loss) < 30:
+            boost = 5
+    open_ = np.r_[close[0], close[:-1]]
+    spread = np.abs(rng.normal(0, 0.003, n)) * close
+    return pd.DataFrame({"open": open_, "high": np.maximum(open_, close) + spread,
+                         "low": np.minimum(open_, close) - spread, "close": close},
+                        index=pd.date_range("2015-01-01", periods=n, freq="D", tz="UTC"))
+
+
+def test_from_scratch_nearly_rediscovers_a_hidden_rsi_rule():
+    """From scratch, evolve finds rules that trade much like a hidden ``RSI(14) < 30`` (held 5 candles).
+
+    It doesn't find RSI itself yet: the exact rule (``truth``) stays fitter, and the evolved rules are
+    "buy after a fall" variants. This checks that most runs get close, far above chance (a rule that is
+    always in a trade overlaps ~0.13)."""
+    df = hidden_rsi()
+    truth = Program(node("below:osc", rsi_tree(14), const(LEVELS[OSC], 30.0)), node("held", const(HOLD, 5)))
+    held = Evaluator(OHLC.from_frame(df)).positions(truth) > 0
+    close = []
+    for seed in (1, 2, 3, 4):
+        ev = Evolver(df, from_scratch=True, population=500, generations=60, min_trades=0, seed=seed)
+        res = ev.run()
+        found = Evaluator(OHLC.from_frame(df)).positions(res.program) > 0
+        overlap, recall = (held & found).sum() / (held | found).sum(), (held & found).sum() / held.sum()
+        assert ev.fitness(truth) >= res.fitness  # the hidden rule is expressible and the fittest
+        close.append(overlap >= 0.4 and recall >= 0.5 and res.fitness >= 0.8 * ev.fitness(truth))
+    assert sum(close) >= 3, close
