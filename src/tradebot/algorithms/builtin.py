@@ -14,7 +14,7 @@ from __future__ import annotations
 from tradebot.algorithms.base import ALGORITHMS, BaseAlgorithm
 from tradebot.core import ops
 from tradebot.core.registry import IntParam, Param
-from tradebot.indicators.builtin import MACD, RSI, SMA, Bollinger, Ichimoku
+from tradebot.indicators.builtin import MACD, RSI, SMA, Bollinger, Halving, Ichimoku
 
 
 class RsiThreshold(BaseAlgorithm):
@@ -119,6 +119,32 @@ class RangeTrader(BaseAlgorithm):
     def signals(self, o, p):
         exit_ = (o.high >= p["sell_price"]) | (o.low < p["stop_price"])
         return ops.latch(o.low <= p["buy_price"], exit_)
+
+
+def in_window(days, start, end):
+    """True while ``days`` is in ``[start, end)``; with ``start > end`` the window wraps around the halving
+    (from day ``start`` of one cycle to day ``end`` of the next)."""
+    return ops.where(start <= end, (days >= start) & (days < end), (days >= start) | (days < end))
+
+
+class HalvingCycle(BaseAlgorithm):
+    """Bitcoin's 4-year cycle (#99): in the market between two points of the halving clock."""
+
+    name = "halving_cycle"
+    description = "Buy `buy_day` days after a Bitcoin halving, sell `sell_day` days after one"
+    params = {
+        "buy_day": Param(850.0, 0.0, 1500.0, "Days after a halving to buy. Past cycle bottoms came 777 to 924 days "
+                                             "after a halving, about a year before the next one."),
+        "sell_day": Param(530.0, 0.0, 1500.0, "Days after a halving to sell. Past cycle tops came 371 to 548 days "
+                                              "after one. Below buy_day, the trade spans the next halving."),
+    }
+
+    def signals(self, o, p):
+        days = Halving.compute(o)["days"]
+        return ops.where(in_window(days, p["buy_day"], p["sell_day"]), 1.0, 0.0)
+
+    def chart_indicators(self):
+        return [Halving()]
 
 
 class VotingEnsemble(BaseAlgorithm):

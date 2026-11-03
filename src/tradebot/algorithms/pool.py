@@ -27,7 +27,8 @@ from tradebot.core import ops
 from tradebot.core.registry import IntParam, Param
 from tradebot.core.series import OHLC
 from tradebot.indicators.base import INDICATORS
-from tradebot.indicators.builtin import EMA, MACD, RSI, SMA, Bollinger, Donchian, Stochastic
+from tradebot.algorithms.builtin import in_window
+from tradebot.indicators.builtin import EMA, MACD, RSI, SMA, Bollinger, Donchian, Halving, Stochastic
 from tradebot.indicators.elliott import ElliottWaves
 
 
@@ -74,6 +75,11 @@ RULES: dict[str, Rule] = {
                     lambda o, p: ElliottWaves.compute(o, atr_period=p["atr_period"], swing_atr=p["swing_atr"],
                                                       min_score=0.0)["state"] == STATE_WAVE3,
                     vectorized=False),
+    "halving": Rule("Halving cycle: buy only in a window of days after a Bitcoin halving",
+                    {"start": Param(850.0, 0.0, 1500.0, "First day after a halving on which buying is allowed."),
+                     "end": Param(530.0, 0.0, 1500.0, "Day after a halving from which buying is no longer allowed; "
+                                                      "below start, the window spans the next halving.")},
+                    lambda o, p: in_window(Halving.compute(o)["days"], p["start"], p["end"])),
 }
 
 
