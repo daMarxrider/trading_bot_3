@@ -462,6 +462,7 @@ class BacktestView(QWidget):
     status = pyqtSignal(str)
     show_on_chart = pyqtSignal(str, object)
     generation = pyqtSignal(int, float)  # emitted from the worker thread, delivered queued
+    meta_step = pyqtSignal(int, int, float)  # meta-search (#90): optimizer runs started, step, best; queued too
 
     def __init__(self, engine, themes: ThemeManager, watchlist: list[str], symbol_search: SymbolSearch | None = None,
                  settings: Settings | None = None, watchlists_fn=None):
@@ -553,6 +554,12 @@ class BacktestView(QWidget):
             box.setSpecialValueText(off)
             box.setSuffix(" candles")
         self.wf_anchored = QCheckBox("Training grows from the first candle")
+        self.meta = QSpinBox()  # meta-search (#90): combinations of the optimizer's own settings; 0 = off
+        self.meta.setRange(0, 1000)
+        self.meta.setSpecialValueText("off")
+        self.meta.setSuffix(" combinations")
+        self.meta_compute = QCheckBox("Also population and generations")
+        self.meta.valueChanged.connect(lambda _: self._walk_forward_changed(self.wf_folds.value()))
         self.wf_folds.valueChanged.connect(self._walk_forward_changed)
         self.wf_folds.setValue(5)  # on by default: the honest check; holdout off, since it's a fixed candle count
         self.method = QComboBox()
@@ -570,7 +577,12 @@ class BacktestView(QWidget):
         opt.clicked.connect(self.run_optimizer)
         chart = QPushButton("Show on chart")
         chart.clicked.connect(lambda: self.show_on_chart.emit(self._chart_symbol(), self._algorithm()))
-        for button, term in ((run, "backtest"), (opt, "optimize"), (chart, "show_on_chart")):
+        self.stop_btn = QPushButton("Stop")  # meta-search only: no new combinations, the holdout is still scored
+        self.stop_btn.clicked.connect(self._stop_meta)
+        self.stop_btn.hide()
+        self._meta_stop = False
+        for button, term in ((run, "backtest"), (opt, "optimize"), (chart, "show_on_chart"),
+                             (self.stop_btn, "stop_meta")):
             button.setToolTip(tooltip(explain(term)))
         self.progress = QProgressBar()
         self.progress.hide()
@@ -591,7 +603,9 @@ class BacktestView(QWidget):
                                ("Window length", self.sample_length, "sample_length"),
                                ("Walk-forward", self.wf_folds, "walk_forward"),
                                ("Train window", self.wf_train, "wf_train"), ("Test window", self.wf_test, "wf_test"),
-                               ("Anchored", self.wf_anchored, "anchored"), ("Holdout", self.holdout, "holdout")):
+                               ("Anchored", self.wf_anchored, "anchored"), ("Holdout", self.holdout, "holdout"),
+                               ("Meta-search", self.meta, "meta_search"),
+                               ("Meta: also tune", self.meta_compute, "meta_compute")):
             _explained_row(opt_form, label, w, term)
         from tradebot.optimize import select_backend
 
@@ -625,7 +639,7 @@ class BacktestView(QWidget):
         opt_card.layout().addWidget(backend)
         left.addWidget(opt_card)
         buttons = QHBoxLayout()
-        for b in (run, opt, chart):
+        for b in (run, opt, chart, self.stop_btn):
             buttons.addWidget(b)
         left.addLayout(buttons)
         left.addWidget(self.progress)
@@ -700,6 +714,21 @@ class BacktestView(QWidget):
         self.folds_card = card(self.folds_title, self.folds_view, self.folds_note)
         self.folds_card.hide()
         right.add(self.folds_card, 2, scroll=True)
+        self._meta = None  # the last meta-search (#90): (result, algorithm, {trial index: (walk-forward, payloads)})
+        self.meta_model = DataFrameModel(header_tips=lambda col: tooltip(explain(col) or explain("meta")))
+        self.meta_view = _table(self.meta_model)
+        self.meta_view.setSortingEnabled(False)  # best first
+        self.meta_view.clicked.connect(lambda idx: self._show_trial(self.meta_model.df.iat[idx.row(), 0]))
+        self.meta_title = QLabel()
+        self.meta_title.setToolTip(tooltip(explain("meta")))
+        self.meta_note = QLabel(wordWrap=True)
+        self.meta_note.setTextFormat(Qt.TextFormat.RichText)
+        self.meta_apply = QPushButton("Use the winning settings")
+        self.meta_apply.setToolTip(tooltip(explain("meta_apply")))
+        self.meta_apply.clicked.connect(self._apply_meta)
+        self.meta_card = card(self.meta_title, self.meta_view, self.meta_note, self.meta_apply)
+        self.meta_card.hide()
+        right.add(self.meta_card, 2, scroll=True)
         self.selection = QLabel()  # which pool members the optimizer kept (#21)
         self.selection.setWordWrap(True)
         self.selection.setTextFormat(Qt.TextFormat.RichText)
@@ -725,6 +754,7 @@ class BacktestView(QWidget):
         lay.addWidget(columns)
         self._algo_changed(self.algo.currentText())
         self.generation.connect(self._progress)
+        self.meta_step.connect(self._meta_progress)
         self._tips = LongPressTooltips(self)  # touch: press and hold anything to read its explanation
         themes.changed.connect(self._style)
         self._style(themes.current)
@@ -747,8 +777,9 @@ class BacktestView(QWidget):
         self.params.set_space(algo.param_space(), {**algo.values, **self.params.values()})  # keep what was set
 
     def _walk_forward_changed(self, folds: int):
-        for w in (self.wf_train, self.wf_test, self.wf_anchored, self.holdout):
+        for w in (self.wf_train, self.wf_test, self.wf_anchored, self.holdout, self.meta):
             w.setEnabled(folds > 0)
+        self.meta_compute.setEnabled(folds > 0 and self.meta.value() > 0)  # the meta-search ranks by walk-forward
 
     def _build(self):
         """The selected algorithm with default parameters; a vote or a pool with the checked members."""
@@ -808,6 +839,8 @@ class BacktestView(QWidget):
     def _busy(self, on: bool, maximum: int = 0):
         self.progress.setRange(0, maximum)
         self.progress.setVisible(on)
+        if not on:
+            self.stop_btn.hide()
 
     @property
     def _amount(self) -> float | None:
@@ -855,6 +888,9 @@ class BacktestView(QWidget):
                       aggregate=self.aggregate.currentText(), align=self.align.isChecked(),
                       min_symbols_beating=self.min_beating.value(), samples=self.samples.value(),
                       sample_length=self.sample_length.value())
+        if self.wf_folds.value() and self.meta.value():
+            self._run_meta(algo, method, kwargs)
+            return
         if self.wf_folds.value():
             self._run_walk_forward(algo, method, kwargs)
             return
@@ -931,7 +967,123 @@ class BacktestView(QWidget):
                               holdout=holdout, method=method, progress=report, on_phase=phase, **kwargs)
             return wf, algo, {s: self._walk_forward_overview(wf, algo, s) for s in wf.symbols}
 
-        run_async(work, self._show_walk_forward, self._fail)
+        def done(payload):
+            self.meta_card.hide()
+            self._show_walk_forward(payload)
+
+        run_async(work, done, self._fail)
+
+    # -- meta-search (#90) ----------------------------------------------------------------------
+    def _run_meta(self, algo, method: str, kwargs: dict):
+        from tradebot.optimize import meta_search
+
+        folds, trials = self.wf_folds.value(), self.meta.value()
+        per_run = 2 if method == "both" else 1
+        self._busy(True, (trials * folds + 1) * per_run)
+        self._meta_stop = False
+        self.stop_btn.setEnabled(True)
+        self.stop_btn.show()
+        self._phase = {"name": "", "runs": 0}
+        self.status.emit("meta-search …")
+
+        def phase(label):  # called in the worker thread before each optimizer run
+            self._phase = {"name": label, "runs": self._phase["runs"] + 1}
+
+        def report(step, best, _params):
+            self.meta_step.emit(self._phase["runs"], step, best)
+
+        def work():
+            res = meta_search(algo, self._data(), trials, folds, compute=self.meta_compute.isChecked(),
+                              holdout=self.holdout.value() or None, train_length=self.wf_train.value() or None,
+                              test_length=self.wf_test.value() or None, anchored=self.wf_anchored.isChecked(),
+                              method=method, progress=report, on_phase=phase, stop=lambda: self._meta_stop, **kwargs)
+            views = {}
+            for t in res.trials:
+                wf = res.final if res.best is t else t.result  # the winner with its holdout
+                if wf is not None:
+                    views[t.index] = (wf, {s: self._walk_forward_overview(wf, algo, s) for s in wf.symbols})
+            return res, algo, views
+
+        run_async(work, self._show_meta, self._fail)
+
+    def _stop_meta(self):
+        self._meta_stop = True
+        self.stop_btn.setEnabled(False)
+        self.status.emit("stopping after this combination; the winner is still scored on the holdout …")
+
+    def _meta_progress(self, runs: int, step: int, best: float):
+        self.progress.setValue(max(runs - 1, 0))
+        self.status.emit(f"{self._phase['name']} step {step + 1}: best {self.objective.currentText()} = {best:.3f}")
+
+    def _show_meta(self, payload):
+        res, algo, views = payload
+        self._meta = payload
+        self._fill_meta(res)
+        if res.best is None:
+            self._busy(False)
+            self.folds_card.hide()
+            self.status.emit("meta-search: no combination produced an out-of-sample score")
+            return
+        self._show_trial(self._trial_label(res, res.best))
+
+    @staticmethod
+    def _trial_label(res, trial) -> str:
+        return f"{trial.index + 1}" + (" ★" if trial is res.best else " (yours)" if trial.index == 0 else "")
+
+    def _fill_meta(self, res):
+        """The combinations table (best first, the ones that couldn't run last) and the summary below it."""
+        obj, tuned = res.objective, list(res.space)
+        rows = []
+        for t in res.ranked() + [t for t in res.trials if t.score is None]:
+            r = t.result
+            rows.append({"#": self._trial_label(res, t),
+                         **{k: t.settings[k] if k != "sample_length" or t.settings["samples"] else None for k in tuned},
+                         f"{obj} out": t.score, "± folds": r.std if r is not None else None,
+                         "beats b&h in": f"{r.beat_counts()[BUY_HOLD]} of {len(r.folds)}" if r is not None else t.error,
+                         "seconds": t.seconds})
+        columns = list(dict.fromkeys(k for row in rows for k in row))
+        self.meta_model.formats = {c: (lambda v: f"{v:.3f}") if c in (f"{obj} out", "± folds") else
+                                   (lambda v: f"{v:g}") for c in columns if c not in ("#", "beats b&h in")}
+        self.meta_model.set_frame(pd.DataFrame(rows, columns=columns))
+        self.meta_title.setText(f"<b>Meta-search</b>: {len(res.trials)} of {res.combinations} combinations, ranked "
+                                "by walk-forward · click one to see its folds")
+        t, best, lines = self.themes.current, res.best, []
+        if res.stopped != "done":
+            lines.append(f"<span style='color:{t.muted}'>Stopped early.</span>")
+        if best is not None:
+            lead = f", {res.lead:+.3f} ahead of the median combination ({res.median:.3f})"
+            noise = f", fold-to-fold noise ±{res.noise:.3f}" if res.noise is not None else ""
+            lines.append(f"Winner #{best.index + 1}: {obj} {best.score:.3f} out of sample over the folds{lead}{noise}.")
+            h = res.holdout_score
+            lines.append(f"<b>Result: {obj} {'–' if h is None else f'{h:.3f}'} on the holdout of {res.holdout_length} "
+                         "candles, scored once.</b> The fold scores picked the winner, so they flatter it.")
+        lines += [f"<b style='color:{t.down}'>{w}</b>" for w in res.warnings()]
+        self.meta_note.setText("<br>".join(lines))
+        self.meta_apply.setEnabled(best is not None)
+        self.meta_card.show()
+
+    def _show_trial(self, label: str):
+        """Show one combination's walk-forward (the winner's with its holdout) in the folds table and the plot."""
+        if self._meta is None:
+            return
+        res, algo, views = self._meta
+        index = int(label.split()[0]) - 1
+        if index not in views:
+            self.status.emit(f"combination {index + 1} couldn't run")
+            return
+        wf, per = views[index]
+        self._show_walk_forward((wf, algo, per))
+
+    def _apply_meta(self):
+        """Put the winning settings into the Optimizer card."""
+        if self._meta is None or (best := self._meta[0].best) is None:
+            return
+        boxes = {"samples": self.samples, "sample_length": self.sample_length, "min_symbols_beating": self.min_beating,
+                 "population": self.population, "generations": self.generations}
+        for key, value in best.settings.items():
+            boxes[key].setValue(int(value))
+        self.meta.setValue(0)
+        self.status.emit("the winning settings are in the Optimizer card; the meta-search is off")
 
     @staticmethod
     def _fold_part(fold, symbol: str):
@@ -1075,6 +1227,7 @@ class BacktestView(QWidget):
         self._busy(False)
         self._wf = None
         self.folds_card.hide()
+        self.meta_card.hide()
         per = results.get("_per_symbol")
         self._symbol_payloads = per or {}
         self.per_symbol_card.setVisible(bool(per))

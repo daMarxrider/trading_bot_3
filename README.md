@@ -309,6 +309,15 @@ and when it doesn't beat buy & hold on the holdout. Each combination costs a
 full optimization per fold, so the command prints the number of optimizer runs
 first: realistic on the GPU, slow on the CPU.
 
+In the Backtest lab, *Meta-search* in the Optimizer card (needs walk-forward)
+sets the number of combinations; *Meta: also tune* adds population and
+generations. A *Stop* button next to the others ends the search early (the
+winner is still scored on the holdout). The meta-search card lists every
+combination, best first, with the winner's lead over the median, the holdout
+result and the warnings. The plot and the folds table show the winner with its
+holdout; click another combination to see its folds. *Use the winning settings*
+copies them into the Optimizer card and turns the meta-search off.
+
 **Picking the strategies.** Without an algorithm, `optimize` also decides *which*
 strategies and indicators to use. It starts from a pool: every strategy and
 indicator (plugins included), or the ones given with `--pool`. Every member gets
