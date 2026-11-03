@@ -279,7 +279,16 @@ def optimize(
     anchored: Annotated[bool, typer.Option(
         help="Walk-forward: every training window starts at the first candle and grows, instead of rolling")] = False,
     holdout: Annotated[int, typer.Option(
-        help="Walk-forward: keep the last N candles out of every fold and score them once at the end")] = 0,
+        help="Walk-forward: keep the last N candles out of every fold and score them once at the end "
+             "(with --meta: 0 = one fold's test length)")] = 0,
+    meta: Annotated[int, typer.Option(
+        help="Meta-search: try this many combinations of the optimizer's own settings (random windows, their "
+             "length, min-symbols-beating), rank them by walk-forward and score the winner once on the holdout "
+             "(0 = off; Ctrl+C stops early)")] = 0,
+    meta_time: Annotated[Optional[float], typer.Option(
+        help="Meta-search: stop starting new combinations after this many minutes")] = None,
+    meta_compute: Annotated[bool, typer.Option(
+        help="Meta-search: also tune population and generations")] = False,
 ):
     """Optimize algorithm parameters with a genetic algorithm and/or particle swarm (GPU accelerated
     when available) and report out-of-sample results. ``--method both`` also measures how much the two
@@ -289,7 +298,10 @@ def optimize(
     the entries, from all of them or from ``--pool``.
 
     With several symbols (comma-separated, or ``--watchlist``) one parameter set is scored on every
-    symbol and the scores are combined (``--aggregate``): settings that only work on one chart lose."""
+    symbol and the scores are combined (``--aggregate``): settings that only work on one chart lose.
+
+    ``--meta N`` tunes the optimizer's own settings: N combinations, each ranked by a walk-forward
+    (``--walk-forward`` folds, default 5), the winner scored once on a holdout nothing else has seen."""
     from rich.progress import Progress
 
     from tradebot.optimize import OPTIMIZERS, run_comparison, select_backend
@@ -324,6 +336,9 @@ def optimize(
     n_genes = len([k for k in algorithm.param_space() if k not in kwargs["fixed"]])
     console.print(f"backend: [bold]{kwargs['backend'].description}[/] · {size} · {n_genes} parameters"
                   + (f" · {samples} random windows of {sample_length} candles per symbol and generation" if samples else ""))
+    if meta:
+        return _meta(algorithm, df, symbols, meta, meta_time, meta_compute, walk_forward or 5, wf_train, wf_test,
+                     anchored, holdout or None, method, kwargs)
     symbol = symbols[0]
     with Progress(console=console) as progress:
         task = progress.add_task("optimizing", total=generations)
@@ -373,6 +388,83 @@ def optimize(
             console.print(results_table("out-of-sample", res.test_baselines.columns("strategy", res.test)))
         warn_not_beaten(res.test_baselines, "Out-of-sample")
     console.print(f"{res.evaluations} evaluations · reuse with: [cyan]{_reuse_command(symbol, algorithm, res.best_params)}[/]")
+
+
+def _meta(algorithm, df, symbols, trials, minutes, compute, folds, wf_train, wf_test, anchored, holdout, method,
+          kwargs) -> None:
+    """``optimize --meta``: the search with a progress bar, then the combinations, the winner and its holdout (#90)."""
+    from rich.progress import Progress
+
+    from tradebot.optimize import meta_search
+    from tradebot.optimize.meta import DEFAULTS, estimate
+
+    seed = kwargs.pop("seed")
+    with Progress(console=console) as progress:
+        task = progress.add_task("meta-search", total=None if compute else kwargs["generations"])
+        runs = progress.add_task("combinations", total=trials)
+        label = {"name": ""}
+
+        def start(space, total):
+            cost = estimate(total, folds, space, {**DEFAULTS, **kwargs}, method)
+            progress.console.print(f"meta-search: {total} combinations × {folds} folds + the holdout ≈ {cost['runs']} "
+                                   f"optimizer runs, {cost['evaluations']:,} evaluations")
+            progress.update(runs, total=total)
+
+        def phase(name):
+            label["name"] = name
+            progress.reset(task)
+
+        def report(step, best, params):
+            progress.update(task, advance=1, description=f"{label['name']} step {step + 1} best {best:.3f}")
+
+        try:
+            res = meta_search(algorithm, df, trials, folds, compute=compute, time_limit=minutes and minutes * 60,
+                              holdout=holdout, train_length=wf_train, test_length=wf_test, anchored=anchored,
+                              method=method, seed=seed, progress=report, on_phase=phase, on_start=start,
+                              on_trial=lambda trial, total: progress.advance(runs), **kwargs)
+        except ValueError as e:
+            raise typer.BadParameter(str(e)) from None
+    _print_meta(res, algorithm, ",".join(symbols))
+
+
+def _print_meta(res, algorithm, symbol: str) -> None:
+    """The tried combinations ranked by walk-forward, how far the winner leads, then its folds and holdout."""
+    obj = res.objective
+    tuned = list(res.space)
+    t = Table(title=f"meta-search: {len(res.trials)} of {res.combinations} combinations, ranked by walk-forward")
+    for col in ("#", *tuned, f"{obj} out (folds)", "beats buy & hold", "time"):
+        t.add_column(col, justify="left" if col == "#" else "right")
+    best = res.best
+    for trial in res.ranked() + [x for x in res.trials if x.score is None]:
+        cells = [f"{trial.settings[k]:g}" if k != "sample_length" or trial.settings["samples"] else "–" for k in tuned]
+        if trial.result is None:
+            score, beats = f"[red]{trial.error}[/]", ""
+        else:
+            r = trial.result
+            score = f"{r.mean:.3f} ± {r.std:.3f}" if r.mean is not None else "–"
+            beats = f"{r.beat_counts()['buy & hold']}/{len(r.folds)}"
+        mark = " ★" if trial is best else " (yours)" if trial.index == 0 else ""
+        t.add_row(f"{trial.index + 1}{mark}", *cells, score, beats, f"{trial.seconds:.0f} s",
+                  style="bold" if trial is best else None)
+    console.print(t)
+    if res.stopped != "done":
+        console.print(f"[yellow]stopped early ({'time limit' if res.stopped == 'time' else 'interrupted'})[/]")
+    if best is None:
+        for w in res.warnings():
+            console.print(f"[bold red]{w}[/]")
+        return
+    console.print(f"winner #{best.index + 1}: {best.score:.3f} out of sample over the folds, {res.lead:+.3f} ahead of "
+                  f"the median combination ({res.median:.3f})"
+                  + (f", fold-to-fold noise ±{res.noise:.3f}" if res.noise is not None else ""))
+    flags = " ".join(f"--{k.replace('_', '-')} {best.settings[k]:g}" for k in tuned
+                     if k != "sample_length" or best.settings["samples"])
+    console.print(f"winning settings: [cyan]{flags}[/]")
+    _print_walk_forward(res.final, algorithm, symbol)
+    h = res.holdout_score
+    console.print(f"[bold]result: {obj} {'–' if h is None else f'{h:.3f}'} on the holdout of {res.holdout_length} "
+                  "candles, scored once[/] (the walk-forward scores above picked the winner, so they flatter it)")
+    for w in res.warnings():
+        console.print(f"[bold red]{w}[/]")
 
 
 def _symbols(symbol: str | None, watchlists: list[str]) -> list[str]:

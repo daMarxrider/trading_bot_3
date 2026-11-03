@@ -228,14 +228,18 @@ def walk_forward(
     method: str = "ga",
     progress: Progress | None = None,
     on_phase: Callable[[str], None] | None = None,
+    parts: str = "all",
     **kwargs,
 ) -> WalkForwardResult:
     """Run the optimizer (``method`` "ga", "pso" or "both") once per fold; ``kwargs`` go to the optimizer.
 
     ``on_phase(label)`` is called before each optimizer run, e.g. with "fold 2/5", "fold 2/5 PSO" or
-    "holdout" (to reset a progress bar)."""
+    "holdout" (to reset a progress bar). ``parts`` "folds" leaves the holdout out (its candles stay unused),
+    "holdout" runs only the holdout (the meta-search #90 scores its winner there once)."""
     if method not in (*METHODS, "both"):
         raise ValueError(f"unknown optimizer {method!r}; choose ga, pso or both")
+    if parts not in ("all", "folds", "holdout") or (parts == "holdout" and not holdout):
+        raise ValueError(f"parts must be all, folds or holdout (which needs a holdout), not {parts!r}")
     aggregate = kwargs.get("aggregate", "mean")
     if aggregate not in AGGREGATES:
         raise ValueError(f"unknown aggregate {aggregate!r}; choose {', '.join(AGGREGATES)}")
@@ -249,6 +253,8 @@ def walk_forward(
     out = []
     for n, (start, split, end) in enumerate(windows):
         is_holdout = n == folds
+        if parts != "all" and is_holdout != (parts == "holdout"):
+            continue
         label = "holdout" if is_holdout else f"fold {n + 1}/{folds}"
         lo, at, hi = date(start), date(split), date(end)
         cut = {s: f[f.index.searchsorted(lo):len(f) if hi is None else f.index.searchsorted(hi)]
@@ -268,8 +274,8 @@ def walk_forward(
             raise ValueError(f"{label}: {e}") from None
         out.append(fold)
     space = {k: v for k, v in algorithm.param_space().items() if k not in (kwargs.get("fixed") or {})}
-    folds_, last = (out[:-1], out[-1]) if holdout else (out, None)
+    last = out.pop() if out and out[-1].holdout else None
     first = windows[0]
-    return WalkForwardResult(folds_, last, space, kwargs.get("objective", "sharpe"), aggregate, method, anchored,
+    return WalkForwardResult(out, last, space, kwargs.get("objective", "sharpe"), aggregate, method, anchored,
                              first[1] - first[0], first[2] - first[1], skipped, frames, kwargs.get("fee", 0.001),
                              kwargs.get("dca_amount"))

@@ -137,6 +137,7 @@ tradebot optimize -w Crypto sma_cross                          # every symbol of
 tradebot backtest AAPL,MSFT,NVDA macd_cross -p fast=8           # one row per symbol
 tradebot optimize -w all rsi_threshold --min-symbols-beating 5 --samples 4 --sample-length 300
 tradebot optimize AAPL macd_cross --walk-forward 5 --holdout 250   # re-optimize in 5 folds, then a holdout
+tradebot optimize -w Crypto sma_cross --meta 20                 # also tune the optimizer's own settings
 tradebot evolve AAPL,MSFT,NVDA --generations 60 --save my_rule    # evolve a whole strategy from scratch
 tradebot halving --live                                        # Bitcoin halvings and the forecast of the next
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50          # dry run
@@ -285,6 +286,28 @@ the holdout, then the warnings and the parameters per fold. Click a fold to see
 its own in- and out-of-sample curves and parameters, and *all* to return to the
 overview. With several symbols, the per-symbol table shows each symbol's
 walk-forward result; click one to switch the plot to it.
+
+**Meta-search.** Which optimizer settings give the best strategy (random windows
+or not, their length, `--min-symbols-beating`) is otherwise trial and error.
+`--meta N` tries N combinations of them (random picks; your own settings always
+first), runs a walk-forward (`--walk-forward` folds, default 5) with each and
+ranks them by the mean out-of-sample score over the folds. `--meta-compute` also
+tunes population and generations, `--meta-time M` stops starting new
+combinations after M minutes, and Ctrl+C ends the search early (the holdout is
+still scored). The objective and `--aggregate` stay your choice: they define
+what "better" means, so tuning them would only pick whichever flatters the result.
+
+Every extra tuned setting is another chance to fit noise, so the data has three
+levels: the optimizer tunes on each fold's training part, the combinations are
+ranked on the folds' test parts, and a holdout nothing has seen (`--holdout`, by
+default as long as one fold's test stretch) is scored once with the winner.
+Only that last number is the result. The output lists every combination with
+its score, how far the winner is ahead of the median one, the winner's folds and
+holdout, and warns when the lead is within the fold-to-fold noise, when the
+winner does worse on the holdout than the median combination did on the folds,
+and when it doesn't beat buy & hold on the holdout. Each combination costs a
+full optimization per fold, so the command prints the number of optimizer runs
+first: realistic on the GPU, slow on the CPU.
 
 **Picking the strategies.** Without an algorithm, `optimize` also decides *which*
 strategies and indicators to use. It starts from a pool: every strategy and
