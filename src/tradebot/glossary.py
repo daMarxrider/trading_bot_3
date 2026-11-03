@@ -104,6 +104,17 @@ TERMS = {
                 "Otherwise it rolls forward and keeps its length.",
     "holdout": "The last candles, kept out of every fold and tested once at the end. The final check, since "
                "nothing was chosen by looking at them.",
+    "meta_search": "Also tune the optimizer's own settings (random windows, their length, beat buy & hold on): "
+                   "try this many combinations, rank them by walk-forward and test the winner once on the "
+                   "holdout. Each combination is a full walk-forward, so it takes that much longer. "
+                   "Needs walk-forward; with the holdout off, one is set automatically.",
+    "meta_compute": "Also try different population and generation counts in the meta-search. They mostly change "
+                    "the run time.",
+    "meta": "Every tried combination of optimizer settings, best first, by its average out-of-sample score over "
+            "the folds. After enough tries one always looks good by luck: only the winner's holdout score, "
+            "tested once, is the honest result. Click a row to see its folds.",
+    "meta_apply": "Copy the winning settings into the Optimizer card, so the next Optimize uses them.",
+    "stop_meta": "Start no new combinations; the best one so far is still tested on the holdout.",
     "folds": "One row per fold: when it tuned and tested, and how it did on its unseen stretch. Scores that swing "
              "a lot between folds, or settings that change every fold, are likely luck. Click a row to see it.",
     "walk-forward": "Every fold's unseen stretch joined into one run, each traded with the settings its fold "
