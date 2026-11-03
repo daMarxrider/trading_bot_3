@@ -40,6 +40,7 @@ from tradebot.backtest.metrics import fmt
 from tradebot.config import Settings, watchlists
 from tradebot.core.timeframes import TIMEFRAMES
 from tradebot.glossary import AGGREGATES, OBJECTIVES, explain
+from tradebot.gui.chart import PlotAutoFit
 from tradebot.gui.common import (
     DataFrameModel,
     DateRange,
@@ -77,6 +78,19 @@ def plugin_path(name: str) -> Path:
     from tradebot.core.registry import default_plugin_dirs
 
     return default_plugin_dirs()[0] / f"{name}.py"
+
+
+def on_common_x(curves) -> tuple[np.ndarray, list[np.ndarray]]:
+    """The sorted times of all ``curves`` (series on a DatetimeIndex) and each curve's values on them, NaN where
+    it has none: what the equity plot's auto-fit covers (train, validation and test cover different times)."""
+    xs = [epoch_seconds(c.index) for c in curves]
+    x = np.unique(np.concatenate(xs)) if xs else np.empty(0)
+    out = []
+    for cx, c in zip(xs, curves):
+        values = np.full(len(x), np.nan)
+        values[np.searchsorted(x, cx)] = c.to_numpy(dtype=float)
+        out.append(values)
+    return x, out
 
 
 class EvolveView(QWidget):
@@ -219,6 +233,7 @@ class EvolveView(QWidget):
         self.equity = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem()})
         self.equity.showGrid(x=True, y=True, alpha=0.15)
         self.equity.addLegend()
+        self.equity_fit = PlotAutoFit(self.equity, settings, "evolve.autofit", themes.touch)
         self.log_btn = QCheckBox("log scale")
         self.log_btn.setChecked(bool(settings.get("evolve.log", False)) if settings else False)
         self.log_btn.toggled.connect(self._log_toggled)
@@ -226,6 +241,8 @@ class EvolveView(QWidget):
         self.history.showGrid(x=True, y=True, alpha=0.15)
         self.history.addLegend()
         self.history.setLabel("bottom", "generation")
+        self.history_fit = PlotAutoFit(self.history, settings, "evolve.history_autofit", themes.touch,
+                                       "Auto-fit score axis to visible generations")
         self.history.setToolTip(tooltip(explain("evo_history")))
         plots = Panes(Qt.Orientation.Horizontal, "evolve.plots", settings, themes.touch)
         self.equity.setMinimumHeight(140)
@@ -525,14 +542,16 @@ class EvolveView(QWidget):
                 pen = pg.mkPen(muted, width=1, style=Qt.PenStyle.DashLine if name == BUY_HOLD else Qt.PenStyle.DotLine)
             self.equity.plot(epoch_seconds(eq.index), eq.to_numpy(dtype=float), pen=pen, name=name)
         self.equity.getPlotItem().setTitle(self._shown if res.multi else None, color=muted)
-        self.equity.autoRange()
+        self.equity_fit.set_data(*on_common_x(list(curves.values())), log)
         self.history.clear()
         gens = np.array([h["generation"] + 1 for h in res.history], dtype=float)
         self.history.plot(gens, [h["best"] for h in res.history], pen=pg.mkPen(colors["train"], width=2), name="training")
+        scores = [np.array([h["best"] for h in res.history], dtype=float)]
         valid = [h["validation"] for h in res.history]
         if all(v is not None for v in valid):
             self.history.plot(gens, valid, pen=pg.mkPen(colors["validation"], width=2), name="validation")
-        self.history.autoRange()
+            scores.append(np.array(valid, dtype=float))
+        self.history_fit.set_data(gens, scores)
 
     # -- keeping the result -----------------------------------------------------------------------
     def _ask_save(self):

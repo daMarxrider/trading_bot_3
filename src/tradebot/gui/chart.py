@@ -11,7 +11,7 @@ from html import escape
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
-from PyQt6.QtCore import QEvent, QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QPainter
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -114,6 +114,101 @@ def visible_y_range(x, series, x0, x1, padding=FIT_PADDING):
     lo, hi = float(visible.min()), float(visible.max())
     span = (hi - lo) or abs(hi) * 0.01 or 1.0  # flat data: open up a small band around it
     return lo - padding * span, hi + padding * span
+
+
+class PlotAutoFit(QObject):
+    """The chart's ``↕`` y-axis auto-fit for one ``PlotWidget`` (#96), as in the Backtest lab (#74).
+
+    A toggle in the plot's bottom-left corner, on by default and remembered under ``key``. While it's on, the
+    y-axis fits the :meth:`set_data` series inside the visible x-range, mouse and touch move only the x-axis,
+    and the view can't be panned past the data. A double click or double tap shows everything, still fitted.
+    """
+
+    def __init__(self, plot: pg.PlotWidget, settings: Settings | None = None, key: str | None = None,
+                 touch: bool = False, tip: str = "Auto-fit value axis to visible curves"):
+        super().__init__(plot)
+        self.plot, self.settings, self.key = plot, settings, key
+        self.x = np.empty(0)
+        self.series: list = []  # arrays aligned with self.x, in view coordinates (log10 on the log scale)
+        self._adjusting = False
+        self.button = QToolButton(plot, text="↕", checkable=True, toolTip=tip, objectName="ChartCorner")
+        self.button.setChecked(bool(settings.get(key, True)) if settings and key else True)
+        size = 40 if touch else 28  # finger-sized in touch mode
+        self.button.setFixedSize(size, size)
+        self.button.toggled.connect(self._toggled)
+        self.vb.sigRangeChanged.connect(self._range_changed)
+        plot.scene().sigMouseClicked.connect(lambda ev: ev.double() and self.reset())
+        self.touch = TouchController(plot.viewport(), PlotTouchHandler(plot, lambda _: plot.getPlotItem(),
+                                                                       on_reset=self.reset))
+        plot.installEventFilter(self)  # keeps the button in the bottom-left corner
+
+    @property
+    def vb(self) -> pg.ViewBox:
+        return self.plot.getPlotItem().vb
+
+    @property
+    def on(self) -> bool:
+        return self.button.isChecked()
+
+    def set_data(self, x, series, log: bool = False):
+        """The curves to fit: sorted ``x`` and arrays aligned with it (NaN where a curve has no value).
+        Then everything is shown, fitted while auto-fit is on."""
+        self.x = np.asarray(x, dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            self.series = [np.log10(s) if log else np.asarray(s, dtype=float) for s in series]
+        self._lock()
+        self.reset()
+
+    def reset(self):
+        """Everything in view, still fitted while auto-fit is on (double click or tap, new data)."""
+        plot = self.plot.getPlotItem()
+        self._adjusting = True
+        try:
+            plot.autoRange()  # autoRange() disables auto range in pyqtgraph, so re-enable afterwards
+            plot.enableAutoRange()
+        finally:
+            self._adjusting = False
+        self.fit_y()
+
+    def fit_y(self, force: bool = False):
+        """Fit the y-axis to the series inside the visible x-range (while auto-fit is on, or ``force``)."""
+        if not (self.on or force):
+            return
+        x0, x1 = self.vb.viewRange()[0]
+        self._adjusting = True
+        try:
+            self.plot.getPlotItem().enableAutoRange(y=False)  # pyqtgraph would otherwise fit y to all data
+            bounds = visible_y_range(self.x, self.series, x0, x1)
+            if bounds is not None:
+                self.plot.setYRange(*bounds, padding=0)
+        finally:
+            self._adjusting = False
+
+    def _range_changed(self, _vb, _ranges, changed):
+        if changed[0] and self.on and not self._adjusting:
+            self.fit_y()  # scrolled or zoomed along x
+
+    def _lock(self):
+        """While auto-fit is on, mouse and touch move only the x-axis, and not past the data."""
+        on = self.on and len(self.x) > 0
+        margin = float(np.median(np.diff(self.x))) if len(self.x) > 1 else 1.0
+        self.vb.setMouseEnabled(x=True, y=not on)
+        self.vb.setLimits(**(dict(xMin=self.x[0] - margin, xMax=self.x[-1] + margin) if on
+                             else dict(xMin=None, xMax=None)))
+
+    def _toggled(self, on):
+        if self.settings and self.key:
+            self.settings.set(self.key, on)
+        self._lock()
+        if on:
+            self.fit_y()
+        else:
+            self.plot.getPlotItem().enableAutoRange(y=False)  # keep the current y-range until the user changes it
+
+    def eventFilter(self, obj, event):
+        if obj is getattr(self, "plot", None) and event.type() == QEvent.Type.Resize:  # (gone while Qt tears down)
+            self.button.move(8, self.plot.height() - self.button.height() - 8)
+        return super().eventFilter(obj, event)
 
 
 def price_label(p: float) -> str:
