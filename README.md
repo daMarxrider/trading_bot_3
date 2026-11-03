@@ -439,8 +439,8 @@ trades speed for expressiveness and safeguards.
   `100 * wilder(pos(diff(close, 1)), 14) / (wilder(pos(diff(close, 1)), 14) + wilder(neg(diff(close, 1)), 14))`.
   The tests build all five indicators like this and check that they equal
   the built-in ones. A slow test hides an `RSI(14) < 30` rule in synthetic
-  prices: evolve gets close (rules that catch most of its trades) but doesn't
-  find RSI itself yet.
+  prices (`pytest --slow`): evolve gets close (rules that catch most of its
+  trades) but doesn't find RSI itself yet.
 - **Evolved building blocks**: every 5 generations, parts that keep showing up in
   the best programs become named modules (`m1`, `m2`, …), used as a single
   building block from then on. Equal numbers inside one become one parameter,
@@ -831,6 +831,7 @@ For venues without an API, subclass `ManualExecutionBroker` or
 
 ```sh
 uv run pytest
+uv run pytest --slow                   # also the minutes-long tests (CI runs them on PRs labelled `slow tests`)
 uv run python scripts/bench_chart.py   # chart redraw and pan times for 500 / 5,000 / 50,000 candles
 ```
 

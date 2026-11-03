@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Runs the test suite on every pull request and on pushes to main; release.yml reuses it.
-# The `pytest` job is a required status check for merging into main.
+# The `pytest` job is a required status check for merging into main. Tests marked slow run only on PRs
+# labelled `slow tests` (adding the label reruns the job).
 name: tests
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   push:
     branches: [main]
   workflow_call:
@@ -32,6 +34,6 @@ jobs:
         run: uv sync --extra gui --python 3.14
 
       - name: Test
-        run: uv run pytest -q
+        run: uv run pytest -q ${{ contains(github.event.pull_request.labels.*.name, 'slow tests') && '--slow' || '' }}
         env:
           QT_QPA_PLATFORM: offscreen

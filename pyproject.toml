@@ -44,3 +44,4 @@ packages = ["src/tradebot"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: minutes long, skipped unless `pytest --slow` (or the `slow tests` label on a PR)"]

@@ -297,6 +297,7 @@ def hidden_rsi(n: int = 3000, seed: int = 0) -> pd.DataFrame:
                         index=pd.date_range("2015-01-01", periods=n, freq="D", tz="UTC"))
 
 
+@pytest.mark.slow
 def test_from_scratch_nearly_rediscovers_a_hidden_rsi_rule():
     """From scratch, evolve finds rules that trade much like a hidden ``RSI(14) < 30`` (held 5 candles).
 
