@@ -608,8 +608,14 @@ def evolve(
         autocompletion=complete.watchlists)] = [],
     population: Annotated[int, typer.Option(help="Programs per generation")] = 300,
     generations: int = 40,
-    max_depth: Annotated[int, typer.Option(help="Deepest nesting of a rule")] = 6,
-    max_size: Annotated[int, typer.Option(help="Most building blocks (nodes) per rule")] = 40,
+    max_depth: Annotated[Optional[int], typer.Option(
+        help="Deepest nesting of a rule (default 6, with --from-scratch 12)")] = None,
+    max_size: Annotated[Optional[int], typer.Option(
+        help="Most building blocks (nodes) per rule (default 40, with --from-scratch 100)")] = None,
+    from_scratch: Annotated[bool, typer.Option(
+        "--from-scratch", help="No ready-made indicators: build rules from candles and low-level maths only, so the "
+        "evolver can invent RSI, Bollinger & co. itself. Turns on the module library, deduplication, the deflated "
+        "Sharpe ratio, shuffled-price runs and walk-forward folds")] = False,
     objective: Annotated[str, typer.Option(help="sharpe | return | calmar", autocompletion=complete.choices(
         ("sharpe", ""), ("return", ""), ("calmar", "")))] = "sharpe",
     aggregate: Annotated[str, typer.Option(
@@ -628,8 +634,12 @@ def evolve(
     indicators: Annotated[Optional[str], typer.Option(
         help="Comma-separated indicators the rules may use (default: all, plugins included)",
         autocompletion=complete.indicators)] = None,
-    permutations: Annotated[int, typer.Option(
-        help="Also run the search this many times on shuffled candles, to see whether it finds as much in noise")] = 0,
+    permutations: Annotated[Optional[int], typer.Option(
+        help="Also run the search this many times on shuffled candles, to see whether it finds as much in noise "
+        "(default 0, with --from-scratch 5)")] = None,
+    folds: Annotated[Optional[int], typer.Option(
+        help="Walk-forward: also run the search on this many rolling windows, each scored on the stretch after it "
+        "(default 0, with --from-scratch 3)")] = None,
     fee: float = 0.001,
     dca_amount: DcaAmount = None,
     seed: Annotated[Optional[int], typer.Option(help="Random seed (printed when left out, to repeat a run)")] = None,
@@ -665,6 +675,8 @@ def evolve(
         if save in ALGORITHMS and not target.exists():
             raise typer.BadParameter(f"there already is an algorithm {save!r}; pick another name", param_hint="--save")
     names = [n.strip() for n in indicators.split(",") if n.strip()] if indicators else None
+    if from_scratch and names:
+        raise typer.BadParameter("from scratch uses no ready-made indicators", param_hint="--indicators")
     for n in names or ():
         if n not in INDICATORS:
             raise typer.BadParameter(f"unknown indicator {n!r}", param_hint="--indicators")
@@ -673,7 +685,7 @@ def evolve(
     kwargs = dict(population=population, generations=generations, max_depth=max_depth, max_size=max_size,
                   objective=objective, aggregate=aggregate, align=align, validation=validation, test=test,
                   segments=segments, min_trades=min_trades, parsimony=parsimony, state=state, indicators=names,
-                  fee=fee, dca_amount=dca_amount, seed=seed)
+                  fee=fee, dca_amount=dca_amount, seed=seed, from_scratch=from_scratch)
     with Progress(console=console) as progress:
         task = progress.add_task("evolving", total=generations)
         label = {"name": "evolving"}
@@ -686,7 +698,7 @@ def evolve(
             progress.update(task, advance=1, description=f"{label['name']}: generation {gen + 1} best {objective}={best:.3f}")
 
         try:
-            res = run_evolve(df, permutations=permutations, progress=report, on_phase=phase, **kwargs)
+            res = run_evolve(df, permutations=permutations, folds=folds, progress=report, on_phase=phase, **kwargs)
         except ValueError as e:
             raise typer.BadParameter(str(e)) from None
     _print_evolution(res, tf, top)
@@ -706,6 +718,7 @@ def _print_evolution(res, tf: str, top: int) -> None:
     programs with their validation score, the permutation test and the warnings (#83)."""
     from rich.panel import Panel
 
+    from tradebot.backtest.baselines import BUY_HOLD
     from tradebot.backtest.metrics import fmt
 
     def cell(v, f="{:.3f}".format):
@@ -757,6 +770,20 @@ def _print_evolution(res, tf: str, top: int) -> None:
         color = "green" if pt.p <= 0.05 else "red"
         console.print(f"permutation test: on shuffled candles the {pt.part} {obj} was "
                       f"{', '.join(f'{s:.2f}' for s in pt.shuffled)} (real: {pt.score:.2f}) · [{color}]p = {pt.p:.2f}[/]")
+    if (d := res.deflated) is not None:
+        color = "green" if d.significant else "red"
+        console.print(f"deflated Sharpe ratio: [{color}]{d.probability:.3f}[/] (training Sharpe {d.sharpe:.3f} per candle "
+                      f"vs. {d.luck:.3f} expected from luck over {d.trials} distinct strategies)")
+    if (wf := res.walk_forward) is not None:
+        w = Table(title=f"walk-forward: evolved afresh per window, {obj} on the unseen stretch after it")
+        for col in ("fold", "window from", "unseen from", obj, "beats buy & hold", "rules"):
+            w.add_column(col, justify="left" if col == "rules" else "right")
+        for i, (f, score) in enumerate(zip(wf.folds, wf.scores())):
+            rules = f.program.rules()
+            w.add_row(str(i + 1), day(f.symbols[0].train.equity.index[0]),
+                      day(f.test_start) if f.test_start is not None else "–", cell(score),
+                      f"{f.beats('test')[BUY_HOLD]}/{len(f.symbols)}", f"buy: {rules['entry']} · sell: {rules['exit']}")
+        console.print(w)
     for w in res.warnings():
         console.print(f"[bold red]{w}[/]")
 

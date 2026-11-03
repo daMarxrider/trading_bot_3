@@ -7,6 +7,7 @@ hand-written strategy does: ``backtest``, the chart, the Backtest lab and the bo
 program becomes a parameter with the range it was evolved in (``n1``, ``n2``, ... for whole numbers,
 ``c1``, ... for the rest), so ``tradebot optimize <name>`` can fine-tune them, batched on the GPU unless
 the exit rule looks at the open trade (that needs a loop over the trades, ``vectorized = False``).
+Modules (evolved building blocks, #100) become plain functions next to the class.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import re
 import types
 
 from tradebot.core.registry import Param
-from tradebot.evolve.program import Node, Program, format_value
+from tradebot.evolve.program import Node, Program, definition, format_value, module_params
 from tradebot.evolve import runtime as rt
 
 NAME = re.compile(r"[a-z_][a-z0-9_]*\Z")  #: see :func:`valid_name`
@@ -60,6 +61,23 @@ def _code(node: Node, rule: str, path: tuple, names: dict, in_trade: bool, hoist
     return node.prim.code.format(*args)
 
 
+def modules_source(program: Program) -> str:
+    """A function per module the program uses (``def m1(o, n, k): ...``), each after the ones it calls."""
+    out = []
+    for m in program.modules:
+        params = module_params(m)
+        names = {path: name for name, paths in zip(params, m.slots) for path in paths}
+
+        def code(node: Node, path: tuple) -> str:
+            if node.is_const:
+                return names[path]
+            return node.prim.code.format(*(code(a, (*path, i)) for i, a in enumerate(node.args)))
+
+        out += [f"def {m.name}(o{''.join(', ' + p for p in params)}):", f'    """{definition(m)}"""',
+                f"    return {code(m.body, ())}", "", ""]
+    return "\n".join(out)
+
+
 def signals_source(program: Program, indent: str = "") -> str:
     """``def signals(self, o, p): ...`` for the program."""
     names = parameter_names(program)
@@ -80,7 +98,7 @@ def compile_signals(program: Program):
     from tradebot.core import ops
 
     ns = {"ops": ops, "rt": rt}
-    exec(signals_source(program), ns)  # noqa: S102 - code generated from our own primitives
+    exec(modules_source(program) + signals_source(program), ns)  # noqa: S102 - code generated from our own primitives
     defaults = {k: v.default for k, v in parameters(program).items()}
     fn = ns["signals"]
     return lambda o, p=None: fn(None, o, defaults if p is None else {**defaults, **p})
@@ -139,6 +157,7 @@ def plugin_source(program: Program, name: str, notes: list[str] = ()) -> str:
         "from tradebot.indicators.base import INDICATORS",
         "",
         "",
+        *([modules_source(program).rstrip("\n"), "", ""] if program.modules else []),
         f"class {class_name(name)}(BaseAlgorithm):",
         f"    name = {name!r}",
         f"    description = {('Evolved: buy when ' + rules['entry'] + '; sell when ' + rules['exit'])!r}",

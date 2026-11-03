@@ -78,6 +78,38 @@ _PERCENT = {"total_return", "cagr", "max_drawdown", "win_rate", "exposure", "xir
 _SIGNED = {"vs buy & hold", "vs monthly investing"}
 
 
+def deflated_sharpe(returns: np.ndarray, trial_sharpes: np.ndarray, trials: int | None = None) -> tuple[float, float]:
+    """Deflated Sharpe ratio (Bailey & López de Prado, 2014): the probability that the per-candle Sharpe ratio of
+    ``returns`` beats the best one expected from ``trials`` strategies without any edge.
+
+    ``trial_sharpes`` are the per-candle Sharpe ratios of the strategies tried (their spread sets how high pure
+    luck reaches); ``trials`` defaults to their number. The skew and fat tails of ``returns`` widen the error.
+    Returns ``(probability, expected best Sharpe ratio of luck)``, both per candle.
+    """
+    from statistics import NormalDist
+
+    r = np.asarray(returns, dtype=float)
+    r = r[np.isfinite(r)]
+    sr_trials = np.asarray(trial_sharpes, dtype=float)
+    sr_trials = sr_trials[np.isfinite(sr_trials)]
+    n = int(trials if trials is not None else len(sr_trials))
+    if len(r) < 3 or not r.std() > 0:
+        return float("nan"), float("nan")
+    z = NormalDist()
+    sr = r.mean() / r.std()
+    gamma = 0.5772156649  # Euler-Mascheroni
+    if n > 1 and len(sr_trials) > 1:
+        luck = sr_trials.std(ddof=1) * ((1 - gamma) * z.inv_cdf(1 - 1 / n) + gamma * z.inv_cdf(1 - 1 / (n * np.e)))
+    else:
+        luck = 0.0
+    centred = (r - r.mean()) / r.std()
+    skew, kurt = float((centred ** 3).mean()), float((centred ** 4).mean())
+    spread = 1 - skew * sr + (kurt - 1) / 4 * sr ** 2
+    if not spread > 0:
+        return float("nan"), float(luck)
+    return float(z.cdf((sr - luck) * np.sqrt(len(r) - 1) / np.sqrt(spread))), float(luck)
+
+
 def fmt(key: str, value) -> str:
     if isinstance(value, int):
         return str(value)

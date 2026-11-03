@@ -24,6 +24,18 @@ The search space is huge, so the data is split by date (all symbols at the same 
 * Optional **permutation test**: the same search on prices with shuffled candles (same moves, random
   order, so no pattern is left to find). If the evolver scores as well on noise, the result is noise.
 
+**From scratch** (#100, ``from_scratch=True``): rules are built from candles and low-level maths only
+(:meth:`PrimitiveSet.from_scratch`), with higher depth and size limits and a growing library of evolved
+building blocks (:mod:`tradebot.evolve.modules`). The bigger search space fits noise more easily, so the
+mode turns on more safeguards by default:
+
+* **behavioural deduplication**: programs that trade exactly alike in training count as one (the
+  duplicates make room for new ideas, and the hall of fame holds different strategies),
+* the **deflated Sharpe ratio** of the result: its training Sharpe ratio against the best one luck
+  reaches over the number of distinct strategies tried,
+* the **permutation test** and **walk-forward folds** (:func:`evolve`): the whole search again on
+  rolling windows, each result scored on the stretch after its window.
+
 Indicators are computed over the whole history and only *scored* per part: all primitives are causal,
 so this equals computing them on each part with a warm-up, and a position open at a boundary carries
 over as it would in live trading.
@@ -31,6 +43,7 @@ over as it would in live trading.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from dataclasses import dataclass, field
@@ -43,16 +56,22 @@ import pandas as pd
 from tradebot.backtest import BacktestResult, Baselines, baselines, batch_fitness, simulate
 from tradebot.backtest.baselines import BUY_HOLD, MONTHLY
 from tradebot.backtest.engine import from_positions
-from tradebot.backtest.metrics import infer_periods_per_year
+from tradebot.backtest.metrics import deflated_sharpe, infer_periods_per_year
 from tradebot.core.series import OHLC
 from tradebot.evolve.export import load_plugin, plugin_source
-from tradebot.evolve.primitives import BOOL, PrimitiveSet
-from tradebot.evolve.program import Evaluator, Node, Program, quantize, random_program, random_tree, simplify_tree
+from tradebot.evolve.modules import Library, rewrite
+from tradebot.evolve.primitives import BOOL, Primitive, PrimitiveSet
+from tradebot.evolve.program import (Evaluator, Node, Program, constants, log_scale, quantize, random_program,
+                                     random_tree, simplify_tree)
 from tradebot.optimize.base import AGGREGATES, carried_by_few, objective_value, select_frames
 
 log = logging.getLogger(__name__)
 
 REJECTED = -1e9
+LIMITS = (6, 40)  #: default max depth and max size
+SCRATCH_LIMITS = (12, 100)  #: from scratch: an RSI alone is depth 8 and ~25 nodes
+SCRATCH_GUARDS = {"permutations": 5, "folds": 3}  #: from scratch: shuffled-price runs and walk-forward folds
+SIGNIFICANT = 0.95  #: the deflated Sharpe ratio a result should reach
 #: ``progress(generation, best_fitness, best_program)``
 Progress = Callable[[int, float, Program], None]
 
@@ -92,6 +111,48 @@ class PermutationTest:
 
 
 @dataclass
+class Deflated:
+    """The result's training Sharpe ratio, corrected for how many distinct strategies the search tried."""
+
+    probability: float  #: that the Sharpe ratio beats what luck reaches over ``trials`` tries (NaN: undefined)
+    sharpe: float  #: per candle, on the training part (all symbols' returns in a row)
+    luck: float  #: the best per-candle Sharpe ratio expected from ``trials`` strategies without an edge
+    trials: int  #: distinct strategies tried (by their training positions)
+
+    @property
+    def significant(self) -> bool:
+        return bool(self.probability >= SIGNIFICANT)
+
+
+@dataclass
+class WalkForward:
+    """The whole search once per fold: evolved on a rolling window, scored on the stretch after it."""
+
+    folds: list["EvolutionResult"]
+
+    def scores(self) -> list[float | None]:
+        """Each fold's objective on its unseen stretch, combined over the symbols."""
+        return [f.aggregated("test") for f in self.folds]
+
+    def losing(self) -> int:
+        return sum(s is not None and s < 0 for s in self.scores())
+
+    def beating(self) -> int:
+        """Folds in which the result beat buy & hold on at least half the symbols."""
+        return sum(f.beats("test")[BUY_HOLD] >= len(f.symbols) / 2 for f in self.folds)
+
+    def warnings(self, objective: str) -> list[str]:
+        n = len(self.folds)
+        out = []
+        if (k := self.losing()) > n / 2 - 1e-9 and k:
+            out.append(f"Walk-forward: evolved afresh on {n} rolling windows, the result had a negative {objective} on "
+                       f"the unseen stretch after its window in {k} of {n} folds.")
+        if (b := self.beating()) < n / 2:
+            out.append(f"Walk-forward: the fold results beat buy & hold in only {b} of {n} folds.")
+        return out
+
+
+@dataclass
 class EvolutionResult:
     program: Program
     fitness: float
@@ -108,6 +169,10 @@ class EvolutionResult:
     test_start: pd.Timestamp | None = None
     skipped: dict[str, str] = field(default_factory=dict)
     permutation: PermutationTest | None = None
+    from_scratch: bool = False
+    modules: list[Primitive] = field(default_factory=list)  #: the run's library of evolved building blocks
+    deflated: Deflated | None = None
+    walk_forward: WalkForward | None = None
 
     @property
     def multi(self) -> bool:
@@ -177,8 +242,18 @@ class EvolutionResult:
         if self.permutation is not None and self.permutation.p > 0.05:
             pt = self.permutation
             k = sum(s >= pt.score for s in pt.shuffled)
-            out.append(f"On shuffled prices (no patterns to find) the evolver scored as well in {k} of "
-                       f"{len(pt.shuffled)} runs (p = {pt.p:.2f}): no evidence of a real edge.")
+            if k:
+                out.append(f"It doesn't beat shuffled prices: there (no patterns to find) the evolver scored as well "
+                           f"in {k} of {len(pt.shuffled)} runs (p = {pt.p:.2f}). No evidence of a real edge.")
+            else:
+                out.append(f"It beat all {len(pt.shuffled)} shuffled-price runs, but so few runs can't show p below "
+                           f"{pt.p:.2f}; use 19 or more for p ≤ 0.05.")
+        if (d := self.deflated) is not None and not d.significant:
+            out.append(f"After allowing for the {d.trials} different strategies the search tried, the training Sharpe "
+                       f"ratio is not significant (deflated Sharpe ratio {d.probability:.2f}, needs {SIGNIFICANT}): "
+                       "luck alone reaches that high.")
+        if self.walk_forward is not None:
+            out += self.walk_forward.warnings(self.objective)
         return out
 
     def notes(self) -> list[str]:
@@ -190,6 +265,11 @@ class EvolutionResult:
         for part in ("train", "validation", "test"):
             if (v := self.aggregated(part)) is not None:
                 out.append(f"{part}: {self.objective} {v:.3f}")
+        if (d := self.deflated) is not None:
+            out.append(f"deflated Sharpe ratio {d.probability:.3f} over {d.trials} distinct strategies")
+        if self.walk_forward is not None:
+            out.append("walk-forward (unseen stretch per fold): "
+                       + ", ".join("–" if v is None else f"{v:.3f}" for v in self.walk_forward.scores()))
         out += [f"Warning: {w}" for w in self.warnings()]
         return out
 
@@ -227,8 +307,8 @@ class Evolver:
         *,
         population: int = 300,
         generations: int = 40,
-        max_depth: int = 6,
-        max_size: int = 40,
+        max_depth: int | None = None,
+        max_size: int | None = None,
         objective: str = "sharpe",
         aggregate: str = "mean",
         fee: float = 0.001,
@@ -249,7 +329,23 @@ class Evolver:
         min_history: float = 0.5,
         dca_amount: float | None = None,
         primitives: PrimitiveSet | None = None,
+        from_scratch: bool = False,
+        library: bool | None = None,
+        dedupe: bool | None = None,
+        deflate: bool | None = None,
+        library_every: int = 5,
+        tune: int | None = None,
     ):
+        """``max_depth``/``max_size`` default to :data:`LIMITS`, from scratch to :data:`SCRATCH_LIMITS`.
+        ``library`` (evolved building blocks every ``library_every`` generations), ``dedupe`` (programs
+        trading alike count once) and ``deflate`` (the deflated Sharpe ratio of the result) default to
+        ``from_scratch``. ``tune`` (default 0, from scratch 3): the best this many programs of every generation
+        get their constants hill-climbed (a memetic step: GP finds the shape, local search the numbers)."""
+        if from_scratch and indicators is not None:
+            raise ValueError("from scratch uses no ready-made indicators; leave out the indicator choice")
+        limits = SCRATCH_LIMITS if from_scratch else LIMITS
+        max_depth = limits[0] if max_depth is None else max_depth
+        max_size = limits[1] if max_size is None else max_size
         if aggregate not in AGGREGATES:
             raise ValueError(f"unknown aggregate {aggregate!r}; choose {', '.join(AGGREGATES)}")
         if objective not in ("sharpe", "return", "calmar"):
@@ -270,12 +366,22 @@ class Evolver:
         self.dca_amount = dca_amount
         self.seed = int(np.random.SeedSequence().generate_state(1)[0]) if seed is None else seed
         self.rng = np.random.default_rng(self.seed)
-        self.ps = primitives or PrimitiveSet.default(indicators, state)
+        self.from_scratch = from_scratch
+        self.base_ps = primitives or (PrimitiveSet.from_scratch(state) if from_scratch
+                                      else PrimitiveSet.default(indicators, state))
+        self.ps = self.base_ps  #: grows with the library's modules
+        library, dedupe, deflate = (from_scratch if x is None else x for x in (library, dedupe, deflate))
+        self.library = Library() if library else None
+        self.library_every = max(1, library_every)
+        self.dedupe, self.deflate = dedupe, deflate
+        self.tune = (3 if from_scratch else 0) if tune is None else max(0, tune)
         self.settings = dict(population=population, generations=generations, max_depth=max_depth, max_size=max_size,
                              objective=objective, aggregate=aggregate, fee=fee, validation=validation, test=test,
                              segments=segments, min_trades=min_trades, parsimony=parsimony, tournament=tournament,
                              crossover=crossover, mutation=mutation, elite=elite, hall_of_fame=hall_of_fame,
-                             dca_amount=dca_amount, primitives=self.ps)
+                             dca_amount=dca_amount, primitives=self.base_ps, from_scratch=from_scratch,
+                             library=library, dedupe=dedupe, deflate=deflate, library_every=library_every,
+                             tune=self.tune)
 
         self.multi = not isinstance(df, pd.DataFrame)
         frames, self.skipped = select_frames(df if self.multi else {"": df}, align, min_history)
@@ -306,6 +412,8 @@ class Evolver:
         self.evaluations = 0
         self._fitness: dict[str, float] = {}
         self._validation: dict[str, float] = {}
+        self._signature: dict[str, bytes] = {}  #: program -> fingerprint of its training positions
+        self._sharpe: dict[bytes, float] = {}  #: per distinct behaviour: training Sharpe ratio per candle
 
     # -- scoring --------------------------------------------------------------------------------------
     def _objective(self, d: _Symbol, pos: np.ndarray, a: int, b: int) -> float:
@@ -324,22 +432,63 @@ class Evolver:
         if (hit := self._fitness.get(program.key)) is not None:
             return hit
         scores = []
+        trains = []
         for d in self.data:
             pos = self._positions(d, program)
             if pos is None:
                 scores = None
                 break
             train = pos[:d.train_end]
+            trains.append(train)
             trades = (np.abs(np.diff(train, prepend=0.0)) > 0).sum() / 2
             if trades < self.min_trades:
                 scores += [REJECTED] * len(d.segments)
             else:
                 scores += [self._objective(d, pos, a, b) for a, b in d.segments]
         value = REJECTED if scores is None else float(AGGREGATES[self.aggregate](np.array(scores)[:, None])[0])
+        if scores is not None and (self.dedupe or self.deflate):
+            sig = hashlib.blake2b(b"".join(np.asarray(t, dtype=np.int8).tobytes() for t in trains),
+                                  digest_size=16).digest()
+            self._signature[program.key] = sig
+            if self.deflate and value > REJECTED / 2 and sig not in self._sharpe:
+                r = self._train_returns(program)
+                self._sharpe[sig] = float(r.mean() / r.std()) if r.std() > 0 else float("nan")
         value = max(value, REJECTED) - self.parsimony * program.size
         self._fitness[program.key] = value
         self.evaluations += 1
         return value
+
+    def _train_returns(self, program: Program) -> np.ndarray:
+        """The training part's returns per candle, all symbols in a row."""
+        return np.concatenate([simulate(d.close[:d.train_end], d.evaluator.positions(program)[:d.train_end], self.fee)
+                               for d in self.data])
+
+    def deflated(self, program: Program) -> Deflated | None:
+        """The deflated Sharpe ratio of ``program`` over the distinct strategies tried so far (needs ``deflate``)."""
+        if not self.deflate or not self._sharpe:
+            return None
+        r = self._train_returns(program)
+        trials = np.array(list(self._sharpe.values()))
+        probability, luck = deflated_sharpe(r, trials, len(trials))
+        sr = float(r.mean() / r.std()) if r.std() > 0 else float("nan")
+        return Deflated(probability, sr, luck, len(trials))
+
+    def _distinct(self, pop: list[Program], fit: np.ndarray) -> np.ndarray:
+        """With ``dedupe``: a program trading exactly like a fitter one (or an equally fit, earlier one) is
+        set below every real score, so it counts once and its place goes to a new idea."""
+        if not self.dedupe:
+            return fit
+        fit = fit.copy()
+        first: set[bytes] = set()
+        for i in np.argsort(-fit, kind="stable"):
+            sig = self._signature.get(pop[i].key)
+            if sig is None:
+                continue
+            if sig in first:
+                fit[i] = 2 * REJECTED
+            else:
+                first.add(sig)
+        return fit
 
     def validation(self, program: Program) -> float | None:
         """The objective on the validation part, combined over the symbols; None without one."""
@@ -368,9 +517,10 @@ class Evolver:
         return random_program(self.ps, 2, self.rng)
 
     def initial_population(self) -> list[Program]:
-        """Ramped half-and-half: depths 2..max_depth, half "full" and half "grow" trees, no duplicates."""
+        """Ramped half-and-half: depths 2..max_depth (at most 6, deeper starts are bloat), half "full" and half
+        "grow" trees, no duplicates."""
         out: dict[str, Program] = {}
-        depths = range(2, self.max_depth + 1)
+        depths = range(2, min(self.max_depth, 6) + 1)
         for i in range(self.population * 20):
             p = self._new(depths[i % len(depths)], full=bool((i // len(depths)) % 2))
             out.setdefault(p.key, p)
@@ -392,6 +542,8 @@ class Evolver:
 
     def _with(self, program: Program, rule: str, tree: Node) -> Program:
         tree = simplify_tree(tree, self.ps)
+        if self.library is not None:  # parts matching a module are written as the module
+            tree = rewrite(tree, self.library.by_template)
         return Program(tree, program.exit) if rule == "entry" else Program(program.entry, tree)
 
     def crossover(self, a: Program, b: Program) -> Program:
@@ -447,10 +599,35 @@ class Evolver:
                 return child
         return program
 
+    def hill_climb(self, program: Program, fitness: float, tries: int = 8) -> tuple[Program, float]:
+        """Up to ``tries`` constants (in random order), each moved one step and a bigger step either way;
+        every improvement is kept."""
+        for _ in range(tries):
+            consts = constants(program)
+            if not consts:
+                break
+            rule, path, node = consts[int(self.rng.integers(len(consts)))]
+            s = node.spec
+            if s.integer:
+                steps = {node.value - 1, node.value + 1, int(round(node.value * 0.8)), int(round(node.value * 1.25))}
+            else:
+                step = (s.high - s.low) / 200
+                steps = {node.value + k * step for k in (-5, -1, 1, 5)}
+            for value in sorted(steps):
+                tree = getattr(program, rule).replace(path, Node(None, value=quantize(s, value), spec=s))
+                child = self._with(program, rule, tree)
+                if child.key != program.key and self._fits(child) and (f := self.fitness(child)) > fitness:
+                    program, fitness = child, f
+                    break
+        return program, fitness
+
     def _nudge(self, node: Node) -> Node:
         s = node.spec
         span = s.high - s.low
-        if s.integer:
+        if self.ps.scratch and log_scale(s):  # by a factor around 1 (14 -> 11 or 18), at least one step
+            value = int(round(node.value * np.exp(self.rng.normal(0, 0.3))))
+            value = value if value != node.value else node.value + int(self.rng.choice([-1, 1]))
+        elif s.integer:
             step = int(round(self.rng.normal(0, max(1.0, 0.1 * span))))
             value = node.value + (step or int(self.rng.choice([-1, 1])))
         else:
@@ -481,17 +658,31 @@ class Evolver:
         started = time.monotonic()
         pop = self.initial_population()
         fit = np.array([self.fitness(p) for p in pop])
-        hall: dict[str, Candidate] = {}
+        hall: dict = {}
         history = []
         for gen in range(self.generations):
+            if self.library is not None and gen and gen % self.library_every == 0:
+                pop, fit = self._grow_library(pop, fit)
+            fit = self._distinct(pop, fit)
             order = np.argsort(-fit, kind="stable")
             pop, fit = [pop[i] for i in order], fit[order]
+            if self.tune:
+                for i in range(min(self.tune, len(pop))):
+                    if fit[i] > REJECTED / 2:
+                        pop[i], fit[i] = self.hill_climb(pop[i], float(fit[i]))
+                order = np.argsort(-fit, kind="stable")
+                pop, fit = [pop[i] for i in order], fit[order]
             for p, f in zip(pop[: self.hall_size], fit[: self.hall_size]):
-                if f > REJECTED / 2 and p.key not in hall:
-                    hall[p.key] = Candidate(p, float(f), gen)
+                if f <= REJECTED / 2:
+                    continue
+                # with dedupe, one entry per behaviour: the fittest (smallest) program trading that way
+                k = self._signature.get(p.key, p.key) if self.dedupe else p.key
+                if k not in hall or (self.dedupe and f > hall[k].fitness):
+                    hall[k] = Candidate(p, float(f), gen)
             hall = dict(sorted(hall.items(), key=lambda kv: -kv[1].fitness)[: self.hall_size])
             history.append({"generation": gen, "best": float(fit[0]), "validation": self.validation(pop[0]),
-                            "size": float(np.mean([p.size for p in pop])), "distinct": len({p.key for p in pop})})
+                            "size": float(np.mean([p.size for p in pop])), "distinct": len({p.key for p in pop}),
+                            **({"modules": len(self.library.modules)} if self.library is not None else {})})
             if progress:
                 progress(gen, float(fit[0]), pop[0])
             if gen == self.generations - 1:
@@ -504,7 +695,19 @@ class Evolver:
         return EvolutionResult(best.program, best.fitness, [self._report(d, best.program) for d in self.data], history,
                                sorted(hall.values(), key=lambda c: -c.fitness), self.objective, self.aggregate,
                                self.evaluations, time.monotonic() - started, self.seed, best.generation,
-                               self.validation_start, self.test_start, self.skipped)
+                               self.validation_start, self.test_start, self.skipped, from_scratch=self.from_scratch,
+                               modules=self.library.modules if self.library is not None else [],
+                               deflated=self.deflated(best.program))
+
+    def _grow_library(self, pop: list[Program], fit: np.ndarray) -> tuple[list[Program], np.ndarray]:
+        """Promote the subtrees shared by the best fifth of the population to modules and rewrite everyone."""
+        good = [p for p, f in zip(pop, fit) if f > REJECTED / 2][: max(10, len(pop) // 5)]
+        self.ps, new = self.library.grow(good, self.ps)
+        if not new:
+            return pop, fit
+        log.debug("evolve: new modules %s", ", ".join(m.name for m in new))
+        pop = [self.library.rewrite(p) for p in pop]
+        return pop, np.array([self.fitness(p) for p in pop])
 
     def _select(self, hall: list[Candidate]) -> Candidate:
         """The hall-of-fame program that does best on validation (the training fitness breaks ties)."""
@@ -551,11 +754,16 @@ def shuffle_candles(df: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
     return out
 
 
-def evolve(df: pd.DataFrame | Mapping[str, pd.DataFrame], *, permutations: int = 0, progress: Progress | None = None,
-           on_phase: Callable[[str], None] | None = None, **kwargs) -> EvolutionResult:
+def evolve(df: pd.DataFrame | Mapping[str, pd.DataFrame], *, permutations: int | None = None, folds: int | None = None,
+           progress: Progress | None = None, on_phase: Callable[[str], None] | None = None, **kwargs) -> EvolutionResult:
     """Run :class:`Evolver` (``kwargs`` are its settings); with ``permutations``, also run the same search that
-    many times on shuffled candles and attach the :class:`PermutationTest`. ``on_phase(label)`` is called before
-    each run ("evolving", "shuffled 1/5", ...)."""
+    many times on shuffled candles and attach the :class:`PermutationTest`; with ``folds``, run it once per
+    walk-forward fold and attach the :class:`WalkForward`. Both default to 0, from scratch to
+    :data:`SCRATCH_GUARDS`. ``on_phase(label)`` is called before each run ("evolving", "shuffled 1/5",
+    "fold 2/3", ...)."""
+    guards = SCRATCH_GUARDS if kwargs.get("from_scratch") else {}
+    permutations = guards.get("permutations", 0) if permutations is None else permutations
+    folds = guards.get("folds", 0) if folds is None else folds
     if on_phase:
         on_phase("evolving")
     evolver = Evolver(df, **kwargs)
@@ -572,4 +780,32 @@ def evolve(df: pd.DataFrame | Mapping[str, pd.DataFrame], *, permutations: int =
             run = Evolver(frames if evolver.multi else frames[""], **settings).run(progress)
             shuffled.append(run.aggregated(part))
         result.permutation = PermutationTest(result.aggregated(part), shuffled, part)
+    if folds:
+        result.walk_forward = _walk_forward(evolver, folds, progress, on_phase)
     return result
+
+
+def _walk_forward(evolver: Evolver, folds: int, progress: Progress | None,
+                  on_phase: Callable[[str], None] | None, train_fraction: float = 0.7) -> WalkForward:
+    """The search once per fold of :func:`tradebot.optimize.walkforward.plan` (rolling windows over all the data):
+    each fold evolves on its window (with its own validation part) and is scored on the stretch after it."""
+    from tradebot.optimize.walkforward import plan
+
+    timeline = reduce(lambda a, b: a.union(b), (f.index for f in evolver.frames.values()))
+    rng = np.random.default_rng(evolver.seed + 2)
+    out = []
+    for i, (start, split, end) in enumerate(plan(len(timeline), folds, train_fraction=train_fraction)):
+        label = f"fold {i + 1}/{folds}"
+        if on_phase:
+            on_phase(label)
+        lo, hi = timeline[start], timeline[end] if end < len(timeline) else None
+        cut = {s: f[f.index.searchsorted(lo):len(f) if hi is None else f.index.searchsorted(hi)]
+               for s, f in evolver.frames.items()}
+        test = (end - split) / (end - start)
+        validation = min(evolver.settings["validation"], 0.8 - test)
+        settings = {**evolver.settings, "seed": int(rng.integers(1 << 31)), "test": test, "validation": validation}
+        try:
+            out.append(Evolver(cut if evolver.multi else cut[""], **settings).run(progress))
+        except ValueError as e:
+            raise ValueError(f"walk-forward {label}: {e}") from None
+    return WalkForward(out)
