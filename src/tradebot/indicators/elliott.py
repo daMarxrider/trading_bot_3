@@ -16,7 +16,7 @@ from tradebot.indicators.builtin import ATR
 
 def to_numpy(o: OHLC) -> OHLC:
     if ops.is_torch(o.close):
-        return OHLC(*(a.detach().cpu().numpy() for a in (o.open, o.high, o.low, o.close)))
+        return OHLC(*(None if a is None else a.detach().cpu().numpy() for a in o.fields()))
     return o
 
 

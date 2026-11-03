@@ -77,6 +77,9 @@ STRATEGIES = {
             "buying. Not every candidate ends up being used.",
     "elliott_wave": "Looks for the wave pattern of Elliott wave theory and trades the breakout of its strongest "
                     "wave (wave 3), with a stop loss and a price target.",
+    "halving_cycle": "Trades Bitcoin's 4-year cycle: buys a set number of days after a halving and sells a set "
+                     "number of days after one. Past tops came about 1.5 years after a halving, bottoms about a "
+                     "year before the next.",
 }
 
 #: Inputs and labels of the backtest lab.

@@ -172,7 +172,8 @@ def _sample_ohlc(n: int, seed: int = 7) -> OHLC:
     close = 100 * np.exp(np.cumsum(rng.normal(0, 0.02, n)))
     open_ = np.r_[close[0], close[:-1]]
     spread = np.abs(rng.normal(0, 0.01, n)) * close
-    return OHLC(open_, np.maximum(open_, close) + spread, np.minimum(open_, close) - spread, close)
+    time = 1.42e9 + 86_400.0 * np.arange(n)  # daily candles from 2015, for calendar indicators
+    return OHLC(open_, np.maximum(open_, close) + spread, np.minimum(open_, close) - spread, close, time)
 
 
 def output_unit(cls: type[BaseIndicator], output: str) -> str | None:
@@ -196,7 +197,7 @@ def causal_outputs(cls: type[BaseIndicator]) -> tuple[str, ...]:
         defaults = {k: v.default for k, v in cls.params.items()}
         with np.errstate(all="ignore"):
             a = cls.compute(full, **defaults)
-            b = cls.compute(OHLC(*(x[:part] for x in (full.open, full.high, full.low, full.close))), **defaults)
+            b = cls.compute(OHLC(*(x[:part] for x in full.fields())), **defaults)
     except Exception:  # a broken plugin indicator is simply not offered
         return ()
     return tuple(k for k in cls.outputs if k in a and k in b and np.allclose(

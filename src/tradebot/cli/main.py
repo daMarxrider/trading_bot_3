@@ -900,6 +900,50 @@ def news(symbols: Annotated[Optional[list[str]], typer.Argument(autocompletion=c
 
 
 @app.command()
+def halving(live: Annotated[bool, typer.Option(
+        help="Also forecast from the current chain tip's pace (asks the Blockstream API)")] = False):
+    """Past Bitcoin halvings, how far each was from the 4-year rule, and the forecast of the next ones."""
+    from tradebot.analysis import halving as hv
+
+    def day(ts):
+        return f"{pd.Timestamp(ts, unit='s', tz='UTC'):%Y-%m-%d %H:%M}"
+
+    t = Table(title=f"Bitcoin halvings · 4-year rule: {hv.INTERVAL:,} blocks × {hv.TARGET_SPACING} s = "
+                    f"{hv.NOMINAL_DAYS:.2f} days")
+    for col in ("block", "date (UTC)", "days", "vs 4-year rule", "s / block"):
+        t.add_column(col, justify="left" if col == "date (UTC)" else "right")
+    t.add_row("0", day(hv.GENESIS), "–", "–", "–")
+    for (height, ts), prev, pace in zip(hv.HALVINGS, hv.STARTS, hv.spacings(hv.STARTS)):
+        days = (ts - prev) / hv.DAY
+        t.add_row(f"{height:,}", day(ts), f"{days:.1f}", f"{days / hv.NOMINAL_DAYS - 1:+.1%}", f"{pace:.1f}")
+    console.print(t)
+
+    best = hv.best_estimator()
+    t = Table(title="Forecasts: each past halving predicted from the ones before it")
+    t.add_column("estimator", style="bold cyan")
+    for f in hv.backtest(best):
+        t.add_column(f"error {f.height:,}", justify="right")
+    t.add_column("mean |error|", justify="right")
+    t.add_column(f"next ({hv.HALVINGS[-1][0] + hv.INTERVAL:,})")
+    for name in hv.ESTIMATORS:
+        mark = " ✓" if name == best else ""
+        t.add_row(name + mark, *(f"{f.error_days:+.0f} d" for f in hv.backtest(name)),
+                  f"{hv.mean_abs_error(name):.0f} d", day(hv.predict(estimator=name)[0])[:10])
+    console.print(t)
+    later = hv.predict(count=4)[1:]
+    console.print(f"Used by the [bold]halving[/] indicator and [bold]halving_cycle[/]: {best} ✓. Later halvings: "
+                  + ", ".join(f"{day(ts)[:10]}" for ts in later))
+    if live:
+        try:
+            height, ts = hv.fetch_tip()
+        except Exception as exc:  # offline, API down, ...
+            raise typer.BadParameter(f"couldn't reach the Blockstream API ({exc})")
+        target, when, pace = hv.next_from_tip(height, ts)
+        console.print(f"Chain tip {height:,} at {day(ts)}: {pace:.1f} s per block this epoch → block {target:,} "
+                      f"around [bold]{day(when)}[/] UTC")
+
+
+@app.command()
 def device():
     """Show which compute backend the optimizer will use."""
     from tradebot.optimize import select_backend

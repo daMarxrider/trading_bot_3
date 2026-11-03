@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from tradebot.analysis import halving
 from tradebot.core import ops
 from tradebot.core.registry import IntParam, Param
 from tradebot.indicators.base import BaseIndicator, Style
@@ -190,3 +191,22 @@ class Ichimoku(BaseIndicator):
 
         conv, base_line = mid(conversion), mid(base)
         return {"conversion": conv, "base": base_line, "span_a": (conv + base_line) / 2, "span_b": mid(span_b)}
+
+
+class Halving(BaseIndicator):
+    """Bitcoin halving cycle (#99): a calendar clock, so it needs timestamped candles (NaN without)."""
+
+    name = "halving"
+    description = "Days since the last Bitcoin halving, and until the predicted next one"
+    outputs = ("days", "days_to_next", "phase")
+    overlay = False
+    #: the halving, the typical top (~530 days after) and bottom (~850) of past cycles, and the 4-year rule
+    levels = (0.0, 530.0, 850.0, round(halving.NOMINAL_DAYS, 2))
+    hidden = ("phase",)  # 0..1, its own scale; for strategies
+
+    @classmethod
+    def compute(cls, o):
+        if o.time is None:
+            nan = ops.full(tuple(o.close.shape), ops.NAN, o.close)
+            return {k: nan for k in cls.outputs}
+        return halving.cycle(o.time)

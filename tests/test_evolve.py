@@ -159,7 +159,7 @@ def test_trade_state_exits():
 def test_no_look_ahead():
     """Positions on the first candles don't change when later candles are added."""
     full = OHLC.from_frame(make_ohlc(700, seed=8))
-    part = OHLC(*(x[:450] for x in (full.open, full.high, full.low, full.close)))
+    part = OHLC(*(x[:450] for x in full.fields()))
     rng = np.random.default_rng(9)
     ev_full, ev_part = Evaluator(full), Evaluator(part)
     for _ in range(80):

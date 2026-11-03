@@ -138,6 +138,7 @@ tradebot backtest AAPL,MSFT,NVDA macd_cross -p fast=8           # one row per sy
 tradebot optimize -w all rsi_threshold --min-symbols-beating 5 --samples 4 --sample-length 300
 tradebot optimize AAPL macd_cross --walk-forward 5 --holdout 250   # re-optimize in 5 folds, then a holdout
 tradebot evolve AAPL,MSFT,NVDA --generations 60 --save my_rule    # evolve a whole strategy from scratch
+tradebot halving --live                                        # Bitcoin halvings and the forecast of the next
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50          # dry run
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50 --live   # real orders
 tradebot positions --broker kucoin
@@ -293,7 +294,8 @@ an on/off switch next to its parameters, and the search tunes both.
 - An indicator can't trade on its own, so it joins as a filter with a default
   rule: a buy also needs every active filter to agree. `sma`/`ema`: close above
   the average. `rsi`/`stoch`: oversold. `macd`: MACD above zero. `bbands`/`donchian`:
-  breakout. `elliott`: wave 3. Indicators without a rule (`atr`, `ichimoku`, `ssw`)
+  breakout. `elliott`: wave 3. `halving`: a window of days after a
+  Bitcoin halving. Indicators without a rule (`atr`, `ichimoku`, `ssw`)
   are left out, with a note.
 - `--min-members`/`--max-members` limit how many members are used; at least one
   strategy always is. Each member costs a small fitness penalty (0.01), so of two
@@ -598,10 +600,10 @@ example `TRADEBOT_BINANCE_SECRET`. The optional data providers read
 src/tradebot/
   core/        ops (NumPy/torch time-series primitives), OHLC container, registry + plugin loader, models
   indicators/  BaseIndicator + built-ins (SMA, EMA, RSI, MACD, Bollinger, ATR, Stochastic, Donchian, Ichimoku,
-               Elliott waves)
+               Elliott waves, Bitcoin halving cycle)
   algorithms/  BaseAlgorithm + built-ins (rsi_threshold, macd_cross, ichimoku_cloud, sma_cross,
-               bollinger_reversion, range, vote ensemble, elliott_wave)
-  analysis/    loop-based pattern detection (Elliott waves)
+               bollinger_reversion, range, vote ensemble, elliott_wave, halving_cycle)
+  analysis/    loop-based pattern detection (Elliott waves), Bitcoin halving schedule and forecast
   data/        providers (ccxt exchanges, yfinance, Alpha Vantage, FMP) + MarketDataEngine (fallback/stitching)
   brokers/     BaseBroker; ccxt live brokers (Binance, KuCoin, Pionex); semi-automated Scalable / Trade Republic
   backtest/    vectorized engine + metrics (Sharpe, Sortino, max drawdown, win rate, profit factor, CAGR)
@@ -662,6 +664,27 @@ Each match gets a Fibonacci conformity score from 0 to 1. Charts draw the zigzag
 - **Wave-5 setup** (`trade_wave5`): the same logic after a valid wave 1–4.
 - **Optimization:** all parameters can be tuned with `tradebot optimize … elliott_wave --method both`.
 - **Speed:** the strategy needs a loop over the bars, so the optimizer evaluates it on the CPU (about 3.5 ms per candidate for 1,500 candles).
+
+## Bitcoin halving cycle
+
+Every 210,000 blocks the Bitcoin block reward halves. At the target of 600 s per block that is 1458.33 days,
+the "4-year rule" (`nSubsidyHalvingInterval` and `nPowTargetSpacing` in Bitcoin's `chainparams.cpp`). Blocks
+come faster while the hashrate grows, so every halving so far came early, by 1.3 % to 9.6 %.
+`tradebot halving` shows the past halvings and how each estimator would have predicted them from the earlier
+ones. The best (the average time per block of all completed epochs) forecasts the next halving; `--live` adds a
+forecast from the current chain tip's pace.
+
+**Indicator `halving`** is a calendar clock, so it works on any timestamped candles (also as a crypto-market
+cycle clock on other coins):
+- `days`: days since the latest halving;
+- `days_to_next`: days until the next halving *as predicted at that bar from the earlier halvings only*, so a
+  backtest never sees the future (negative while a halving is later than predicted);
+- `phase` (not drawn): `days` as a fraction of the predicted cycle, 0 at a halving and about 1 at the next.
+
+**Strategy `halving_cycle`** is long from `buy_day` to `sell_day` days after a halving. With `sell_day` below
+`buy_day` the trade spans the halving. The defaults (buy at day 850, sell at day 530) come from the past
+cycles: tops 371–548 days after a halving, bottoms 777–924. With only four cycles so far, optimized days fit
+the past easily: use `--walk-forward` and compare with buy & hold.
 
 ## Extending
 
