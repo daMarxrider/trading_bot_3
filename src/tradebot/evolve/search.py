@@ -71,6 +71,7 @@ REJECTED = -1e9
 LIMITS = (6, 40)  #: default max depth and max size
 SCRATCH_LIMITS = (12, 100)  #: from scratch: an RSI alone is depth 8 and ~25 nodes
 SCRATCH_GUARDS = {"permutations": 5, "folds": 3}  #: from scratch: shuffled-price runs and walk-forward folds
+SCRATCH_ISLANDS = 4  #: from scratch: separate populations (see :class:`Evolver`)
 SIGNIFICANT = 0.95  #: the deflated Sharpe ratio a result should reach
 #: ``progress(generation, best_fitness, best_program)``
 Progress = Callable[[int, float, Program], None]
@@ -335,12 +336,19 @@ class Evolver:
         deflate: bool | None = None,
         library_every: int = 5,
         tune: int | None = None,
+        islands: int | None = None,
+        migrate_every: int = 10,
+        migrants: int = 2,
     ):
         """``max_depth``/``max_size`` default to :data:`LIMITS`, from scratch to :data:`SCRATCH_LIMITS`.
         ``library`` (evolved building blocks every ``library_every`` generations), ``dedupe`` (programs
         trading alike count once) and ``deflate`` (the deflated Sharpe ratio of the result) default to
         ``from_scratch``. ``tune`` (default 0, from scratch 3): the best this many programs of every generation
-        get their constants hill-climbed (a memetic step: GP finds the shape, local search the numbers)."""
+        get their constants hill-climbed (a memetic step: GP finds the shape, local search the numbers).
+        ``islands`` (default 1, from scratch :data:`SCRATCH_ISLANDS`): the population is split into that many
+        islands that evolve apart; every ``migrate_every`` generations each sends its best ``migrants`` to the
+        next one (a ring). Separate islands keep several shapes alive long enough for their constants to be
+        tuned (the best ``tune`` programs are per island)."""
         if from_scratch and indicators is not None:
             raise ValueError("from scratch uses no ready-made indicators; leave out the indicator choice")
         limits = SCRATCH_LIMITS if from_scratch else LIMITS
@@ -361,7 +369,7 @@ class Evolver:
         self.objective, self.aggregate, self.fee = objective, aggregate, fee
         self.min_trades, self.parsimony = min_trades, parsimony
         self.tournament, self.p_crossover, self.p_mutation = max(1, tournament), crossover, mutation
-        self.n_elite = max(1, int(round(population * elite)))
+        self.elite = elite
         self.hall_size = max(1, hall_of_fame)
         self.dca_amount = dca_amount
         self.seed = int(np.random.SeedSequence().generate_state(1)[0]) if seed is None else seed
@@ -375,13 +383,16 @@ class Evolver:
         self.library_every = max(1, library_every)
         self.dedupe, self.deflate = dedupe, deflate
         self.tune = (3 if from_scratch else 0) if tune is None else max(0, tune)
+        islands = (SCRATCH_ISLANDS if from_scratch else 1) if islands is None else islands
+        self.islands = max(1, min(islands, population // 4))
+        self.migrate_every, self.migrants = max(1, migrate_every), max(0, migrants)
         self.settings = dict(population=population, generations=generations, max_depth=max_depth, max_size=max_size,
                              objective=objective, aggregate=aggregate, fee=fee, validation=validation, test=test,
                              segments=segments, min_trades=min_trades, parsimony=parsimony, tournament=tournament,
                              crossover=crossover, mutation=mutation, elite=elite, hall_of_fame=hall_of_fame,
                              dca_amount=dca_amount, primitives=self.base_ps, from_scratch=from_scratch,
                              library=library, dedupe=dedupe, deflate=deflate, library_every=library_every,
-                             tune=self.tune)
+                             tune=self.tune, islands=self.islands, migrate_every=migrate_every, migrants=migrants)
 
         self.multi = not isinstance(df, pd.DataFrame)
         frames, self.skipped = select_frames(df if self.multi else {"": df}, align, min_history)
@@ -516,15 +527,16 @@ class Evolver:
                 return p
         return random_program(self.ps, 2, self.rng)
 
-    def initial_population(self) -> list[Program]:
+    def initial_population(self, size: int | None = None) -> list[Program]:
         """Ramped half-and-half: depths 2..max_depth (at most 6, deeper starts are bloat), half "full" and half
-        "grow" trees, no duplicates."""
+        "grow" trees, no duplicates; ``size`` defaults to the population."""
+        size = size or self.population
         out: dict[str, Program] = {}
         depths = range(2, min(self.max_depth, 6) + 1)
-        for i in range(self.population * 20):
+        for i in range(size * 20):
             p = self._new(depths[i % len(depths)], full=bool((i // len(depths)) % 2))
             out.setdefault(p.key, p)
-            if len(out) == self.population:
+            if len(out) == size:
                 break
         return list(out.values())
 
@@ -656,42 +668,44 @@ class Evolver:
     # -- the run --------------------------------------------------------------------------------------
     def run(self, progress: Progress | None = None) -> EvolutionResult:
         started = time.monotonic()
-        pop = self.initial_population()
-        fit = np.array([self.fitness(p) for p in pop])
+        size = max(4, self.population // self.islands)
+        islands = []
+        for _ in range(self.islands):
+            pop = self.initial_population(size)
+            islands.append((pop, np.array([self.fitness(p) for p in pop])))
         hall: dict = {}
         history = []
         for gen in range(self.generations):
             if self.library is not None and gen and gen % self.library_every == 0:
-                pop, fit = self._grow_library(pop, fit)
-            fit = self._distinct(pop, fit)
-            order = np.argsort(-fit, kind="stable")
-            pop, fit = [pop[i] for i in order], fit[order]
-            if self.tune:
-                for i in range(min(self.tune, len(pop))):
-                    if fit[i] > REJECTED / 2:
-                        pop[i], fit[i] = self.hill_climb(pop[i], float(fit[i]))
-                order = np.argsort(-fit, kind="stable")
-                pop, fit = [pop[i] for i in order], fit[order]
-            for p, f in zip(pop[: self.hall_size], fit[: self.hall_size]):
-                if f <= REJECTED / 2:
-                    continue
-                # with dedupe, one entry per behaviour: the fittest (smallest) program trading that way
-                k = self._signature.get(p.key, p.key) if self.dedupe else p.key
-                if k not in hall or (self.dedupe and f > hall[k].fitness):
-                    hall[k] = Candidate(p, float(f), gen)
+                islands = self._grow_library(islands)
+            if self.islands > 1 and gen and gen % self.migrate_every == 0:
+                islands = self._migrate(islands)
+            islands = [self._rank(pop, fit) for pop, fit in islands]
+            for pop, fit in islands:
+                for p, f in zip(pop[: self.hall_size], fit[: self.hall_size]):
+                    if f <= REJECTED / 2:
+                        continue
+                    # with dedupe, one entry per behaviour: the fittest (smallest) program trading that way
+                    k = self._signature.get(p.key, p.key) if self.dedupe else p.key
+                    if k not in hall or (self.dedupe and f > hall[k].fitness):
+                        hall[k] = Candidate(p, float(f), gen)
             hall = dict(sorted(hall.items(), key=lambda kv: -kv[1].fitness)[: self.hall_size])
-            history.append({"generation": gen, "best": float(fit[0]), "validation": self.validation(pop[0]),
-                            "size": float(np.mean([p.size for p in pop])), "distinct": len({p.key for p in pop}),
+            top_pop, top_fit = max(islands, key=lambda isl: isl[1][0])
+            everyone = [p for pop, _ in islands for p in pop]
+            history.append({"generation": gen, "best": float(top_fit[0]), "validation": self.validation(top_pop[0]),
+                            "size": float(np.mean([p.size for p in everyone])),
+                            "distinct": len({p.key for p in everyone}),
                             **({"modules": len(self.library.modules)} if self.library is not None else {})})
             if progress:
-                progress(gen, float(fit[0]), pop[0])
+                progress(gen, float(top_fit[0]), top_pop[0])
             if gen == self.generations - 1:
                 break
-            elite = pop[: self.n_elite]
-            children = self.breed(pop, fit, self.population - len(elite), {p.key for p in elite})
-            pop = elite + children
-            fit = np.concatenate([fit[: len(elite)], [self.fitness(c) for c in children]])
-        best = self._select(list(hall.values()) or [Candidate(pop[0], float(fit[0]), self.generations - 1)])
+            islands = [self._next(pop, fit) for pop, fit in islands]
+        if hall:
+            best = self._select(list(hall.values()))
+        else:
+            top_pop, top_fit = max(islands, key=lambda isl: isl[1][0])
+            best = self._select([Candidate(top_pop[0], float(top_fit[0]), self.generations - 1)])
         return EvolutionResult(best.program, best.fitness, [self._report(d, best.program) for d in self.data], history,
                                sorted(hall.values(), key=lambda c: -c.fitness), self.objective, self.aggregate,
                                self.evaluations, time.monotonic() - started, self.seed, best.generation,
@@ -699,15 +713,51 @@ class Evolver:
                                modules=self.library.modules if self.library is not None else [],
                                deflated=self.deflated(best.program))
 
-    def _grow_library(self, pop: list[Program], fit: np.ndarray) -> tuple[list[Program], np.ndarray]:
-        """Promote the subtrees shared by the best fifth of the population to modules and rewrite everyone."""
-        good = [p for p, f in zip(pop, fit) if f > REJECTED / 2][: max(10, len(pop) // 5)]
+    def _rank(self, pop: list[Program], fit: np.ndarray) -> tuple[list[Program], np.ndarray]:
+        """One island sorted best first, after deduplication and the memetic step."""
+        fit = self._distinct(pop, fit)
+        order = np.argsort(-fit, kind="stable")
+        pop, fit = [pop[i] for i in order], fit[order]
+        if self.tune:
+            for i in range(min(self.tune, len(pop))):
+                if fit[i] > REJECTED / 2:
+                    pop[i], fit[i] = self.hill_climb(pop[i], float(fit[i]))
+            order = np.argsort(-fit, kind="stable")
+            pop, fit = [pop[i] for i in order], fit[order]
+        return pop, fit
+
+    def _next(self, pop: list[Program], fit: np.ndarray) -> tuple[list[Program], np.ndarray]:
+        """The next generation of one (ranked) island: its elite plus bred children."""
+        n_elite = max(1, int(round(len(pop) * self.elite)))
+        elite = pop[:n_elite]
+        children = self.breed(pop, fit, len(pop) - n_elite, {p.key for p in elite})
+        return elite + children, np.concatenate([fit[:n_elite], [self.fitness(c) for c in children]])
+
+    def _migrate(self, islands: list) -> list:
+        """Ring migration: each island's best few replace the worst of the next island."""
+        out = []
+        for i, (pop, fit) in enumerate(islands):
+            src_pop, src_fit = islands[i - 1]
+            k = min(self.migrants, len(pop) // 2)
+            order = np.argsort(-fit, kind="stable")
+            pop, fit = [pop[j] for j in order], fit[order]
+            best = np.argsort(-src_fit, kind="stable")[:k]
+            out.append((pop[: len(pop) - k] + [src_pop[j] for j in best],
+                        np.concatenate([fit[: len(pop) - k], src_fit[best]])))
+        return out
+
+    def _grow_library(self, islands: list) -> list:
+        """Promote the subtrees shared by the best fifth of every island to modules and rewrite everyone."""
+        good = [p for pop, fit in islands for p, f in list(zip(pop, fit))[: max(10, len(pop) // 5)] if f > REJECTED / 2]
         self.ps, new = self.library.grow(good, self.ps)
         if not new:
-            return pop, fit
+            return islands
         log.debug("evolve: new modules %s", ", ".join(m.name for m in new))
-        pop = [self.library.rewrite(p) for p in pop]
-        return pop, np.array([self.fitness(p) for p in pop])
+        out = []
+        for pop, _ in islands:
+            pop = [self.library.rewrite(p) for p in pop]
+            out.append((pop, np.array([self.fitness(p) for p in pop])))
+        return out
 
     def _select(self, hall: list[Candidate]) -> Candidate:
         """The hall-of-fame program that does best on validation (the training fitness breaks ties)."""

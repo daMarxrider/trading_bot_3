@@ -74,11 +74,11 @@ def test_from_scratch_box(view):
     assert (view.max_depth.value(), view.max_size.value()) == (12, 100)
     assert view.permutations.value() == 5 and view.folds.value() == 3  # the safeguards on
     kw = view.settings_kwargs()
-    assert kw["from_scratch"] and kw["indicators"] is None
+    assert kw["from_scratch"] and kw["indicators"] is None and kw["islands"] == 4
     view.max_depth.setValue(9)  # a value the user changed stays when switching back
     view.from_scratch.setChecked(False)
     assert view.indicators_card.isEnabled() and (view.max_depth.value(), view.max_size.value()) == (9, 40)
-    assert view.permutations.value() == 0 and view.folds.value() == 0
+    assert view.permutations.value() == 0 and view.folds.value() == 0 and view.islands.value() == 1
     assert not view.settings_kwargs()["from_scratch"]
 
 

@@ -616,6 +616,9 @@ def evolve(
         "--from-scratch", help="No ready-made indicators: build rules from candles and low-level maths only, so the "
         "evolver can invent RSI, Bollinger & co. itself. Turns on the module library, deduplication, the deflated "
         "Sharpe ratio, shuffled-price runs and walk-forward folds")] = False,
+    islands: Annotated[Optional[int], typer.Option(
+        help="Split the population into this many islands that evolve apart and swap their best now and then "
+        "(default 1, with --from-scratch 4)")] = None,
     objective: Annotated[str, typer.Option(help="sharpe | return | calmar", autocompletion=complete.choices(
         ("sharpe", ""), ("return", ""), ("calmar", "")))] = "sharpe",
     aggregate: Annotated[str, typer.Option(
@@ -685,7 +688,7 @@ def evolve(
     kwargs = dict(population=population, generations=generations, max_depth=max_depth, max_size=max_size,
                   objective=objective, aggregate=aggregate, align=align, validation=validation, test=test,
                   segments=segments, min_trades=min_trades, parsimony=parsimony, state=state, indicators=names,
-                  fee=fee, dca_amount=dca_amount, seed=seed, from_scratch=from_scratch)
+                  fee=fee, dca_amount=dca_amount, seed=seed, from_scratch=from_scratch, islands=islands)
     with Progress(console=console) as progress:
         task = progress.add_task("evolving", total=generations)
         label = {"name": "evolving"}

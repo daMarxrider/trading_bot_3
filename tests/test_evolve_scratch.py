@@ -204,6 +204,21 @@ def test_evolver_from_scratch_settings():
         Evolver(make_ohlc(800), from_scratch=True, indicators=["rsi"])
 
 
+def test_islands_evolve_apart_and_swap_their_best():
+    ev = Evolver(make_ohlc(800, seed=3), **{**SMALL, "population": 40, "islands": 4, "migrants": 2})
+    assert ev.islands == 4 and Evolver(make_ohlc(800, seed=3), population=40, generations=1).islands == 1
+    assert Evolver(make_ohlc(800, seed=3), **{**SMALL, "population": 8, "islands": 4}).islands == 2  # >= 4 each
+    islands = [(pop := ev.initial_population(10), np.array([ev.fitness(p) for p in pop])) for _ in range(4)]
+    moved = ev._migrate(islands)
+    for i, (pop, fit) in enumerate(moved):
+        src_pop, src_fit = islands[i - 1]
+        best = [src_pop[j].key for j in np.argsort(-src_fit, kind="stable")[:2]]
+        assert len(pop) == 10 and [p.key for p in pop[-2:]] == best  # the neighbour's best replaced the worst
+        np.testing.assert_array_equal(fit, [ev.fitness(p) for p in pop])
+    res = ev.run()
+    assert len(res.history) == 3 and res.history[-1]["distinct"] > 10 and ev.settings["islands"] == 4
+
+
 def test_duplicates_count_once():
     ev = Evolver(make_ohlc(800, seed=3), **SMALL)
     a = Program(node("gt:price", CLOSE, node("sma:price", CLOSE, const(WINDOW, 20))), node("never"))
@@ -249,7 +264,7 @@ def test_cli_from_scratch(monkeypatch):
 
     monkeypatch.setattr(cli, "load_data", lambda *a, **k: make_ohlc(900, seed=7))
     args = ["evolve", "X", "--from-scratch", "--population", "16", "--generations", "2", "--min-trades", "0",
-            "--seed", "1", "--permutations", "1", "--folds", "2"]
+            "--seed", "1", "--permutations", "1", "--folds", "2", "--islands", "2"]
     res = CliRunner().invoke(cli.app, args, env={"COLUMNS": "220"})
     assert res.exit_code == 0, res.output
     out = plain(res)

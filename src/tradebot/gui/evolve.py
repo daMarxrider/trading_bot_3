@@ -38,7 +38,7 @@ from tradebot.algorithms import ALGORITHMS
 from tradebot.backtest.baselines import BUY_HOLD, MONTHLY, buy_and_hold, monthly_investing
 from tradebot.backtest.metrics import fmt
 from tradebot.config import Settings, watchlists
-from tradebot.evolve.search import LIMITS, SCRATCH_GUARDS, SCRATCH_LIMITS
+from tradebot.evolve.search import LIMITS, SCRATCH_GUARDS, SCRATCH_ISLANDS, SCRATCH_LIMITS
 from tradebot.core.timeframes import TIMEFRAMES
 from tradebot.glossary import AGGREGATES, OBJECTIVES, explain
 from tradebot.gui.chart import PlotAutoFit
@@ -136,6 +136,7 @@ class EvolveView(QWidget):
         self.generations = self._spin(1, 1000, 40)
         self.max_depth = self._spin(2, 20, LIMITS[0])
         self.max_size = self._spin(4, 300, LIMITS[1])
+        self.islands = self._spin(1, 64, 1)
         self.from_scratch = QCheckBox("Candles and maths only")
         self.from_scratch.toggled.connect(self._scratch_toggled)
         self.objective = QComboBox()
@@ -184,6 +185,7 @@ class EvolveView(QWidget):
                            ("Generations", self.generations, "evo_generations"),
                            ("From scratch", self.from_scratch, "from_scratch"),
                            ("Max depth", self.max_depth, "max_depth"), ("Max size", self.max_size, "max_size"),
+                           ("Islands", self.islands, "islands"),
                            ("Objective", self.objective, "objective"), ("Several symbols", self.aggregate, "aggregate"),
                            ("Align dates", self.align, "align"), ("Exit rules may use", self.state, "trade_state"),
                            ("Seed", self.seed, "seed"))),
@@ -326,7 +328,8 @@ class EvolveView(QWidget):
         self.indicators_card.setEnabled(not on)
         old, new = (LIMITS, SCRATCH_LIMITS) if on else (SCRATCH_LIMITS, LIMITS)
         guards = {self.permutations: SCRATCH_GUARDS["permutations"], self.folds: SCRATCH_GUARDS["folds"]}
-        for box, a, b in ((self.max_depth, old[0], new[0]), (self.max_size, old[1], new[1]),
+        islands = (1, SCRATCH_ISLANDS) if on else (SCRATCH_ISLANDS, 1)
+        for box, a, b in ((self.max_depth, old[0], new[0]), (self.max_size, old[1], new[1]), (self.islands, *islands),
                           *((box, 0, v) if on else (box, v, 0) for box, v in guards.items())):
             if box.value() == a:  # only values still at the other mode's default
                 box.setValue(b)
@@ -372,7 +375,7 @@ class EvolveView(QWidget):
         picked = self.indicators.selected()
         scratch = self.from_scratch.isChecked()
         return dict(from_scratch=scratch, population=self.population.value(), generations=self.generations.value(),
-                    max_depth=self.max_depth.value(), max_size=self.max_size.value(),
+                    max_depth=self.max_depth.value(), max_size=self.max_size.value(), islands=self.islands.value(),
                     objective=self.objective.currentText(), aggregate=self.aggregate.currentText(),
                     align=self.align.isChecked(), validation=self.validation.value() / 100, test=self.test.value() / 100,
                     segments=self.segments.value(), min_trades=self.min_trades.value(),

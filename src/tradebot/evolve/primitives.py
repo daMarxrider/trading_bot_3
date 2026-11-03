@@ -54,6 +54,8 @@ HOLD = IntParam(10, 1, 250, "candles in the trade")
 FACTOR = Param(1.0, -5.0, 5.0, "constant")  #: a free constant of the from-scratch set (multipliers, offsets)
 #: The level a unit can be compared with (units without one are only compared with each other).
 LEVELS = {OSC: Param(50.0, 0.0, 100.0, "level"), RATIO: Param(0.0, -0.2, 0.2, "level")}
+#: from scratch, ratios are also normalised oscillators like ``diff / abs(diff)`` (RSI = 50 + 50 * that), not just returns
+SCRATCH_LEVELS = {**LEVELS, RATIO: Param(0.0, -1.0, 1.0, "level")}
 
 
 @dataclass(frozen=True, eq=False)
@@ -413,7 +415,7 @@ class PrimitiveSet:
         enough to build RSI, Stochastic, Bollinger, ATR and MACD (#100)."""
         prims = _scratch_core()
         for unit in (PRICE, DIST, RATIO, OSC):
-            prims += _generic(unit, LEVELS.get(unit), scratch=True)
+            prims += _generic(unit, SCRATCH_LEVELS.get(unit), scratch=True)
         comparisons = sum(p.family in COMPARISONS | LEVEL_COMPARISONS for p in prims)
         prims = [replace(p, weight=6.0 / comparisons) if p.family in COMPARISONS | LEVEL_COMPARISONS else p
                  for p in prims]

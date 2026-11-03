@@ -445,8 +445,14 @@ trades speed for expressiveness and safeguards.
   so `m1(n)` above would be RSI with its window `n`. The rules print with a
   `where` section defining them, and "Save as plugin" writes them as functions.
 - Limits are raised to depth 12 and 100 building blocks. Windows and lags are
-  searched on a log scale, and the best 3 programs of every generation get their
-  numbers hill-climbed.
+  searched on a log scale, and comparison levels for ratios span −1 to 1, since
+  ratios here include normalised oscillators like
+  `wilder(diff(close, 1), 14) / wilder(abs(diff(close, 1)), 14)` (that is
+  RSI(14) / 50 − 1, so `< −0.4` means RSI below 30).
+- **Islands** (`--islands`, default 4): the population is split into groups that
+  evolve apart and pass their 2 best on to the next group every 10 generations,
+  so several ideas survive long enough to be refined. The best 3 programs of
+  every island and generation get their numbers hill-climbed.
 - Safeguards, on by default: 5 shuffled-price runs; 3 walk-forward folds
   (`--folds`), where the search runs again on rolling windows and each result is
   scored on the stretch after its window; the **deflated Sharpe ratio**, which

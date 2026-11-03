@@ -205,6 +205,9 @@ TERMS = {
                     "sums, deviations, smoothing, + - × ÷ with units checked), so the search can invent RSI or "
                     "something new. Repeated parts become building blocks (m1, m2, …). Shuffled-price runs and "
                     "walk-forward folds are on, as it fits noise more easily.",
+    "islands": "Split the population into this many groups that evolve apart and now and then pass their best "
+               "on to the next group. Several ideas survive long enough to be refined, instead of the first good "
+               "one taking over everywhere. 4 from scratch, else 1.",
     "evo_folds": "Walk-forward: run the whole search again on this many rolling windows of the data, and score "
                  "each result on the stretch right after its window. Rules that only fit one period lose there.",
     "deflated_sharpe": "The Sharpe ratio corrected for how many different strategies were tried: the chance that it "
