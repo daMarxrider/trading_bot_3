@@ -419,6 +419,54 @@ than in training, makes fewer than 3 test trades, depends on one or two symbols,
 or fails the permutation test. Every run prints its `--seed`, so it can be
 repeated.
 
+**From scratch (`--from-scratch`, the "From scratch" box in the GUI).** No
+ready-made indicators at all: rules are built from the candles and low-level
+maths, so the evolver can invent RSI, Stochastic, Bollinger, ATR or MACD itself,
+or something nobody has named yet. Runtime doesn't matter in this mode; it
+trades speed for expressiveness and safeguards.
+
+- Building blocks: `diff(x, n)`, `pos(x)` / `neg(x)` (up and down moves),
+  `rolling_sum`, `rolling_std`, `wilder` (Wilder's smoothing), `sma`, `ema`,
+  `highest`, `lowest`, `shift`, `abs`, free constants, `100 * ratio` and
+  `squash(ratio)` (onto 0–100), and `+ − × ÷`.
+- The arithmetic is checked by dimensional analysis, like units in physics:
+  `price − price` is a distance, `price ± distance` a price, `price / price` and
+  `distance / price` are ratios, `price × ratio` a price. `price + price` and
+  `price × price` can't be built, so a rule still means the same on every
+  symbol. A division of a non-zero value by zero rejects the program; 0/0
+  (a flat stretch) is a gap, like a warm-up.
+- RSI(14), for example, is
+  `100 * wilder(pos(diff(close, 1)), 14) / (wilder(pos(diff(close, 1)), 14) + wilder(neg(diff(close, 1)), 14))`.
+  The tests build all five indicators like this and check that they equal
+  the built-in ones. A slow test hides an `RSI(14) < 30` rule in synthetic
+  prices (`pytest --slow`): evolve gets close (rules that catch most of its
+  trades) but doesn't find RSI itself yet.
+- **Evolved building blocks**: every 5 generations, parts that keep showing up in
+  the best programs become named modules (`m1`, `m2`, …), used as a single
+  building block from then on. Equal numbers inside one become one parameter,
+  so `m1(n)` above would be RSI with its window `n`. The rules print with a
+  `where` section defining them, and "Save as plugin" writes them as functions.
+- Limits are raised to depth 12 and 100 building blocks. Windows and lags are
+  searched on a log scale, and comparison levels for ratios span −1 to 1, since
+  ratios here include normalised oscillators like
+  `wilder(diff(close, 1), 14) / wilder(abs(diff(close, 1)), 14)` (that is
+  RSI(14) / 50 − 1, so `< −0.4` means RSI below 30).
+- **Islands** (`--islands`, default 4): the population is split into groups that
+  evolve apart and pass their 2 best on to the next group every 10 generations,
+  so several ideas survive long enough to be refined. The best 3 programs of
+  every island and generation get their numbers hill-climbed.
+- Safeguards, on by default: 5 shuffled-price runs; 3 walk-forward folds
+  (`--folds`), where the search runs again on rolling windows and each result is
+  scored on the stretch after its window; the **deflated Sharpe ratio**, which
+  corrects the training Sharpe ratio for the number of different strategies
+  tried (warning below 0.95); and deduplication, so strategies that trade
+  exactly alike count once.
+
+```sh
+tradebot evolve BTC/USDT --from-scratch --population 1000 --generations 100
+tradebot evolve AAPL,MSFT --from-scratch --permutations 19 --folds 5
+```
+
 **Using the result.** `--save NAME` writes the program as a plugin file
 (`~/.config/tradebot/plugins/NAME.py`, or `--plugin-dir`). It's ordinary
 strategy code with the rules in its docstring, so it works in `backtest`, the
@@ -783,6 +831,7 @@ For venues without an API, subclass `ManualExecutionBroker` or
 
 ```sh
 uv run pytest
+uv run pytest --slow                   # also the minutes-long tests (CI runs them on PRs labelled `slow tests`)
 uv run python scripts/bench_chart.py   # chart redraw and pan times for 500 / 5,000 / 50,000 candles
 ```
 

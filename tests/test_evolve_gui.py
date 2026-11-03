@@ -67,6 +67,35 @@ def test_settings_from_the_form(view):
     assert sorted(kw["indicators"]) == ["ema", "rsi"] and kw["seed"] is None  # random
 
 
+def test_from_scratch_box(view):
+    assert not view.from_scratch.isChecked() and view.indicators_card.isEnabled()
+    view.from_scratch.setChecked(True)
+    assert not view.indicators_card.isEnabled()
+    assert (view.max_depth.value(), view.max_size.value()) == (12, 100)
+    assert view.permutations.value() == 5 and view.folds.value() == 3  # the safeguards on
+    kw = view.settings_kwargs()
+    assert kw["from_scratch"] and kw["indicators"] is None and kw["islands"] == 4
+    view.max_depth.setValue(9)  # a value the user changed stays when switching back
+    view.from_scratch.setChecked(False)
+    assert view.indicators_card.isEnabled() and (view.max_depth.value(), view.max_size.value()) == (9, 40)
+    assert view.permutations.value() == 0 and view.folds.value() == 0 and view.islands.value() == 1
+    assert not view.settings_kwargs()["from_scratch"]
+
+
+def test_a_run_from_scratch(view):
+    view.from_scratch.setChecked(True)
+    view.permutations.setValue(1)
+    view.folds.setValue(2)
+    steps = []
+    view.generation.connect(lambda step, best: steps.append(step))
+    view.run()
+    res = view.result
+    assert res is not None and res.from_scratch and view.progress.maximum() == 12 and max(steps) == 11
+    assert "evolved building blocks" in view.info.text()
+    text = view.warnings.text()
+    assert "Deflated Sharpe ratio" in text and "Walk-forward" in text
+
+
 def test_one_symbol(view):
     statuses = []
     view.status.connect(statuses.append)

@@ -38,6 +38,7 @@ from tradebot.algorithms import ALGORITHMS
 from tradebot.backtest.baselines import BUY_HOLD, MONTHLY, buy_and_hold, monthly_investing
 from tradebot.backtest.metrics import fmt
 from tradebot.config import Settings, watchlists
+from tradebot.evolve.search import LIMITS, SCRATCH_GUARDS, SCRATCH_ISLANDS, SCRATCH_LIMITS
 from tradebot.core.timeframes import TIMEFRAMES
 from tradebot.glossary import AGGREGATES, OBJECTIVES, explain
 from tradebot.gui.chart import PlotAutoFit
@@ -133,8 +134,11 @@ class EvolveView(QWidget):
 
         self.population = self._spin(8, 20000, 300)
         self.generations = self._spin(1, 1000, 40)
-        self.max_depth = self._spin(2, 12, 6)
-        self.max_size = self._spin(4, 200, 40)
+        self.max_depth = self._spin(2, 20, LIMITS[0])
+        self.max_size = self._spin(4, 300, LIMITS[1])
+        self.islands = self._spin(1, 64, 1)
+        self.from_scratch = QCheckBox("Candles and maths only")
+        self.from_scratch.toggled.connect(self._scratch_toggled)
         self.objective = QComboBox()
         self.objective.addItems(["sharpe", "calmar", "return"])
         _explain_choices(self.objective, explain("objective"), OBJECTIVES)
@@ -153,6 +157,8 @@ class EvolveView(QWidget):
         self.parsimony.setSingleStep(0.001)
         self.permutations = self._spin(0, 100, 0, " runs")
         self.permutations.setSpecialValueText("off")
+        self.folds = self._spin(0, 20, 0, " folds")
+        self.folds.setSpecialValueText("off")
         self.seed = self._spin(0, 2**31 - 1, 0)
         self.seed.setSpecialValueText("random")
 
@@ -177,14 +183,17 @@ class EvolveView(QWidget):
                          ("Fee / side", self.fee, "fee"), ("Monthly amount", self.dca_amount, "dca_amount"))),
             (search_form, (("Population", self.population, "evo_population"),
                            ("Generations", self.generations, "evo_generations"),
+                           ("From scratch", self.from_scratch, "from_scratch"),
                            ("Max depth", self.max_depth, "max_depth"), ("Max size", self.max_size, "max_size"),
+                           ("Islands", self.islands, "islands"),
                            ("Objective", self.objective, "objective"), ("Several symbols", self.aggregate, "aggregate"),
                            ("Align dates", self.align, "align"), ("Exit rules may use", self.state, "trade_state"),
                            ("Seed", self.seed, "seed"))),
             (honest_form, (("Validation", self.validation, "validation"), ("Test", self.test, "test_part"),
                            ("Segments", self.segments, "segments"), ("Min trades", self.min_trades, "min_trades"),
                            ("Parsimony", self.parsimony, "parsimony"),
-                           ("Shuffled-price runs", self.permutations, "permutations"))),
+                           ("Shuffled-price runs", self.permutations, "permutations"),
+                           ("Walk-forward", self.folds, "evo_folds"))),
         ):
             for label, w, term in rows:
                 _explained_row(form, label, w, term)
@@ -199,7 +208,8 @@ class EvolveView(QWidget):
             left.addWidget(box)
         ind_title = QLabel("Indicators")
         ind_title.setToolTip(tooltip(explain("evo_indicators")))
-        left.addWidget(card(ind_title, self.indicators))
+        self.indicators_card = card(ind_title, self.indicators)
+        left.addWidget(self.indicators_card)
         buttons, more = QHBoxLayout(), QHBoxLayout()
         for b in (self.run_btn, self.stop_btn):
             buttons.addWidget(b)
@@ -313,6 +323,17 @@ class EvolveView(QWidget):
         if self.result is not None:
             self._draw()
 
+    def _scratch_toggled(self, on: bool):
+        """From scratch: no indicators to pick, bigger limits, and the safeguards on (each still adjustable)."""
+        self.indicators_card.setEnabled(not on)
+        old, new = (LIMITS, SCRATCH_LIMITS) if on else (SCRATCH_LIMITS, LIMITS)
+        guards = {self.permutations: SCRATCH_GUARDS["permutations"], self.folds: SCRATCH_GUARDS["folds"]}
+        islands = (1, SCRATCH_ISLANDS) if on else (SCRATCH_ISLANDS, 1)
+        for box, a, b in ((self.max_depth, old[0], new[0]), (self.max_size, old[1], new[1]), (self.islands, *islands),
+                          *((box, 0, v) if on else (box, v, 0) for box, v in guards.items())):
+            if box.value() == a:  # only values still at the other mode's default
+                box.setValue(b)
+
     def _fill_lists_menu(self):
         self.lists_menu.clear()
         lists = self.watchlists_fn()
@@ -352,13 +373,14 @@ class EvolveView(QWidget):
     def settings_kwargs(self) -> dict:
         """The Evolver settings from the form."""
         picked = self.indicators.selected()
-        return dict(population=self.population.value(), generations=self.generations.value(),
-                    max_depth=self.max_depth.value(), max_size=self.max_size.value(),
+        scratch = self.from_scratch.isChecked()
+        return dict(from_scratch=scratch, population=self.population.value(), generations=self.generations.value(),
+                    max_depth=self.max_depth.value(), max_size=self.max_size.value(), islands=self.islands.value(),
                     objective=self.objective.currentText(), aggregate=self.aggregate.currentText(),
                     align=self.align.isChecked(), validation=self.validation.value() / 100, test=self.test.value() / 100,
                     segments=self.segments.value(), min_trades=self.min_trades.value(),
                     parsimony=self.parsimony.value(), state=self.state.isChecked(),
-                    indicators=None if len(picked) == len(self.indicators.boxes) else picked,
+                    indicators=None if scratch or len(picked) == len(self.indicators.boxes) else picked,
                     fee=self.fee.value(), dca_amount=self.dca_amount.value() or None, seed=self.seed.value() or None)
 
     # -- running ----------------------------------------------------------------------------------
@@ -366,10 +388,10 @@ class EvolveView(QWidget):
         from tradebot.evolve import evolve
 
         kwargs = self.settings_kwargs()
-        permutations, gens = self.permutations.value(), kwargs["generations"]
+        permutations, folds, gens = self.permutations.value(), self.folds.value(), kwargs["generations"]
         self._stop = False
         self._phase = {"name": "evolving", "offset": 0, "runs": 0}
-        self.progress.setRange(0, gens * (1 + permutations))
+        self.progress.setRange(0, gens * (1 + permutations + folds))
         self.progress.setValue(0)
         self.progress.show()
         self.run_btn.setEnabled(False)
@@ -388,7 +410,7 @@ class EvolveView(QWidget):
         def work():
             frames = self._data()
             data = frames if len(frames) > 1 else next(iter(frames.values()))
-            res = evolve(data, permutations=permutations, progress=report, on_phase=phase, **kwargs)
+            res = evolve(data, permutations=permutations, folds=folds, progress=report, on_phase=phase, **kwargs)
             names = [r.symbol for r in res.symbols] if res.multi else [next(iter(frames))]
             bases = {name: {BUY_HOLD: buy_and_hold(frames[name], kwargs["fee"]),
                             MONTHLY: monthly_investing(frames[name], kwargs["fee"], amount=kwargs["dca_amount"])}
@@ -435,14 +457,24 @@ class EvolveView(QWidget):
             dates.append(f"validation from {res.validation_start:%Y-%m-%d}")
         if res.test_start is not None:
             dates.append(f"test from {res.test_start:%Y-%m-%d}")
+        modules = f" · {len(res.modules)} evolved building blocks" if res.from_scratch else ""
         self.info.setText(f"{' · '.join(dates)} · found in generation {res.generation + 1} of {len(res.history)} · "
-                          f"{res.evaluations} strategies tried · seed {res.seed}")
+                          f"{res.evaluations} strategies tried{modules} · seed {res.seed}")
         lines = []
         if (pt := res.permutation) is not None:
             color = t.up if pt.p <= 0.05 else t.down
             lines.append(f"<span style='color:{color}'>Shuffled prices: {pt.part} {res.objective} "
                          f"{', '.join(f'{s:.2f}' for s in pt.shuffled)} vs. {pt.score:.2f} for the real result · "
                          f"p = {pt.p:.2f}</span>")
+        if (d := res.deflated) is not None:
+            color = t.up if d.significant else t.down
+            lines.append(f"<span style='color:{color}'>Deflated Sharpe ratio {d.probability:.2f} "
+                         f"({d.trials} different strategies tried)</span>")
+        if (wf := res.walk_forward) is not None:
+            scores = ", ".join("–" if v is None else f"{v:.2f}" for v in wf.scores())
+            color = t.up if not wf.warnings(res.objective) else t.down
+            lines.append(f"<span style='color:{color}'>Walk-forward, {res.objective} after each window: {scores} · "
+                         f"beats buy &amp; hold in {wf.beating()} of {len(wf.folds)}</span>")
         lines += [f"<b style='color:{t.down}'>{w}</b>" for w in res.warnings()]
         self.warnings.setText("<br>".join(lines))
         self.warnings.setVisible(bool(lines))

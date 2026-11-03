@@ -201,6 +201,17 @@ TERMS = {
                    "profit or a trailing stop.",
     "evo_indicators": "The indicators the rules may use. Fewer makes the search faster and the rules easier to "
                       "read.",
+    "from_scratch": "No ready-made indicators: rules are built from candles and plain maths (up and down moves, "
+                    "sums, deviations, smoothing, + - × ÷ with units checked), so the search can invent RSI or "
+                    "something new. Repeated parts become building blocks (m1, m2, …). Shuffled-price runs and "
+                    "walk-forward folds are on, as it fits noise more easily.",
+    "islands": "Split the population into this many groups that evolve apart and now and then pass their best "
+               "on to the next group. Several ideas survive long enough to be refined, instead of the first good "
+               "one taking over everywhere. 4 from scratch, else 1.",
+    "evo_folds": "Walk-forward: run the whole search again on this many rolling windows of the data, and score "
+                 "each result on the stretch right after its window. Rules that only fit one period lose there.",
+    "deflated_sharpe": "The Sharpe ratio corrected for how many different strategies were tried: the chance that it "
+                       "beats the best one luck alone would produce. 0.95 or more is significant.",
     "permutations": "Also run the same search this many times on shuffled prices, where no pattern is left. If "
                     "it finds as much there, the result is luck.",
     "seed": "Starts the random search at a fixed point, so the same settings give the same result. Random "

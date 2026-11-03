@@ -23,7 +23,7 @@ from tradebot.core import ops
 from tradebot.core.registry import Param
 from tradebot.core.series import OHLC
 from tradebot.evolve import runtime as rt
-from tradebot.evolve.primitives import BOOL, COMMUTATIVE, COMPARISONS, Primitive, PrimitiveSet
+from tradebot.evolve.primitives import BOOL, COMMUTATIVE, COMPARISONS, RATIO, Primitive, PrimitiveSet
 
 
 @dataclass(frozen=True, eq=False)
@@ -75,7 +75,8 @@ class Node:
         for i, a in enumerate(self.args):
             s = str(a)
             # infix forms: parentheses where the child binds weaker, and for the right side of a minus
-            if self.prec < 9 and (a.prec < self.prec or (a.prec == self.prec and self.prim.family == "sub" and i == 1)):
+            if self.prec < 9 and (a.prec < self.prec or (a.prec == self.prec and self.prim.family in ("sub", "div")
+                                                          and i == 1)):
                 s = f"({s})"
             parts.append(s)
         return self.prim.text.format(*parts).replace("+ -", "- ")
@@ -144,12 +145,69 @@ class Program:
     def rules(self) -> dict[str, str]:
         return {"entry": str(self.entry), "exit": str(self.exit)}
 
+    @cached_property
+    def modules(self) -> list[Primitive]:
+        """The modules the rules use, also inside other modules; each before the modules using it."""
+        return used_modules([self.entry, self.exit])
+
     def __str__(self) -> str:
-        return f"entry = {self.entry}\nexit  = {self.exit}"
+        lines = [f"entry = {self.entry}", f"exit  = {self.exit}"]
+        if self.modules:
+            lines += ["where"] + [f"  {definition(m)}" for m in self.modules]
+        return "\n".join(lines)
+
+
+def used_modules(trees) -> list[Primitive]:
+    """The modules in ``trees`` and in their bodies, each listed after the ones it uses."""
+    out: dict[str, Primitive] = {}
+
+    def visit(node):
+        for _, n in node.nodes():
+            if n.prim is not None and n.prim.kind == "module" and n.prim.name not in out:
+                visit(n.prim.body)
+                out[n.prim.name] = n.prim
+
+    for tree in trees:
+        visit(tree)
+    return list(out.values())
+
+
+def module_params(module: Primitive) -> list[str]:
+    """Names of a module's parameters in its definition: ``n``, ``k``, then numbered (``n1``, ``n2``, ...)."""
+    letters = ["n" if spec.integer else "k" for spec in module.args]
+    return [f"{x}{letters[:i].count(x) + 1}" if letters.count(x) > 1 else x for i, x in enumerate(letters)]
+
+
+def definition(module: Primitive) -> str:
+    """``m1(n, k) = ...`` with the parameter names in place of the constants."""
+    names = module_params(module)
+    body = module.body
+    for name, paths, spec in zip(names, module.slots, module.args):
+        for path in paths:
+            body = body.replace(path, Node(None, value=name, spec=spec))
+    return f"{module.name}({', '.join(names)}) = {body}" if names else f"{module.name} = {body}"
+
+
+def expand(module: Primitive, values: tuple) -> Node:
+    """The tree a module stands for, with its parameters ``values`` filled in."""
+    body = module.body
+    for value, paths, spec in zip(values, module.slots, module.args):
+        for path in paths:
+            body = body.replace(path, const(spec, value))
+    return body
 
 
 # -- random trees -------------------------------------------------------------------------------------
-def random_const(spec: Param, rng: np.random.Generator) -> Node:
+def log_scale(spec: Param) -> bool:
+    """A whole-number range spanning a factor of 10 or more (windows, lags): searched on a log scale from scratch,
+    where 2 vs. 3 candles matters as much as 100 vs. 150."""
+    return spec.integer and spec.low >= 1 and spec.high >= 10 * spec.low
+
+
+def random_const(spec: Param, rng: np.random.Generator, log: bool = False) -> Node:
+    """A uniform value of ``spec``'s range (``log``: log-uniform for :func:`log_scale` ranges)."""
+    if log and log_scale(spec):
+        return const(spec, int(np.exp(rng.uniform(np.log(spec.low), np.log(spec.high + 1)))))
     if spec.integer:
         return const(spec, int(rng.integers(int(spec.low), int(spec.high) + 1)))
     return const(spec, rng.uniform(spec.low, spec.high))
@@ -172,7 +230,7 @@ def random_tree(ps: PrimitiveSet, unit: str, depth: int, rng: np.random.Generato
     weights = np.array([p.weight for p in options])
     prim = options[int(rng.choice(len(options), p=weights / weights.sum()))]
     args = tuple(random_tree(ps, a, depth - 1, rng, full=full, state=state) if isinstance(a, str)
-                 else random_const(a, rng) for a in prim.args)
+                 else random_const(a, rng, ps.scratch) for a in prim.args)
     return simplify(Node(prim, args), ps)
 
 
@@ -219,6 +277,9 @@ def simplify(node: Node, ps: PrimitiveSet) -> Node:
     def is_(x, name):
         return x.prim is not None and x.prim.name == name
 
+    if node.prim.kind == "op" and "const:ratio" in ps and all(
+            x.is_const or (x.prim.name == "const:ratio") for x in a) and node.prim.ret in (RATIO, BOOL):
+        return _fold(node, ps)
     if fam in ("and", "or"):
         absorbing, neutral = (never, always) if fam == "and" else (always, never)
         terms: dict[str, Node] = {}
@@ -255,9 +316,25 @@ def simplify(node: Node, ps: PrimitiveSet) -> Node:
             return x
         if is_(c, "never"):
             return y
-    if fam in COMMUTATIVE - {"and", "or"} and a[0].key > a[1].key:
+    if fam in COMMUTATIVE - {"and", "or"} and a[0].unit == a[1].unit and a[0].key > a[1].key:
         return Node(node.prim, (a[1], a[0]))
     return node
+
+
+def _fold(node: Node, ps: PrimitiveSet) -> Node:
+    """An operation on constants only (from scratch: ``highest(2, 20)``, ``3 > 1``) as the constant it is."""
+    series = [np.full(400, float(x.args[0].value)) if not x.is_const else x.value for x in node.args]
+    with np.errstate(all="ignore"):
+        try:
+            value = float(np.asarray(node.prim.fn(*series), dtype=float)[-1])
+        except Exception:  # e.g. a division by zero: keep the node, the evaluation rejects it
+            return node
+    if node.prim.ret == BOOL:
+        return Node(ps["always"] if value else ps["never"])
+    spec = ps["const:ratio"].args[0]
+    if not np.isfinite(value) or not spec.low <= value <= spec.high:
+        return node
+    return Node(ps["const:ratio"], (const(spec, value),))
 
 
 def _chain(node: Node, family: str) -> list[Node]:
@@ -321,6 +398,8 @@ class Evaluator:
             return p.fn(self.ohlc, *args)
         if p.kind == "state":
             return p.fn(trade, *args)
+        if p.kind == "module":  # evaluated as the tree it stands for, sharing its cache entries
+            return self.value(expand(p, tuple(args)))
         name, output, keys = p.indicator
         params = dict(zip(keys, args))
         k = (name, tuple(params.items()))

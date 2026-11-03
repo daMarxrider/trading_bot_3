@@ -47,6 +47,64 @@ def volatility(o, n: int):
     return ops.rolling_std(change(o.close, 1), n)
 
 
+# -- the low-level maths of the from-scratch set (#100) ------------------------------------------------
+class Undefined(ArithmeticError):
+    """A from-scratch formula divided a non-zero value by zero (or overflowed): the program is rejected."""
+
+
+def const(o, value):
+    """A constant as a series (so every operation accepts it)."""
+    return ops.full(tuple(o.close.shape), float(value), o.close)
+
+
+def diff(x, n: int):
+    """``x`` minus ``x`` ``n`` candles ago."""
+    return x - ops.shift(x, n)
+
+
+def pos(x):
+    """``max(x, 0)``; NaN stays NaN (so a smoothing seeds on the first real value)."""
+    return ops.where(x < 0, 0.0, x)
+
+
+def neg(x):
+    """``max(-x, 0)``; NaN stays NaN."""
+    return ops.where(x > 0, 0.0, -x)
+
+
+def rolling_sum(x, n: int):
+    """Sum over ``n`` candles (NaN while the window holds a NaN)."""
+    return ops.sma(x, n) * n
+
+
+def div(a, b):
+    """``a / b`` as a generated plugin computes it: NaN (no signal) where ``b`` is 0 instead of inf."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out = a / ops.where(b == 0, ops.NAN, b)
+    return ops.where(ops.isnan(b) | (b != 0), out, ops.NAN)
+
+
+def div_checked(a, b):
+    """:func:`div` while evolving: ``x / 0`` with ``x != 0`` raises :class:`Undefined`, so a formula that blows up
+    on real data is rejected; ``0 / 0`` (e.g. a stochastic of flat candles) is a gap, like a warm-up."""
+    a_ = np.broadcast_to(np.asarray(a, dtype=float), np.shape(b)) if np.ndim(b) else np.asarray(a, dtype=float)
+    if np.any((np.asarray(b) == 0) & (a_ != 0) & ~np.isnan(a_)):
+        raise Undefined("division by zero")
+    return finite(div(a, b))
+
+
+def finite(x):
+    """``x`` unless it holds an infinity (an overflow), which raises :class:`Undefined`."""
+    if np.isinf(np.asarray(x, dtype=float)).any():
+        raise Undefined("overflow")
+    return x
+
+
+def squash(x):
+    """A ratio onto 0-100: ``100 * x / (1 + |x|)``; for a ratio ``rs`` >= 0 this is ``100 - 100 / (1 + rs)``, RSI's form."""
+    return 100 * x / (1 + ops.abs_(x))
+
+
 class Trade:
     """The open trade an exit rule looks at: it started at the close of candle ``start``.
 

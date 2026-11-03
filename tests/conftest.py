@@ -7,6 +7,20 @@ import pandas as pd
 import pytest
 
 
+def pytest_addoption(parser):
+    parser.addoption("--slow", action="store_true", help="also run the tests marked slow (minutes long)")
+
+
+def pytest_collection_modifyitems(config, items):
+    """Tests marked ``slow`` only run with ``--slow``."""
+    if config.getoption("--slow"):
+        return
+    skip = pytest.mark.skip(reason="slow: run with --slow")
+    for item in items:
+        if "slow" in item.keywords:
+            item.add_marker(skip)
+
+
 @pytest.fixture(autouse=True)
 def _collect_garbage_between_gui_tests(request):
     """Free reference cycles between GUI tests, never in the middle of one.

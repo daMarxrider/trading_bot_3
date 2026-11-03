@@ -17,6 +17,13 @@ Constants (window lengths, offsets, levels, indicator parameters) are leaves wit
 The exit rule can also look at the open trade (``bars_in_trade``, stop loss, take profit, trailing
 stop); those need a loop over trades instead of one vectorized latch, see :func:`runtime.in_trade`.
 
+**From scratch** (#100, :meth:`PrimitiveSet.from_scratch`): no ready-made indicators, only candles and
+low-level maths (``diff``, ``pos``/``neg``, rolling sums, deviations, Wilder smoothing, free constants,
+``+ - * /``). The arithmetic is checked by dimensional analysis (:func:`arith_unit`), so a rule still means
+the same on every symbol, while RSI, Stochastic, Bollinger, ATR or MACD can be built (and found) from the
+parts. Subtrees that keep showing up in good programs become **modules** (``m1``, ``m2``, ...): named,
+evolved indicators whose constants are its parameters, used as one building block from then on.
+
 Indicators come from the registry (plugins included). An output is used only if it is **causal**: its
 values on a prefix of the data equal those on the full data, which drops hindsight outputs like the
 Elliott zigzag. Hidden outputs and label outputs are left out unless the indicator declares a unit
@@ -44,8 +51,11 @@ LAG = IntParam(1, 1, 20, "candles back")
 MULT = Param(2.0, -6.0, 6.0, "multiple of the ATR")
 FRACTION = Param(0.05, 0.005, 0.5, "fraction of the price (0.05 = 5 %)")
 HOLD = IntParam(10, 1, 250, "candles in the trade")
+FACTOR = Param(1.0, -5.0, 5.0, "constant")  #: a free constant of the from-scratch set (multipliers, offsets)
 #: The level a unit can be compared with (units without one are only compared with each other).
 LEVELS = {OSC: Param(50.0, 0.0, 100.0, "level"), RATIO: Param(0.0, -0.2, 0.2, "level")}
+#: from scratch, ratios are also normalised oscillators like ``diff / abs(diff)`` (RSI = 50 + 50 * that), not just returns
+SCRATCH_LEVELS = {**LEVELS, RATIO: Param(0.0, -1.0, 1.0, "level")}
 
 
 @dataclass(frozen=True, eq=False)
@@ -69,6 +79,9 @@ class Primitive:
     weight: float = 1.0
     prec: int = 9  #: binding strength of ``text`` (or 1 < and 2 < not 3 < comparison 4 < +/- 5 < call 9)
     indicator: tuple[str, str, tuple[str, ...]] | None = None  #: (name, output, parameter names)
+    #: a module (``kind`` "module"): the subtree it stands for, and per parameter the paths of its constants
+    body: object = None
+    slots: tuple = ()
 
     @property
     def family(self) -> str:
@@ -85,16 +98,18 @@ class Primitive:
 
 
 #: families whose two sub-rules can be swapped without changing the result (sorted when simplifying)
-COMMUTATIVE = {"and", "or", "max", "min", "mid", "add"}
+COMMUTATIVE = {"and", "or", "max", "min", "mid", "add", "mul"}
 #: families that compare two sub-rules (``x op x`` is never true)
 COMPARISONS = {"gt", "lt", "crosses_above", "crosses_below"}
 LEVEL_COMPARISONS = {"above", "below", "crosses_above_level", "crosses_below_level"}
 
 
-def _generic(unit: str, level: Param | None) -> list[Primitive]:
-    """Transforms and comparisons every numeric unit gets."""
+def _generic(unit: str, level: Param | None, scratch: bool = False) -> list[Primitive]:
+    """Transforms and comparisons every numeric unit gets (``scratch``: plus Wilder's smoothing)."""
     u = unit
-    out = [
+    out = [Primitive(f"wilder:{u}", u, (u, WINDOW), ops.wilder, "wilder({0}, {1})", "ops.wilder({0}, {1})",
+                     weight=0.5)] if scratch else []
+    out += [
         Primitive(f"sma:{u}", u, (u, WINDOW), ops.sma, "sma({0}, {1})", "ops.sma({0}, {1})", weight=0.5),
         Primitive(f"ema:{u}", u, (u, WINDOW), ops.ema, "ema({0}, {1})", "ops.ema({0}, {1})", weight=0.5),
         Primitive(f"highest:{u}", u, (u, WINDOW), ops.rolling_max, "highest({0}, {1})", "ops.rolling_max({0}, {1})",
@@ -164,6 +179,93 @@ def _core(units: set[str]) -> list[Primitive]:
         out.append(Primitive("offset:price", PRICE, (PRICE, DIST, MULT), lambda p, d, k: p + k * d,
                              "{0} + {2} * {1}", "({0} + {2} * {1})", weight=0.4, prec=5))
     return out
+
+
+# -- from scratch (#100) ------------------------------------------------------------------------------
+#: what a unit measures for the arithmetic: (power of the price, a level rather than a difference). A price is
+#: a point on the price axis, a distance the gap between two points, a ratio has no dimension.
+DIMENSION = {PRICE: (1, True), DIST: (1, False), RATIO: (0, False)}
+ARITH = {"add": "+", "sub": "-", "mul": "*", "div": "/"}
+
+
+def arith_unit(op: str, a: str, b: str) -> str | None:
+    """The unit of ``a op b`` (``op`` add, sub, mul or div), or None when it means nothing.
+
+    Dimensional analysis as in physics, with prices as points and distances as differences:
+    ``price - price`` and ``price ± dist`` are fine, ``price + price`` is not; ``price / price`` and
+    ``dist / price`` are ratios, ``price * ratio`` a price, ``price * price`` nothing.
+    """
+    if a not in DIMENSION or b not in DIMENSION or op not in ARITH:
+        return None
+    (pa, la), (pb, lb) = DIMENSION[a], DIMENSION[b]
+    if op in ("add", "sub"):
+        if pa != pb or (la and lb and op == "add") or (lb and not la):
+            return None
+        power, level = pa, (la or lb) if op == "add" else la and not lb
+    elif op == "mul":
+        power, level = pa + pb, la or lb
+        if la and lb:
+            return None
+    else:
+        power, level = pa - pb, la and not lb
+    return {(0, False): RATIO, (1, True): PRICE, (1, False): DIST}.get((power, level))
+
+
+def _arithmetic() -> list[Primitive]:
+    """Every meaningful ``a op b`` (one order of the commutative ones)."""
+    order = [PRICE, DIST, RATIO]
+    fns = {"add": lambda a, b: a + b, "sub": lambda a, b: a - b,
+           "mul": lambda a, b: rt.finite(a * b), "div": rt.div_checked}
+    out = []
+    for op, sign in ARITH.items():
+        for a in order:
+            for b in order:
+                if op in ("add", "mul") and order.index(b) < order.index(a):
+                    continue
+                if (ret := arith_unit(op, a, b)) is None:
+                    continue
+                code = f"rt.div({{0}}, {{1}})" if op == "div" else f"({{0}} {sign} {{1}})"
+                out.append(Primitive(f"{op}:{a},{b}", ret, (a, b), fns[op], f"{{0}} {sign} {{1}}", code,
+                                     weight=0.3, prec=5 if op in ("add", "sub") else 6))
+    return out
+
+
+def _scratch_core() -> list[Primitive]:
+    """Candles, logic, trade state, constants, the arithmetic and the low-level series maths."""
+    core = {p.name: p for p in _core(set())}
+    keep = ("open", "high", "low", "close", "always", "never", "and", "or", "not", "if_else:bool",
+            "held", "stop", "target", "trail", "mid:price")
+    out = [core[k] for k in keep]
+    out += [
+        Primitive("const:ratio", RATIO, (FACTOR,), rt.const, "{0}", "rt.const(o, {0})", kind="data", weight=0.6),
+        Primitive("pct:osc", OSC, (RATIO,), lambda x: 100 * x, "100 * {0}", "(100 * {0})", weight=0.4, prec=6),
+        Primitive("squash:osc", OSC, (RATIO,), rt.squash, "squash({0})", "rt.squash({0})", weight=0.3),
+    ]
+    out += _arithmetic()
+    for u in (PRICE, DIST, RATIO):
+        spread = DIST if u == PRICE else u  # what a difference or deviation of u is: price - price = dist
+        out += [
+            Primitive(f"diff:{u}", spread, (u, LAG), rt.diff, "diff({0}, {1})",
+                      "rt.diff({0}, {1})", weight=0.5),
+            Primitive(f"rolling_std:{u}", spread, (u, WINDOW), ops.rolling_std,
+                      "rolling_std({0}, {1})", "ops.rolling_std({0}, {1})", weight=0.3),
+        ]
+        if u != PRICE:  # a sum, a sign or a size of price levels means nothing
+            out += [
+                Primitive(f"rolling_sum:{u}", u, (u, WINDOW), rt.rolling_sum, "rolling_sum({0}, {1})",
+                          "rt.rolling_sum({0}, {1})", weight=0.3),
+                Primitive(f"pos:{u}", u, (u,), rt.pos, "pos({0})", "rt.pos({0})", weight=0.4),
+                Primitive(f"neg:{u}", u, (u,), rt.neg, "neg({0})", "rt.neg({0})", weight=0.4),
+                Primitive(f"abs:{u}", u, (u,), ops.abs_, "abs({0})", "ops.abs_({0})", weight=0.3),
+            ]
+    return out
+
+
+def module_primitive(name: str, body, slots: tuple, specs: tuple) -> Primitive:
+    """A module ``name`` standing for ``body`` (a tree); parameter ``i`` fills the constants at ``slots[i]``."""
+    args = ", ".join("{%d}" % i for i in range(len(specs)))
+    return Primitive(name, body.unit, tuple(specs), None, f"{name}({args})" if specs else name,
+                     f"{name}(o{', ' if specs else ''}{args})", kind="module", body=body, slots=slots)
 
 
 # -- indicators ---------------------------------------------------------------------------------------
@@ -259,8 +361,8 @@ def _min_depths(primitives: list[Primitive]) -> dict[str, int]:
 class PrimitiveSet:
     """The primitives of one search, indexed by name and by unit, with the depth each one needs."""
 
-    def __init__(self, primitives: list[Primitive], state: bool = True):
-        self.state = state
+    def __init__(self, primitives: list[Primitive], state: bool = True, scratch: bool = False):
+        self.state, self.scratch = state, scratch
         primitives = [p for p in primitives if state or p.kind != "state"]
         #: smallest depth (counting sub-rules, not constants) per primitive: in exit rules, in entry rules
         self.min_depth = _min_depths(primitives)
@@ -306,3 +408,28 @@ class PrimitiveSet:
         prims = [replace(p, weight=6.0 / comparisons) if p.family in COMPARISONS | LEVEL_COMPARISONS else p
                  for p in prims]
         return cls(prims + indicator_prims, state)
+
+    @classmethod
+    def from_scratch(cls, state: bool = True) -> "PrimitiveSet":
+        """No ready-made indicators: candles, logic, constants and low-level maths with unit-checked arithmetic,
+        enough to build RSI, Stochastic, Bollinger, ATR and MACD (#100)."""
+        prims = _scratch_core()
+        for unit in (PRICE, DIST, RATIO, OSC):
+            prims += _generic(unit, SCRATCH_LEVELS.get(unit), scratch=True)
+        comparisons = sum(p.family in COMPARISONS | LEVEL_COMPARISONS for p in prims)
+        prims = [replace(p, weight=6.0 / comparisons) if p.family in COMPARISONS | LEVEL_COMPARISONS else p
+                 for p in prims]
+        return cls(prims, state, scratch=True)
+
+    @property
+    def modules(self) -> list[Primitive]:
+        """The modules (evolved building blocks) in the order they were added."""
+        return [p for p in self.primitives if p.kind == "module"]
+
+    def with_modules(self, modules: list[Primitive]) -> "PrimitiveSet":
+        """A new set with ``modules`` added; the modules of one unit share a weight of 2, like indicator outputs."""
+        base = [p for p in self.primitives if p.kind != "module"] + self.modules + list(modules)
+        mods = [p for p in base if p.kind == "module"]
+        per_unit = {u: sum(p.ret == u for p in mods) for u in {p.ret for p in mods}}
+        return PrimitiveSet([replace(p, weight=2.0 / per_unit[p.ret]) if p.kind == "module" else p for p in base],
+                            self.state, self.scratch)
