@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 daMarxrider
-from tradebot.brokers import crypto, stocks  # noqa: F401  (registers built-ins)
+from tradebot.brokers import crypto, scalable, stocks  # noqa: F401  (registers built-ins)
 from tradebot.brokers.base import BROKERS, BaseBroker, ManualExecutionBroker, OrderIntent, ReadOnlyBrokerError
 
 
