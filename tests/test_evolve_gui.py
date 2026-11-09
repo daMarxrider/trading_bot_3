@@ -187,3 +187,17 @@ def test_best_result_and_fast_presets_fill_the_form(app):
     view.use_fast()
     assert (view.population.value(), view.generations.value(), view.permutations.value()) == (300, 40, 0)
     assert "hall_of_fame" not in view.settings_kwargs()
+
+
+def test_auto_configure_fills_the_form_and_reports(app, monkeypatch):
+    from tradebot.evolve import auto_configure as real
+
+    monkeypatch.setattr(page, "run_async", sync)
+    monkeypatch.setattr("tradebot.evolve.auto_configure",
+                        lambda df, **kw: real(df, candidates=3, rounds=2, population=20, generations=4, **kw))
+    view = page.EvolveView(Engine(), ThemeManager(), ["AAA"])
+    view.bars.setValue(900)
+    view.auto_btn.click()
+    assert view.auto_btn.isEnabled() and view.run_btn.isEnabled() and not view.stop_btn.isEnabled()
+    assert "kept out" in view.info.text() and view.population.value() == 20
+    assert view.permutations.value() >= 19

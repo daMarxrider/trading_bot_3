@@ -211,6 +211,9 @@ TERMS = {
     "best_result": "Fills in every setting for the best result on unseen data, whatever the runtime: a much bigger "
                    "search, 20 shuffled-price runs, walk-forward folds, rule size and trade minimums scaled to the "
                    "history. Rule size and parsimony stay moderate, as they overfit. Slow on purpose.",
+    "auto_configure": "A search picks the settings for this data: many settings are tried on shortened runs, the "
+                      "weaker half dropped each round. Ranked by validation score minus the training-validation "
+                      "gap, never training. The newest test part stays unseen. Very slow; then press Evolve.",
     "fast_preset": "Back to the quick defaults, which finish in minutes but search less and check less.",
     "evo_folds": "Walk-forward: run the whole search again on this many rolling windows of the data, and score "
                  "each result on the stretch right after its window. Rules that only fit one period lose there.",
