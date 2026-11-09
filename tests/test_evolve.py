@@ -311,3 +311,38 @@ def test_cli_evolve_and_save(monkeypatch, tmp_path):
     monkeypatch.setenv("TRADEBOT_PLUGIN_DIR", str(tmp_path))
     bt = CliRunner().invoke(cli.app, ["backtest", "X", "evolved_cli", "--no-plot"], env={"COLUMNS": "200"})
     assert bt.exit_code == 0, bt.output
+
+
+def test_best_result_settings_cover_the_evolver_and_scale_with_data():
+    import inspect
+
+    from tradebot.evolve import Evolver, best_result_settings
+
+    small, big = best_result_settings(500), best_result_settings(6000)
+    assert big["max_depth"] > small["max_depth"] and big["min_trades"] >= small["min_trades"]
+    assert big["folds"] > small["folds"] == 0
+    assert best_result_settings(3000, from_scratch=True)["max_depth"] >= 8  # an RSI fits
+    assert best_result_settings(3000, 5)["aggregate"] == "mean-std"
+    allowed = set(inspect.signature(Evolver).parameters) | {"permutations", "folds"}
+    for kw in (small, big, best_result_settings(3000, from_scratch=True)):
+        assert set(kw) <= allowed
+        assert kw["population"] > 300 and kw["generations"] > 40 and kw["permutations"] >= 19
+        extra = {k: v for k, v in kw.items() if k not in ("permutations", "folds")}
+        Evolver(make_ohlc(900), **{**extra, "population": 8}, seed=1)  # valid
+
+
+def test_best_result_cli_flag_is_overridable(monkeypatch):
+    from typer.testing import CliRunner
+
+    from tradebot.cli import main as cli
+
+    seen = {}
+
+    def fake(df, **kw):
+        seen.update(kw)
+        raise ValueError("stop here")
+
+    monkeypatch.setattr("tradebot.evolve.evolve", fake)
+    monkeypatch.setattr(cli, "load_data", lambda *a, **k: make_ohlc(900))
+    CliRunner().invoke(cli.app, ["evolve", "X", "--best-result", "--generations", "3"])
+    assert seen["generations"] == 3 and seen["population"] > 300 and seen["permutations"] == 20

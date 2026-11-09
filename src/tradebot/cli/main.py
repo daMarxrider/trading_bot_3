@@ -597,6 +597,7 @@ def _print_walk_forward(wf, algorithm, symbol: str) -> None:
 
 @app.command()
 def evolve(
+    ctx: typer.Context,
     symbol: Annotated[Optional[str], typer.Argument(
         help="e.g. AAPL, or several separated by commas (can be left out with --watchlist)",
         autocompletion=complete.symbols)] = None,
@@ -646,6 +647,10 @@ def evolve(
         "(default 0, with --from-scratch 3)")] = None,
     fee: float = 0.001,
     dca_amount: DcaAmount = None,
+    best_result: Annotated[bool, typer.Option(
+        "--best-result", help="Set every setting for the best out-of-sample result, ignoring runtime (much slower "
+        "than the defaults): bigger search, shuffled-price runs, walk-forward folds, limits scaled to the data. "
+        "Flags you give yourself still win")] = False,
     seed: Annotated[Optional[int], typer.Option(help="Random seed (printed when left out, to repeat a run)")] = None,
     top: Annotated[int, typer.Option(help="Show this many of the best programs with their validation score")] = 5,
     save: Annotated[Optional[str], typer.Option(
@@ -686,7 +691,28 @@ def evolve(
             raise typer.BadParameter(f"unknown indicator {n!r}", param_hint="--indicators")
     symbols = _symbols(symbol, watchlist)
     df = load_data(symbols[0], tf, start, end, bars) if len(symbols) == 1 else _load_many(symbols, tf, start, end, bars)
-    kwargs = dict(population=population, generations=generations, max_depth=max_depth, max_size=max_size,
+    if best_result:
+        from tradebot.evolve import best_result_settings
+
+        candles = min(len(f) for f in df.values()) if isinstance(df, dict) else len(df)
+        preset = best_result_settings(candles, len(symbols), from_scratch=from_scratch)
+        given = {n for n in ctx.params if getattr(ctx.get_parameter_source(n), "name", "") == "COMMANDLINE"}
+        population, generations, max_depth, max_size, islands, validation, test, segments, min_trades, parsimony, \
+            aggregate, permutations, folds = (
+                v if n in given else preset[n] for n, v in (
+                    ("population", population), ("generations", generations), ("max_depth", max_depth),
+                    ("max_size", max_size), ("islands", islands), ("validation", validation), ("test", test),
+                    ("segments", segments), ("min_trades", min_trades), ("parsimony", parsimony),
+                    ("aggregate", aggregate), ("permutations", permutations), ("folds", folds)))
+        extra = {k: preset[k] for k in ("tournament", "crossover", "mutation", "elite", "hall_of_fame")}
+        if "state" not in given:
+            state = preset["state"]
+        console.print(f"[dim]best result: population {population}, {generations} generations, depth {max_depth}, "
+                      f"size {max_size}, {permutations} shuffled runs, {folds} folds, {segments} segments, "
+                      f"min trades {min_trades}; this takes a long time[/]")
+    else:
+        extra = {}
+    kwargs = dict(**extra, population=population, generations=generations, max_depth=max_depth, max_size=max_size,
                   objective=objective, aggregate=aggregate, align=align, validation=validation, test=test,
                   segments=segments, min_trades=min_trades, parsimony=parsimony, state=state, indicators=names,
                   fee=fee, dca_amount=dca_amount, seed=seed, from_scratch=from_scratch, islands=islands)
