@@ -650,6 +650,10 @@ def evolve(
         "--best-result", help="Set every setting for the best out-of-sample result, ignoring runtime (much slower "
         "than the defaults): bigger search, shuffled-price runs, walk-forward folds, limits scaled to the data. "
         "Flags you give yourself still win")] = False,
+    auto_settings: Annotated[bool, typer.Option(
+        "--auto-settings", help="Let a search pick the settings for this data first (successive halving over many "
+        "settings, ranked by validation score minus the overfitting gap; the newest --test part is kept out of it "
+        "and used once by the final run). Takes much longer than --best-result. Flags you give yourself still win")] = False,
     seed: Annotated[Optional[int], typer.Option(help="Random seed (printed when left out, to repeat a run)")] = None,
     top: Annotated[int, typer.Option(help="Show this many of the best programs with their validation score")] = 5,
     save: Annotated[Optional[str], typer.Option(
@@ -690,11 +694,29 @@ def evolve(
             raise typer.BadParameter(f"unknown indicator {n!r}", param_hint="--indicators")
     symbols = _symbols(symbol, watchlist)
     df = load_data(symbols[0], tf, start, end, bars) if len(symbols) == 1 else _load_many(symbols, tf, start, end, bars)
-    if best_result:
-        from tradebot.evolve import best_result_settings
+    if best_result or auto_settings:
+        from tradebot.evolve import auto_configure, best_result_settings
 
         candles = min(len(f) for f in df.values()) if isinstance(df, dict) else len(df)
-        preset = best_result_settings(candles, len(symbols), from_scratch=from_scratch)
+        if auto_settings:
+            fixed = dict(fee=fee, align=align, dca_amount=dca_amount, state=state)
+            if names:
+                fixed["indicators"] = names
+            from rich.progress import Progress as _Progress
+
+            with _Progress(console=console) as bar:
+                task = bar.add_task("auto-configuring", total=None)
+                try:
+                    auto = auto_configure(df, from_scratch=from_scratch, objective=objective, seed=seed, **fixed,
+                                          on_trial=lambda i, n, label: bar.update(
+                                              task, total=n, completed=i, description=f"auto-configuring: {label}"))
+                except ValueError as e:
+                    raise typer.BadParameter(str(e)) from None
+            for line in auto.report():
+                console.print(f"[dim]{line}[/]")
+            preset = auto.settings
+        else:
+            preset = best_result_settings(candles, len(symbols), from_scratch=from_scratch)
         given = {n for n in ctx.params if getattr(ctx.get_parameter_source(n), "name", "") == "COMMANDLINE"}
         population, generations, max_depth, max_size, islands, validation, test, segments, min_trades, parsimony, \
             aggregate, permutations, folds = (
@@ -706,7 +728,7 @@ def evolve(
         extra = {k: preset[k] for k in ("tournament", "crossover", "mutation", "elite", "hall_of_fame")}
         if "state" not in given:
             state = preset["state"]
-        console.print(f"[dim]best result: population {population}, {generations} generations, depth {max_depth}, "
+        console.print(f"[dim]{'auto-configured' if auto_settings else 'best result'}: population {population}, {generations} generations, depth {max_depth}, "
                       f"size {max_size}, {permutations} shuffled runs, {folds} folds, {segments} segments, "
                       f"min trades {min_trades}; this takes a long time[/]")
     else:

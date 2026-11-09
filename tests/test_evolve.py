@@ -346,3 +346,58 @@ def test_best_result_cli_flag_is_overridable(monkeypatch):
     monkeypatch.setattr(cli, "load_data", lambda *a, **k: make_ohlc(900))
     CliRunner().invoke(cli.app, ["evolve", "X", "--best-result", "--generations", "3"])
     assert seen["generations"] == 3 and seen["population"] > 300 and seen["permutations"] == 20
+
+
+def test_auto_configure_keeps_the_test_part_out_and_returns_runnable_settings():
+    from tradebot.evolve import auto_configure
+    from tradebot.evolve.autoconfig import hold_out
+
+    df = make_ohlc(900, seed=3)
+    assert hold_out(df, 0.2).index[-1] < df.index[-180]
+    assert len(hold_out({"A": df, "B": df}, 0.0)["A"]) == 900
+    seen = []
+    cfg = auto_configure(df, candidates=4, rounds=2, population=24, generations=4, seed=1,
+                         on_trial=lambda i, n, label: seen.append((i, n)))
+    assert seen[-1][0] == 5 and seen[-1][1] == 6 and len(cfg.trials) == 6  # 4 + 2 candidates
+    assert cfg.test == 0.2 and cfg.settings["population"] == 24 and cfg.settings["permutations"] == 20
+    assert any("kept out" in line for line in cfg.report())
+    # the chosen settings run on the whole data, test part included
+    settings = {k: v for k, v in cfg.settings.items() if k not in ("permutations", "folds")}
+    res = evolve(df, permutations=0, folds=0, **{**settings, "population": 24, "generations": 3, "seed": 2})
+    assert res.test_start is not None
+
+
+def test_auto_configure_finds_no_edge_in_a_random_walk():
+    """The test part is untouched by the outer search, so on pure noise the final score cannot be bought
+    with the settings: the permutation test must not call it an edge."""
+    from tradebot.evolve import auto_configure
+
+    rng = np.random.default_rng(11)
+    close = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, 900)))
+    idx = pd.date_range("2020-01-01", periods=900, freq="D")
+    df = pd.DataFrame({"open": close, "high": close * 1.002, "low": close * 0.998, "close": close,
+                       "volume": 1000.0}, index=idx)
+    cfg = auto_configure(df, candidates=4, rounds=2, population=24, generations=4, seed=5)
+    settings = {k: v for k, v in cfg.settings.items() if k not in ("permutations", "folds")}
+    res = evolve(df, permutations=19, folds=0, **{**settings, "population": 24, "generations": 4, "seed": 6})
+    assert res.permutation.p > 0.05  # beating all 19 shuffled runs would be an edge
+
+
+def test_auto_settings_cli_flag(monkeypatch):
+    from typer.testing import CliRunner
+
+    from tradebot.cli import main as cli
+    from tradebot.evolve import AutoConfig, best_result_settings
+
+    seen = {}
+
+    def fake(df, **kw):
+        seen.update(kw)
+        raise ValueError("stop here")
+
+    chosen = {**best_result_settings(900), "population": 77, "generations": 9, "parsimony": 0.011}
+    monkeypatch.setattr("tradebot.evolve.evolve", fake)
+    monkeypatch.setattr("tradebot.evolve.auto_configure", lambda df, **kw: AutoConfig(chosen))
+    monkeypatch.setattr(cli, "load_data", lambda *a, **k: make_ohlc(900))
+    CliRunner().invoke(cli.app, ["evolve", "X", "--auto-settings", "--generations", "3"])
+    assert seen["generations"] == 3 and seen["population"] == 77 and seen["parsimony"] == 0.011

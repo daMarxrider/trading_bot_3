@@ -98,6 +98,7 @@ class EvolveView(QWidget):
     status = pyqtSignal(str)
     show_on_chart = pyqtSignal(str, object)
     saved = pyqtSignal(str)  #: an algorithm saved as a plugin (and registered), by name
+    auto_step = pyqtSignal(int, int, str)  # from the worker thread, delivered queued
     generation = pyqtSignal(int, float)  # emitted from the worker thread, delivered queued
 
     def __init__(self, engine, themes: ThemeManager, watchlist: list[str], symbol_search: SymbolSearch | None = None,
@@ -165,6 +166,9 @@ class EvolveView(QWidget):
         self._extra: dict = {}  # preset-only Evolver settings without a field (tournament, hall of fame, ...)
         self.best_btn = QPushButton("Best result")
         self.best_btn.clicked.connect(self.use_best_result)
+        self.auto_btn = QPushButton("Auto-configure")
+        self.auto_btn.clicked.connect(self.auto_configure)
+        self.auto_btn.setToolTip(tooltip(explain("auto_configure")))
         self.fast_btn = QPushButton("Fast (defaults)")
         self.fast_btn.clicked.connect(self.use_fast)
         self.best_btn.setToolTip(tooltip(explain("best_result")))
@@ -214,6 +218,7 @@ class EvolveView(QWidget):
             if term == "evolve":
                 presets = QHBoxLayout()
                 presets.addWidget(self.best_btn)
+                presets.addWidget(self.auto_btn)
                 presets.addWidget(self.fast_btn)
                 box.layout().addLayout(presets)
             box.layout().addLayout(body)
@@ -305,6 +310,7 @@ class EvolveView(QWidget):
         lay.setContentsMargins(16, 16, 16, 16)
         lay.addWidget(self.columns)
         self.generation.connect(self._progress)
+        self.auto_step.connect(self._auto_step)
         self._tips = LongPressTooltips(self)
         themes.changed.connect(self._style)
         self._style(themes.current)
@@ -368,6 +374,66 @@ class EvolveView(QWidget):
         n = len(self._symbol_list()) or 1
         self._apply(best_result_settings(self.bars.value(), n, from_scratch=self.from_scratch.isChecked()))
         self.status.emit("best-result settings filled in: slow on purpose, every field can still be changed")
+
+    def auto_configure(self):
+        """Let a search pick the settings for this data (#101): runs in the background, fills the form, and
+        reports every candidate. The newest test part is kept out of it; press Evolve afterwards."""
+        from tradebot.evolve import auto_configure
+
+        picked = self.indicators.selected()
+        scratch = self.from_scratch.isChecked()
+        fixed = dict(fee=self.fee.value(), align=self.align.isChecked(), state=self.state.isChecked(),
+                     dca_amount=self.dca_amount.value() or None)
+        if not scratch and len(picked) != len(self.indicators.boxes):
+            fixed["indicators"] = picked
+        objective, seed = self.objective.currentText(), self.seed.value() or None
+        self._stop = False
+        self._phase = {"name": "auto-configuring", "offset": 0, "runs": 0}
+        self.progress.setRange(0, 0)
+        self.progress.show()
+        for b in (self.run_btn, self.auto_btn, self.best_btn, self.fast_btn):
+            b.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.status.emit("auto-configuring …")
+
+        def trial(done, total, label):  # worker thread
+            if self._stop:
+                raise Stopped()
+            self.auto_step.emit(done, total, label)
+
+        def generation(*_):
+            if self._stop:
+                raise Stopped()
+
+        def work():
+            frames = self._data()
+            data = frames if len(frames) > 1 else next(iter(frames.values()))
+            return auto_configure(data, from_scratch=scratch, objective=objective, seed=seed, on_trial=trial,
+                                  progress=generation, **fixed)
+
+        run_async(work, self._auto_done, self._auto_fail)
+
+    def _auto_step(self, done: int, total: int, label: str):
+        self.progress.setRange(0, total)
+        self.progress.setValue(done)
+        self.status.emit(f"auto-configuring: {label}, candidate run {done + 1} of {total}")
+
+    def _auto_finish(self):
+        self._finish()
+        for b in (self.auto_btn, self.best_btn, self.fast_btn):
+            b.setEnabled(True)
+
+    def _auto_fail(self, err):
+        self._auto_finish()
+        self.status.emit("auto-configure stopped" if str(err).startswith("Stopped")
+                         else f"auto-configure failed: {err}")
+
+    def _auto_done(self, cfg):
+        self._auto_finish()
+        self._apply(cfg.settings)
+        self.rules.setText("Settings chosen. Press Evolve to run with them.")
+        self.info.setText("\n".join(cfg.report()))
+        self.status.emit("auto-configured: the fields are filled in and can still be changed")
 
     def use_fast(self):
         """Today's quick defaults (those of the current mode)."""
