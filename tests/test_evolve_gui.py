@@ -176,3 +176,14 @@ def test_main_window_has_the_page_and_lists_saved_strategies(app, tmp_path, monk
     assert window.lab.algo.findText("evolved_window_test") >= 0
     assert window.chart.algo_box.findText("evolved_window_test") >= 0
     window.close()
+
+
+def test_best_result_and_fast_presets_fill_the_form(app):
+    view = page.EvolveView(Engine(), ThemeManager(), ["AAA"])
+    view.use_best_result()
+    assert view.population.value() > 300 and view.permutations.value() >= 19 and view.folds.value() >= 3
+    kw = view.settings_kwargs()
+    assert kw["hall_of_fame"] == 100 and kw["tournament"] == 5
+    view.use_fast()
+    assert (view.population.value(), view.generations.value(), view.permutations.value()) == (300, 40, 0)
+    assert "hall_of_fame" not in view.settings_kwargs()

@@ -208,6 +208,10 @@ TERMS = {
     "islands": "Split the population into this many groups that evolve apart and now and then pass their best "
                "on to the next group. Several ideas survive long enough to be refined, instead of the first good "
                "one taking over everywhere. 4 from scratch, else 1.",
+    "best_result": "Fills in every setting for the best result on unseen data, whatever the runtime: a much bigger "
+                   "search, 20 shuffled-price runs, walk-forward folds, rule size and trade minimums scaled to the "
+                   "history. Rule size and parsimony stay moderate, as they overfit. Slow on purpose.",
+    "fast_preset": "Back to the quick defaults, which finish in minutes but search less and check less.",
     "evo_folds": "Walk-forward: run the whole search again on this many rolling windows of the data, and score "
                  "each result on the stretch right after its window. Rules that only fit one period lose there.",
     "deflated_sharpe": "The Sharpe ratio corrected for how many different strategies were tried: the chance that it "

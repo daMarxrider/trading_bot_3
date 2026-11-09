@@ -162,6 +162,13 @@ class EvolveView(QWidget):
         self.seed = self._spin(0, 2**31 - 1, 0)
         self.seed.setSpecialValueText("random")
 
+        self._extra: dict = {}  # preset-only Evolver settings without a field (tournament, hall of fame, ...)
+        self.best_btn = QPushButton("Best result")
+        self.best_btn.clicked.connect(self.use_best_result)
+        self.fast_btn = QPushButton("Fast (defaults)")
+        self.fast_btn.clicked.connect(self.use_fast)
+        self.best_btn.setToolTip(tooltip(explain("best_result")))
+        self.fast_btn.setToolTip(tooltip(explain("fast_preset")))
         self.run_btn = QPushButton("Evolve", objectName="Primary")
         self.run_btn.clicked.connect(self.run)
         self.stop_btn = QPushButton("Stop", enabled=False)
@@ -204,6 +211,11 @@ class EvolveView(QWidget):
             head = QLabel(title)
             head.setToolTip(tooltip(explain(term)))
             box = card(head)
+            if term == "evolve":
+                presets = QHBoxLayout()
+                presets.addWidget(self.best_btn)
+                presets.addWidget(self.fast_btn)
+                box.layout().addLayout(presets)
             box.layout().addLayout(body)
             left.addWidget(box)
         ind_title = QLabel("Indicators")
@@ -334,6 +346,39 @@ class EvolveView(QWidget):
             if box.value() == a:  # only values still at the other mode's default
                 box.setValue(b)
 
+    def _apply(self, values: dict):
+        """Fill the form from Evolver settings (the fields stay editable)."""
+        boxes = {"population": self.population, "generations": self.generations, "max_depth": self.max_depth,
+                 "max_size": self.max_size, "islands": self.islands, "segments": self.segments,
+                 "min_trades": self.min_trades, "permutations": self.permutations, "folds": self.folds}
+        for key, box in boxes.items():
+            box.setValue(int(values[key]))
+        self.validation.setValue(round(values["validation"] * 100))
+        self.test.setValue(round(values["test"] * 100))
+        self.parsimony.setValue(values["parsimony"])
+        self.aggregate.setCurrentText(values["aggregate"])
+        self.state.setChecked(values["state"])
+        self._extra = {k: values[k] for k in ("tournament", "crossover", "mutation", "elite", "hall_of_fame")
+                       if k in values}
+
+    def use_best_result(self):
+        """Every setting for the best out-of-sample result, ignoring runtime (#101), scaled to the data."""
+        from tradebot.evolve import best_result_settings
+
+        n = len(self._symbol_list()) or 1
+        self._apply(best_result_settings(self.bars.value(), n, from_scratch=self.from_scratch.isChecked()))
+        self.status.emit("best-result settings filled in: slow on purpose, every field can still be changed")
+
+    def use_fast(self):
+        """Today's quick defaults (those of the current mode)."""
+        scratch = self.from_scratch.isChecked()
+        limits = SCRATCH_LIMITS if scratch else LIMITS
+        self._apply(dict(population=300, generations=40, max_depth=limits[0], max_size=limits[1],
+                         islands=SCRATCH_ISLANDS if scratch else 1, segments=3, min_trades=4, parsimony=0.002,
+                         aggregate="mean", state=True, validation=0.2, test=0.2,
+                         permutations=SCRATCH_GUARDS["permutations"] if scratch else 0,
+                         folds=SCRATCH_GUARDS["folds"] if scratch else 0))
+
     def _fill_lists_menu(self):
         self.lists_menu.clear()
         lists = self.watchlists_fn()
@@ -374,7 +419,7 @@ class EvolveView(QWidget):
         """The Evolver settings from the form."""
         picked = self.indicators.selected()
         scratch = self.from_scratch.isChecked()
-        return dict(from_scratch=scratch, population=self.population.value(), generations=self.generations.value(),
+        return dict(**self._extra, from_scratch=scratch, population=self.population.value(), generations=self.generations.value(),
                     max_depth=self.max_depth.value(), max_size=self.max_size.value(), islands=self.islands.value(),
                     objective=self.objective.currentText(), aggregate=self.aggregate.currentText(),
                     align=self.align.isChecked(), validation=self.validation.value() / 100, test=self.test.value() / 100,
