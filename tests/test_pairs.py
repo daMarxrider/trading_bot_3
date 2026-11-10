@@ -104,3 +104,104 @@ def test_quote_currency():
     assert quote_currency("BTC/USDT") == ("USD", 1.0)
     assert quote_currency("ETH/EUR:EUR") == ("EUR", 1.0)
     assert quote_currency("BP.L", {"BP.L": "GBp"}.get) == ("GBP", 0.01)
+
+
+# -- rolling, cointegration, health, finder, two-legged backtest (#117) ---------------------------------------
+def synthetic_pair(n=900, seed=5, phi=0.85, beta=1.5, noise=0.01):
+    rng = np.random.default_rng(seed)
+    base = np.cumsum(rng.normal(0, 0.01, n))
+    gap = np.zeros(n)
+    for i in range(1, n):
+        gap[i] = phi * gap[i - 1] + rng.normal(0, noise)
+    idx = pd.date_range("2020-01-01", periods=n, freq="D", tz="UTC")
+    return pd.Series(100 * np.exp(beta * base + gap), idx), pd.Series(100 * np.exp(base), idx)
+
+
+def frame_of(close):
+    return pd.DataFrame({"open": close, "high": close, "low": close, "close": close})
+
+
+def test_rolling_uses_only_earlier_candles():
+    from tradebot.analysis.pairs import rolling_pair
+
+    a, b = synthetic_pair()
+    r1 = rolling_pair(a, b, 60)
+    a2 = a.copy()
+    a2.iloc[-1] *= 1.5  # a change in the last candle
+    r2 = rolling_pair(a2, b, 60)
+    assert r1.beta.iloc[-1] == r2.beta.iloc[-1]  # β for the last bar doesn't see that bar
+    assert r2.zscore.iloc[-1] > r1.zscore.iloc[-1]
+    assert r1.beta.iloc[:60].isna().all() and r1.beta.iloc[100:].mean() == pytest.approx(1.5, abs=0.3)
+
+
+def test_cointegration_tells_pairs_from_random_walks():
+    from tradebot.analysis.pairs import cointegration
+
+    a, b = synthetic_pair()
+    good = cointegration(a, b)
+    assert good.passed and good.level <= 0.05 and good.beta == pytest.approx(1.5, abs=0.2)
+    rng = np.random.default_rng(9)
+    idx = a.index
+    x, y = (pd.Series(100 * np.exp(np.cumsum(rng.normal(0, 0.01, len(idx)))), idx) for _ in range(2))
+    assert cointegration(x, y).stat > good.stat
+    with pytest.raises(ValueError):
+        cointegration(a.iloc[:10], b.iloc[:10])
+
+
+def test_pair_health_flags_a_pair_that_decoupled():
+    from tradebot.analysis.pairs import pair_health
+
+    a, b = synthetic_pair()
+    assert not pair_health(a, b).broken
+    broken = a.copy()
+    broken.iloc[-60:] *= np.exp(np.linspace(0, 0.6, 60))  # a walks off for good
+    h = pair_health(broken, b)
+    assert h.broken and h.reasons
+
+
+def test_find_pairs_confirms_on_later_data_and_counts_chance():
+    from tradebot.analysis.pairs import find_pairs
+
+    a, b = synthetic_pair()
+    rng = np.random.default_rng(3)
+    loner = pd.Series(100 * np.exp(np.cumsum(rng.normal(0, 0.01, len(a)))), a.index)
+    scan = find_pairs({"AAA": a, "BBB": b, "CCC": loner}, min_correlation=0.3)
+    assert [c.symbol for c in scan.found] == ["AAA:BBB"]
+    assert scan.tested + scan.skipped == 3 and scan.expected_by_chance == pytest.approx(scan.tested * 0.05)
+    assert scan.found[0].half_life is not None
+    with pytest.raises(ValueError):
+        find_pairs({"AAA": a.iloc[:50], "BBB": b.iloc[:50]})
+
+
+def test_pair_backtest_is_market_neutral_and_pays_costs():
+    from tradebot.backtest.pairs import pair_backtest
+
+    a, b = synthetic_pair(n=1500, seed=11)
+    res = pair_backtest(frame_of(a), frame_of(b), window=60, fee=0.0, borrow=0.0)
+    assert res.metrics["trades"] > 5 and res.metrics["total_return"] > 0  # the gap comes back, so it pays
+    costly = pair_backtest(frame_of(a), frame_of(b), window=60, fee=0.005, borrow=0.1)
+    assert costly.metrics["total_return"] < res.metrics["total_return"]
+    assert set(res.positions.unique()) <= {-1.0, 0.0, 1.0}
+    assert res.positions.iloc[:60].eq(0).all()  # nothing before the window is full
+    with pytest.raises(ValueError):
+        pair_backtest(frame_of(a), frame_of(b), entry=1, exit=2)
+
+
+def test_pair_view_draws_without_network(tmp_path):
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PyQt6")
+    from PyQt6.QtWidgets import QApplication
+
+    from tradebot.gui.pairs import PairView
+    from tradebot.gui.theme import ThemeManager
+
+    app = QApplication.instance() or QApplication([])  # noqa: F841 - must stay referenced
+    a, b = synthetic_pair()
+    view = PairView(engine(KO=frame_of(a), PEP=frame_of(b)), ThemeManager(user_dir=tmp_path), ["KO", "PEP"])
+    view._show("KO", "PEP", 60, a, b)
+    assert "cointegration" in view.numbers.text() and "half-life" in view.numbers.text()
+    assert len(view.prices.getPlotItem().listDataItems()) == 2 and len(view.zplot.getPlotItem().listDataItems()) == 1
+    view._show("KO", "PEP", 60, a.iloc[:20], b.iloc[:20])  # too short: says so instead of failing
+    assert "need at least" in view.numbers.text()

@@ -32,6 +32,7 @@ from tradebot.data.providers import quiet_yfinance
 from tradebot.gui.chart import ChartView
 from tradebot.gui.common import run_async
 from tradebot.gui.evolve import EvolveView
+from tradebot.gui.pairs import PairView
 from tradebot.gui.settings import SettingsDialog
 from tradebot.legal import NOT_AFFILIATED, NO_WARRANTY
 from tradebot.gui.theme import GlassBackdrop, ThemeManager
@@ -59,11 +60,12 @@ class MainWindow(QMainWindow):
         self.screener = ScreenerView(engine, themes, symbols)
         self.news = NewsView(themes, lambda: list(dict.fromkeys(self.chart.watchlists.all_symbols()
                                                                 + self.portfolio_symbols)))
+        self.pairs = PairView(engine, themes, symbols)
         self.portfolio = PortfolioView(engine, themes)
         self.lab = BacktestView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)
         self.evolve = EvolveView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)
         pages = [("Chart", "📈", self.chart), ("Screener", "🔎", self.screener), ("Backtest", "🧪", self.lab),
-                 ("Evolve", "🧬", self.evolve), ("Portfolio", "💼", self.portfolio), ("News", "📰", self.news)]
+                 ("Evolve", "🧬", self.evolve), ("Pairs", "⚖", self.pairs), ("Portfolio", "💼", self.portfolio), ("News", "📰", self.news)]
 
         self.stack = QStackedWidget()
         sidebar = QWidget(objectName="Sidebar")

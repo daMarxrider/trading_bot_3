@@ -1047,6 +1047,86 @@ def pair(symbol: Annotated[str, typer.Argument(help="Two symbols joined by a col
     t.add_row("hedge ratio β (log a ≈ α + β·log b)", f"{st.beta:.2f}")
     t.add_row("z-score of the gap now", f"{st.zscore:+.2f}")
     t.add_row("half-life of a gap", "does not revert" if st.half_life is None else f"{st.half_life:.1f} candles")
+    from tradebot.analysis.pairs import cointegration, pair_health
+
+    co = cointegration(a, b)
+    t.add_row("cointegration (Engle-Granger)", f"t = {co.stat:.2f}, {co.p_text}" + (" ✓" if co.passed else ""))
+    console.print(t)
+    try:
+        health = pair_health(a, b)
+    except ValueError:
+        return
+    if health.broken:
+        console.print("[bold red]this pair may have stopped working:[/] " + "; ".join(health.reasons))
+    else:
+        console.print("[green]the last 60 candles still look like the history before them[/]")
+
+
+@app.command("pair-backtest")
+def pair_backtest_(
+        symbol: Annotated[str, typer.Argument(help="A:B, e.g. KO:PEP: long one leg and short the other")],
+        tf: Annotated[str, typer.Option(help="Timeframe")] = "1d",
+        bars: Annotated[int, typer.Option(help="Candles")] = 1500,
+        window: Annotated[int, typer.Option(help="Candles for the rolling hedge ratio and z-score")] = 60,
+        entry: Annotated[float, typer.Option(help="Open when the gap is this many σ wide")] = 2.0,
+        exit: Annotated[float, typer.Option(help="Close when it is back inside this many σ")] = 0.5,
+        stop: Annotated[float, typer.Option(help="Give up beyond this many σ")] = 4.0,
+        fee: Annotated[float, typer.Option(help="Fee per change of either leg")] = 0.001,
+        borrow: Annotated[float, typer.Option(help="Yearly cost of the short leg (stocks ~0.02, crypto 0)")] = 0.02):
+    """Backtest trading the gap of two assets: long A and short B (or the reverse) at the same time."""
+    from tradebot.analysis.pairs import pair_health
+    from tradebot.backtest.pairs import pair_backtest
+    from tradebot.core.models import split_pair
+
+    legs = split_pair(symbol)
+    if legs is None:
+        raise typer.BadParameter("write the pair as A:B, e.g. KO:PEP")
+    a, b = (load_data(leg, tf, None, None, bars) for leg in legs)
+    try:
+        res = pair_backtest(a, b, window, entry, exit, stop, fee, borrow)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+    console.print(results_table(f"{symbol} · {tf} · long/short", {"pairs": res.metrics}))
+    try:
+        health = pair_health(a["close"], b["close"])
+        if health.broken:
+            console.print("[bold red]this pair may have stopped working:[/] " + "; ".join(health.reasons))
+    except ValueError:
+        pass
+
+
+@app.command("pair-scan")
+def pair_scan(symbols: Annotated[list[str], typer.Argument(help="Symbols to search for pairs, e.g. KO PEP PG MDLZ")],
+              tf: Annotated[str, typer.Option(help="Timeframe")] = "1d",
+              bars: Annotated[int, typer.Option(help="Candles")] = 1000,
+              split: Annotated[float, typer.Option(help="Share of the history pairs are picked on; the rest confirms")] = 0.6,
+              min_correlation: Annotated[float, typer.Option(help="Pre-filter: return correlation on the first part")] = 0.7):
+    """Find pairs that move together: picked on the first part of the history, confirmed on the rest."""
+    from tradebot.analysis.pairs import find_pairs
+
+    if len(symbols) < 2:
+        raise typer.BadParameter("give at least two symbols")
+    closes = {}
+    for sym in symbols:
+        try:
+            closes[sym] = load_data(sym, tf, None, None, bars)["close"]
+        except Exception as e:  # one dead symbol shouldn't end the scan
+            console.print(f"[yellow]skipping {sym}: {e}[/]")
+    try:
+        scan = find_pairs(closes, split, min_correlation)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+    console.print(f"{scan.tested} pairs tested ({scan.skipped} dropped by the correlation filter), "
+                  f"{scan.passed_train} passed the test on the first {split:.0%}; by chance alone about "
+                  f"{scan.expected_by_chance:.1f} would. [bold]{len(scan.found)}[/] held up on the rest.")
+    if not scan.found:
+        return
+    t = Table(title="Pairs confirmed on data they weren't picked on")
+    for col in ("pair", "correlation", "β", "t (picked)", "t (confirmed)", "half-life", "z now"):
+        t.add_column(col, justify="left" if col == "pair" else "right")
+    for c in scan.found:
+        t.add_row(c.symbol, f"{c.correlation:.2f}", f"{c.beta:.2f}", f"{c.train.stat:.2f}", f"{c.test.stat:.2f}",
+                  f"{c.half_life:.1f}", f"{c.zscore:+.2f}")
     console.print(t)
 
 

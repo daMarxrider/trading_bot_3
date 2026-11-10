@@ -102,8 +102,7 @@ class MarketDataEngine:
         """
         legs = split_pair(symbol)
         if legs is not None:  # a spread symbol (#117): built from both legs' candles
-            a, b = (self.get_ohlc(leg, timeframe, start, end, asset_class, bars) for leg in legs)
-            b = self._in_currency_of(legs, b, timeframe, start, end, bars)
+            a, b = self.pair_legs(legs, timeframe, start, end, asset_class, bars)
             spread = ratio_ohlc(a, b)
             if spread.empty:
                 raise DataUnavailable(f"{legs[0]} and {legs[1]} have no {timeframe} candles in common")
@@ -143,6 +142,11 @@ class MarketDataEngine:
         if self._cache is not None and not errors:
             self._cache[key] = result
         return result
+
+    def pair_legs(self, legs, timeframe="1d", start=None, end=None, asset_class=None, bars=None):
+        """Candles of both legs of a pair, the second one in the first one's currency."""
+        a, b = (self.get_ohlc(leg, timeframe, start, end, asset_class, bars) for leg in legs)
+        return a, self._in_currency_of(legs, b, timeframe, start, end, bars)
 
     def _in_currency_of(self, legs, b, timeframe, start, end, bars) -> pd.DataFrame:
         """The second leg's candles in the first leg's currency, so the gap isn't partly an exchange rate.
