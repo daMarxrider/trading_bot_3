@@ -2,21 +2,27 @@
 # Copyright (C) 2026 daMarxrider
 """The "Best result" preset of the Evolve page and ``tradebot evolve --best-result`` (#101).
 
-The normal defaults are chosen so a run finishes quickly. This preset ignores runtime: it returns the settings
-that should give the best *out-of-sample* result, scaled to the data at hand. Maxing everything out would be
-wrong (deeper rules and weaker parsimony overfit), so every value has a reason, listed in :data:`WHY`.
+The normal defaults are chosen so a run finishes quickly. This preset ignores runtime: it returns the most
+thorough settings, scaled to the data at hand, with the checks that tell luck from an edge (shuffled-price runs,
+walk-forward folds). Maxing everything out would be wrong (deeper rules and weaker parsimony overfit), so every
+value has a reason, listed in :data:`WHY`.
+
+**Measured** (``benchmarks/evolve/README.md``): a bigger search did *not* give a better score on unseen data
+than the fast defaults, and the gap between training and test score grew with the effort. What the preset
+buys is the *evidence* (p-value, folds), not a better strategy. The values below are reasoned, not tuned.
 """
 
 from __future__ import annotations
 
 #: Why each value is what it is (also shown in the glossary).
 WHY = {
-    "population / generations": "Pure search effort: more never hurts the out-of-sample score, so they are high "
-                                "(and higher from scratch, whose space is far larger).",
+    "population / generations": "Search effort, high for a thorough run (higher from scratch, whose space is far "
+                                "larger). Measured: it does not improve the unseen score and overfits slightly more.",
     "hall_of_fame": "A long list gives the validation part more candidates to pick from.",
     "max_depth / max_size": "Not maxed: complexity overfits. Scaled to the history, short histories get small rules "
                             "(from scratch the floor is what an RSI needs, depth 8).",
-    "parsimony": "Twice the default: shorter rules win ties, which is what survives on unseen data.",
+    "parsimony": "Above the default: shorter rules win ties. Auto-configure picked about 0.009 (median) on the "
+                 "benchmark, more than these 0.003-0.004; not yet confirmed as better.",
     "aggregate": "mean-std: a rule has to work consistently on every segment and symbol, not on average.",
     "segments / min_trades": "Grow with the number of candles, so each stretch holds enough trades to judge a rule.",
     "permutations": "best: 20 shuffled-price runs, the smallest count that shows p <= 0.05 with room to spare "
