@@ -71,3 +71,36 @@ def test_spread_without_common_candles_raises():
     b.index = b.index + pd.Timedelta(hours=7)
     with pytest.raises(DataUnavailable):
         engine(KO=a, PEP=b).get_ohlc("KO:PEP", start=a.index[0], end=a.index[-1] + pd.Timedelta(days=2))
+
+
+def test_pair_across_currencies_is_converted():
+    a, b = make_ohlc(30, seed=1), make_ohlc(30, seed=2)
+    fx = a.copy() * 0 + 1.25  # 1 EUR = 1.25 USD, every day
+    fx = fx.iloc[:-3]  # a rate is missing for the last days: the last known one applies
+    eng = engine(KO=a, SAP=b, **{"EURUSD=X": fx})
+    eng.currency_lookup = {"KO": "USD", "SAP": "EUR"}.get
+    end = a.index[-1] + pd.Timedelta(days=1)
+    out = eng.get_ohlc("KO:SAP", start=a.index[0], end=end)
+    assert out["close"].iloc[-1] == pytest.approx(a["close"].iloc[-1] / (b["close"].iloc[-1] * 1.25))
+    with pytest.raises(DataUnavailable, match="intraday"):
+        eng.get_ohlc("KO:SAP", "1h", start=a.index[0], end=end)
+
+
+def test_pair_without_known_currency_or_rate_is_refused():
+    a, b = make_ohlc(30, seed=1), make_ohlc(30, seed=2)
+    end = a.index[-1] + pd.Timedelta(days=1)
+    eng = engine(KO=a, SAP=b)
+    eng.currency_lookup = {"KO": "USD"}.get  # SAP unknown
+    with pytest.raises(DataUnavailable, match="currencies"):
+        eng.get_ohlc("KO:SAP", start=a.index[0], end=end)
+    eng.currency_lookup = {"KO": "USD", "SAP": "EUR"}.get  # no FX series
+    with pytest.raises(DataUnavailable, match="exchange rate"):
+        eng.get_ohlc("KO:SAP", start=a.index[0], end=end)
+
+
+def test_quote_currency():
+    from tradebot.data.currency import quote_currency
+
+    assert quote_currency("BTC/USDT") == ("USD", 1.0)
+    assert quote_currency("ETH/EUR:EUR") == ("EUR", 1.0)
+    assert quote_currency("BP.L", {"BP.L": "GBp"}.get) == ("GBP", 0.01)
