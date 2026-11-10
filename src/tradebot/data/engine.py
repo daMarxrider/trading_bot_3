@@ -27,7 +27,7 @@ import time
 
 import pandas as pd
 
-from tradebot.core.models import AssetClass, guess_asset_class
+from tradebot.core.models import AssetClass, guess_asset_class, split_pair
 from tradebot.core.timeframes import to_timedelta
 from tradebot.data.cache import DiskCache
 from tradebot.data.providers import (
@@ -97,6 +97,15 @@ class MarketDataEngine:
         A ``bars`` request returns fewer candles only when no more history exists (provider limit
         or listing date); that is logged as a warning.
         """
+        legs = split_pair(symbol)
+        if legs is not None:  # a spread symbol (#117): built from both legs' candles
+            a, b = (self.get_ohlc(leg, timeframe, start, end, asset_class, bars) for leg in legs)
+            spread = ratio_ohlc(a, b)
+            if spread.empty:
+                raise DataUnavailable(f"{legs[0]} and {legs[1]} have no {timeframe} candles in common")
+            spread = spread.iloc[-bars:] if start is None and bars else spread
+            spread.attrs["offline"] = bool(a.attrs.get("offline") or b.attrs.get("offline"))
+            return spread
         step = to_timedelta(timeframe)
         end = _utc(end) if end is not None else pd.Timestamp.now(tz="UTC")
         asset_class = asset_class or guess_asset_class(symbol)
@@ -216,6 +225,17 @@ class MarketDataEngine:
 
     def latest_price(self, symbol: str) -> float:
         return float(self.get_ohlc(symbol, "1d", start=pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=10))["close"].iloc[-1])
+
+
+def ratio_ohlc(a: pd.DataFrame, b: pd.DataFrame) -> pd.DataFrame:
+    """Candles of the ratio ``a / b`` on the timestamps both have (stocks and crypto differ in calendar).
+    Open and close are the ratios of the legs' opens and closes; high and low just bound the two."""
+    idx = a.index.intersection(b.index)
+    o, c = a["open"].loc[idx] / b["open"].loc[idx], a["close"].loc[idx] / b["close"].loc[idx]
+    out = pd.DataFrame({"open": o, "high": pd.concat([o, c], axis=1).max(axis=1),
+                        "low": pd.concat([o, c], axis=1).min(axis=1), "close": c})
+    out.index.name = "timestamp"
+    return out.replace([float("inf"), float("-inf")], float("nan")).dropna()
 
 
 def _utc(ts) -> pd.Timestamp:

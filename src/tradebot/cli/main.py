@@ -1022,6 +1022,35 @@ def news(symbols: Annotated[Optional[list[str]], typer.Argument(autocompletion=c
 
 
 @app.command()
+def pair(symbol: Annotated[str, typer.Argument(help="Two symbols joined by a colon: KO:PEP, BTC/USDT:ETH/USDT")],
+         tf: Annotated[str, typer.Option(help="Timeframe")] = "1d",
+         bars: Annotated[int, typer.Option(help="Candles to analyse")] = 500):
+    """How far two assets that move together are apart now: z-score, hedge ratio, half-life.
+
+    The pair itself is also a symbol (``chart``, ``backtest``, ... accept ``KO:PEP``): the candles are the
+    ratio of the first to the second, so everything that works on one symbol works on the gap."""
+    from tradebot.analysis.pairs import pair_stats
+    from tradebot.core.models import split_pair
+
+    legs = split_pair(symbol)
+    if legs is None:
+        raise typer.BadParameter("write the pair as A:B, e.g. KO:PEP")
+    a, b = (load_data(leg, tf, None, None, bars)["close"] for leg in legs)
+    try:
+        st = pair_stats(a, b)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+    t = Table(title=f"{legs[0]} vs {legs[1]} · {tf} · {st.bars} common candles")
+    t.add_column("measure")
+    t.add_column("value", justify="right")
+    t.add_row("correlation of returns", f"{st.correlation:.2f}")
+    t.add_row("hedge ratio β (log a ≈ α + β·log b)", f"{st.beta:.2f}")
+    t.add_row("z-score of the gap now", f"{st.zscore:+.2f}")
+    t.add_row("half-life of a gap", "does not revert" if st.half_life is None else f"{st.half_life:.1f} candles")
+    console.print(t)
+
+
+@app.command()
 def halving(live: Annotated[bool, typer.Option(
         help="Also forecast from the current chain tip's pace (asks the Blockstream API)")] = False):
     """Past Bitcoin halvings, how far each was from the 4-year rule, and the forecast of the next ones."""
