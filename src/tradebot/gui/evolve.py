@@ -164,10 +164,16 @@ class EvolveView(QWidget):
         self.seed.setSpecialValueText("random")
 
         self._extra: dict = {}  # preset-only Evolver settings without a field (tournament, hall of fame, ...)
+        self.good_btn = QPushButton("Good")
+        self.good_btn.clicked.connect(lambda: self.use_best_result("good"))
+        self.good_btn.setToolTip(tooltip(explain("good_preset")))
         self.best_btn = QPushButton("Best result")
-        self.best_btn.clicked.connect(self.use_best_result)
-        self.auto_btn = QPushButton("Auto-configure")
-        self.auto_btn.clicked.connect(self.auto_configure)
+        self.best_btn.clicked.connect(lambda: self.use_best_result("best"))
+        self.auto_good_btn = QPushButton("Auto: good")
+        self.auto_good_btn.clicked.connect(lambda: self.auto_configure("good"))
+        self.auto_btn = QPushButton("Auto: best")
+        self.auto_btn.clicked.connect(lambda: self.auto_configure("best"))
+        self.auto_good_btn.setToolTip(tooltip(explain("auto_good")))
         self.auto_btn.setToolTip(tooltip(explain("auto_configure")))
         self.fast_btn = QPushButton("Fast (defaults)")
         self.fast_btn.clicked.connect(self.use_fast)
@@ -216,11 +222,11 @@ class EvolveView(QWidget):
             head.setToolTip(tooltip(explain(term)))
             box = card(head)
             if term == "evolve":
-                presets = QHBoxLayout()
-                presets.addWidget(self.best_btn)
-                presets.addWidget(self.auto_btn)
-                presets.addWidget(self.fast_btn)
-                box.layout().addLayout(presets)
+                for buttons in ((self.fast_btn, self.good_btn, self.best_btn), (self.auto_good_btn, self.auto_btn)):
+                    presets = QHBoxLayout()
+                    for b in buttons:
+                        presets.addWidget(b)
+                    box.layout().addLayout(presets)
             box.layout().addLayout(body)
             left.addWidget(box)
         ind_title = QLabel("Indicators")
@@ -367,15 +373,17 @@ class EvolveView(QWidget):
         self._extra = {k: values[k] for k in ("tournament", "crossover", "mutation", "elite", "hall_of_fame")
                        if k in values}
 
-    def use_best_result(self):
-        """Every setting for the best out-of-sample result, ignoring runtime (#101), scaled to the data."""
+    def use_best_result(self, level: str = "best"):
+        """Every setting for the best out-of-sample result (#101), scaled to the data. "good" keeps the run time
+        somewhat reasonable, "best" ignores it."""
         from tradebot.evolve import best_result_settings
 
         n = len(self._symbol_list()) or 1
-        self._apply(best_result_settings(self.bars.value(), n, from_scratch=self.from_scratch.isChecked()))
-        self.status.emit("best-result settings filled in: slow on purpose, every field can still be changed")
+        self._apply(best_result_settings(self.bars.value(), n, from_scratch=self.from_scratch.isChecked(),
+                                         level=level))
+        self.status.emit(f"{level} settings filled in: every field can still be changed")
 
-    def auto_configure(self):
+    def auto_configure(self, level: str = "best"):
         """Let a search pick the settings for this data (#101): runs in the background, fills the form, and
         reports every candidate. The newest test part is kept out of it; press Evolve afterwards."""
         from tradebot.evolve import auto_configure
@@ -391,7 +399,7 @@ class EvolveView(QWidget):
         self._phase = {"name": "auto-configuring", "offset": 0, "runs": 0}
         self.progress.setRange(0, 0)
         self.progress.show()
-        for b in (self.run_btn, self.auto_btn, self.best_btn, self.fast_btn):
+        for b in self._preset_buttons():
             b.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.status.emit("auto-configuring …")
@@ -408,10 +416,14 @@ class EvolveView(QWidget):
         def work():
             frames = self._data()
             data = frames if len(frames) > 1 else next(iter(frames.values()))
-            return auto_configure(data, from_scratch=scratch, objective=objective, seed=seed, on_trial=trial,
+            return auto_configure(data, from_scratch=scratch, objective=objective, level=level, seed=seed,
+                                  on_trial=trial,
                                   progress=generation, **fixed)
 
         run_async(work, self._auto_done, self._auto_fail)
+
+    def _preset_buttons(self):
+        return [self.run_btn, self.fast_btn, self.good_btn, self.best_btn, self.auto_good_btn, self.auto_btn]
 
     def _auto_step(self, done: int, total: int, label: str):
         self.progress.setRange(0, total)
@@ -420,7 +432,7 @@ class EvolveView(QWidget):
 
     def _auto_finish(self):
         self._finish()
-        for b in (self.auto_btn, self.best_btn, self.fast_btn):
+        for b in self._preset_buttons()[1:]:
             b.setEnabled(True)
 
     def _auto_fail(self, err):
