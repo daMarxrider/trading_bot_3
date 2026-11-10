@@ -194,10 +194,20 @@ def test_auto_configure_fills_the_form_and_reports(app, monkeypatch):
 
     monkeypatch.setattr(page, "run_async", sync)
     monkeypatch.setattr("tradebot.evolve.auto_configure",
-                        lambda df, **kw: real(df, candidates=3, rounds=2, population=20, generations=4, **kw))
+                        lambda df, **kw: real(df, candidates=3, rounds=2, population=20, generations=4, permutations=1,
+                                              folds=2, **kw))
     view = page.EvolveView(Engine(), ThemeManager(), ["AAA"])
     view.bars.setValue(900)
     view.auto_btn.click()
     assert view.auto_btn.isEnabled() and view.run_btn.isEnabled() and not view.stop_btn.isEnabled()
     assert "kept out" in view.info.text() and view.population.value() == 20
     assert view.permutations.value() >= 19
+
+
+def test_good_preset_is_lighter_than_best(app):
+    view = page.EvolveView(Engine(), ThemeManager(), ["AAA"])
+    view.bars.setValue(3000)
+    view.good_btn.click()
+    good = (view.population.value(), view.permutations.value())
+    view.best_btn.click()
+    assert good[0] < view.population.value() and good[1] < view.permutations.value()

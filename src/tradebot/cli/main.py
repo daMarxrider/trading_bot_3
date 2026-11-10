@@ -651,6 +651,11 @@ def evolve(
         "--best-result", help="Set every setting for the best out-of-sample result, ignoring runtime (much slower "
         "than the defaults): bigger search, shuffled-price runs, walk-forward folds, limits scaled to the data. "
         "Flags you give yourself still win")] = False,
+    effort: Annotated[str, typer.Option(
+        help="With --best-result or --auto-settings: good (somewhat reasonable run time) | best (ignores the run "
+        "time: more search, more shuffled-price runs and folds, and with --auto-settings every candidate setting "
+        "gets them too)", autocompletion=complete.choices(
+            ("good", "reasonable run time"), ("best", "ignores run time")))] = "best",
     auto_settings: Annotated[bool, typer.Option(
         "--auto-settings", help="Let a search pick the settings for this data first (successive halving over many "
         "settings, ranked by validation score minus the overfitting gap; the newest --test part is kept out of it "
@@ -698,6 +703,8 @@ def evolve(
     if best_result or auto_settings:
         from tradebot.evolve import auto_configure, best_result_settings
 
+        if effort not in ("good", "best"):
+            raise typer.BadParameter("good or best", param_hint="--effort")
         candles = min(len(f) for f in df.values()) if isinstance(df, dict) else len(df)
         if auto_settings:
             fixed = dict(fee=fee, align=align, dca_amount=dca_amount, state=state)
@@ -708,7 +715,8 @@ def evolve(
             with _Progress(console=console) as bar:
                 task = bar.add_task("auto-configuring", total=None)
                 try:
-                    auto = auto_configure(df, from_scratch=from_scratch, objective=objective, seed=seed, **fixed,
+                    auto = auto_configure(df, from_scratch=from_scratch, objective=objective, level=effort,
+                                          seed=seed, **fixed,
                                           on_trial=lambda i, n, label: bar.update(
                                               task, total=n, completed=i, description=f"auto-configuring: {label}"))
                 except ValueError as e:
@@ -717,7 +725,7 @@ def evolve(
                 console.print(f"[dim]{line}[/]")
             preset = auto.settings
         else:
-            preset = best_result_settings(candles, len(symbols), from_scratch=from_scratch)
+            preset = best_result_settings(candles, len(symbols), from_scratch=from_scratch, level=effort)
         given = {n for n in ctx.params if getattr(ctx.get_parameter_source(n), "name", "") == "COMMANDLINE"}
         population, generations, max_depth, max_size, islands, validation, test, segments, min_trades, parsimony, \
             aggregate, permutations, folds = (
@@ -729,7 +737,7 @@ def evolve(
         extra = {k: preset[k] for k in ("tournament", "crossover", "mutation", "elite", "hall_of_fame")}
         if "state" not in given:
             state = preset["state"]
-        console.print(f"[dim]{'auto-configured' if auto_settings else 'best result'}: population {population}, {generations} generations, depth {max_depth}, "
+        console.print(f"[dim]{'auto-configured' if auto_settings else 'best result'} ({effort}): population {population}, {generations} generations, depth {max_depth}, "
                       f"size {max_size}, {permutations} shuffled runs, {folds} folds, {segments} segments, "
                       f"min trades {min_trades}; this takes a long time[/]")
     else:
