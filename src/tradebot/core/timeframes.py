@@ -12,10 +12,17 @@ TIMEFRAMES: dict[str, pd.Timedelta] = {
     "15m": pd.Timedelta(minutes=15),
     "30m": pd.Timedelta(minutes=30),
     "1h": pd.Timedelta(hours=1),
+    "2h": pd.Timedelta(hours=2),
     "4h": pd.Timedelta(hours=4),
     "1d": pd.Timedelta(days=1),
     "1w": pd.Timedelta(weeks=1),
+    "1mo": pd.Timedelta(days=31),  # the longest month: gap checks must never mistake a month for a hole
 }
+
+
+def month_start(ts: pd.Timestamp) -> pd.Timestamp:
+    """The first instant of ``ts``'s calendar month, in its timezone."""
+    return ts.normalize().replace(day=1)
 
 
 def to_timedelta(timeframe: str) -> pd.Timedelta:
@@ -27,7 +34,7 @@ def to_timedelta(timeframe: str) -> pd.Timedelta:
 
 def resample(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
     """Aggregate a finer OHLC frame into ``timeframe`` candles."""
-    rule = to_timedelta(timeframe)
+    rule = "MS" if timeframe == "1mo" else to_timedelta(timeframe)  # calendar months aren't a fixed Timedelta
     agg = {"open": "first", "high": "max", "low": "min", "close": "last"}
     if "volume" in df.columns:
         agg["volume"] = "sum"

@@ -18,7 +18,7 @@ import pandas as pd
 import requests
 
 from tradebot.core.models import AssetClass, normalize_ohlc, to_ohlc_frame
-from tradebot.core.timeframes import resample, to_timedelta
+from tradebot.core.timeframes import month_start, resample, to_timedelta
 
 log = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ class CCXTDataProvider(BaseDataProvider):
     """Public (unauthenticated) candles from any ccxt exchange, with pagination."""
 
     asset_classes = frozenset({AssetClass.CRYPTO})
-    timeframes = frozenset({"1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"})
+    timeframes = frozenset({"1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w", "1mo"})
 
     def __init__(self, exchange_id: str = "binance", page_limit: int = 1000, exchange=None):
         import ccxt
@@ -90,6 +90,8 @@ class CCXTDataProvider(BaseDataProvider):
         self.page_limit = page_limit
 
     def fetch(self, symbol, timeframe, start, end):
+        if timeframe == "1mo":  # not on every exchange: built from days, from the first of the month
+            return resample(self.fetch(symbol, "1d", month_start(start), end), "1mo")
         since, end_ms = int(start.timestamp() * 1000), int(end.timestamp() * 1000)
         step = int(to_timedelta(timeframe).total_seconds() * 1000)
         rows: list = []
@@ -112,10 +114,11 @@ class YFinanceProvider(BaseDataProvider):
 
     name = "yfinance"
     asset_classes = frozenset({AssetClass.STOCK, AssetClass.CRYPTO})
-    timeframes = frozenset({"1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"})
-    _INTERVALS = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1h", "4h": "1h", "1d": "1d", "1w": "1wk"}
+    timeframes = frozenset({"1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w", "1mo"})
+    _INTERVALS = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1h", "2h": "1h", "4h": "1h", "1d": "1d",
+                  "1w": "1wk", "1mo": "1d"}
     # Yahoo rejects intraday requests reaching further back than 7 / 60 / 730 days; stay a day inside
-    _LIMIT_DAYS = {"1m": 6, "5m": 59, "15m": 59, "30m": 59, "1h": 729, "4h": 729}
+    _LIMIT_DAYS = {"1m": 6, "5m": 59, "15m": 59, "30m": 59, "1h": 729, "2h": 729, "4h": 729}
 
     def history_limit(self, timeframe):
         days = self._LIMIT_DAYS.get(timeframe)
@@ -133,13 +136,15 @@ class YFinanceProvider(BaseDataProvider):
     def fetch(self, symbol, timeframe, start, end):
         import yfinance as yf
 
+        if timeframe == "1mo":
+            start = month_start(start)  # whole months only, so the first candle isn't a partial one
         raw = yf.Ticker(self.map_symbol(symbol)).history(
             start=start, end=end, interval=self._INTERVALS[timeframe], auto_adjust=False, actions=False
         )
         if raw is None or raw.empty:
             raise DataUnavailable(f"yfinance: no candles for {symbol}")
         df = normalize_ohlc(raw)
-        return resample(df, timeframe) if timeframe == "4h" else df
+        return resample(df, timeframe) if timeframe in ("2h", "4h", "1mo") else df
 
 
 class AlphaVantageProvider(BaseDataProvider):

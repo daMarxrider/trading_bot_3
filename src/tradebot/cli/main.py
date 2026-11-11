@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Optional
 
+import numpy as np
 import pandas as pd
 import typer
 from rich.console import Console
@@ -1029,6 +1030,62 @@ def screen(
     for _, row in table.iterrows():
         t.add_row(*[_fmt_cell(c, row[c]) for c in table.columns])
     console.print(t)
+
+
+def parse_where(text: str) -> dict:
+    """``"fast > slow"`` / ``"rsi <= 30"`` -> a scanner filter."""
+    import re
+
+    m = re.fullmatch(r"\s*(\w+)\s*(>=|<=|==|!=|>|<)\s*(\S+)\s*", text)
+    if not m:
+        raise typer.BadParameter(f"{text!r}: use '<output> <op> <number|output>', e.g. 'fast > slow'", param_hint="--where")
+    output, op, value = m.groups()
+    try:
+        return {"output": output, "op": op, "value": float(value)}
+    except ValueError:
+        return {"output": output, "op": op, "value": value}
+
+
+@app.command()
+def scan(
+    symbols: Annotated[Optional[list[str]], typer.Argument(help="Defaults to the watchlists",
+                                                           autocompletion=complete.symbols)] = None,
+    indicator: Annotated[str, typer.Option("--indicator", "-i", help="Any scannable indicator",
+                                           autocompletion=complete.scannable)] = "ma_cross",
+    param: Annotated[list[str], typer.Option("--param", "-p", help="e.g. -p fast=9 -p slow=21")] = [],
+    timeframe: Annotated[str, typer.Option("--timeframe", "-t", autocompletion=complete.timeframes,
+                                           help="1m 5m 15m 30m 1h 2h 4h 1d 1w 1mo")] = "1d",
+    where: Annotated[list[str], typer.Option("--where", help='e.g. --where "fast > slow" --where "rsi < 30"')] = [],
+    alert: Annotated[list[str], typer.Option("--alert", help="Alert that must be on; !NAME: off. e.g. --alert cross_up")] = [],
+    watchlist: Annotated[Optional[str], typer.Option("--watchlist", "-w", help=WATCHLIST_HELP)] = None,
+):
+    """Scan symbols with one indicator, filtered on its values and alerts (the Scanner tab's engine)."""
+    from tradebot import scanner
+
+    params = {}
+    for item in param:
+        key, sep, value = item.partition("=")
+        try:
+            params[key] = float(value)
+        except ValueError:
+            raise typer.BadParameter(f"{item!r}: use name=number", param_hint="--param") from None
+    filters = [parse_where(w) for w in where] + [
+        {"alert": a.lstrip("!"), "state": not a.startswith("!")} for a in alert]
+    symbols = symbols or _watchlist(watchlist)
+    try:
+        with console.status("scanning ..."):
+            result = scanner.scan(symbols, indicator, params, timeframe, filters)
+    except (ValueError, KeyError, scanner.ScanBusy) as exc:
+        raise typer.BadParameter(str(exc.args[0] if exc.args else exc)) from None
+    t = Table(title=f"scan: {indicator} {timeframe}")
+    for c in result.table.columns:
+        t.add_column(c, justify="left" if c == "symbol" else "right")
+    for _, row in result.table.iterrows():
+        t.add_row(*[str(row[c]) if isinstance(row[c], (bool, np.bool_)) else _fmt_cell(c, row[c]) for c in result.table.columns])
+    console.print(t)
+    console.print(result.summary())
+    for sym, why in list(result.skipped.items())[:5]:
+        console.print(f"[dim]skipped {sym}: {why}[/]")
 
 
 WATCHLIST_HELP = "Without symbols: only this watchlist's (default: all watchlists)"
