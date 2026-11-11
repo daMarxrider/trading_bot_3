@@ -37,6 +37,7 @@ from tradebot.gui.settings import SettingsDialog
 from tradebot.legal import NOT_AFFILIATED, NO_WARRANTY
 from tradebot.gui.theme import GlassBackdrop, ThemeManager
 from tradebot.gui.touch import has_touchscreen
+from tradebot.gui.scanner import ScannerView
 from tradebot.gui.views import BacktestView, NewsView, PortfolioView, ScreenerView
 from tradebot.symbols import disk_symbol_search, symbol_name, yahoo_search
 
@@ -58,13 +59,16 @@ class MainWindow(QMainWindow):
                                     engine.disk.symbols_dir if engine.disk else None, yahoo=yahoo_search)
         self.chart = ChartView(engine, themes, symbols, settings, search)
         self.screener = ScreenerView(engine, themes, symbols)
+        self.scanner = ScannerView(engine, themes, lambda: self.chart.watchlists.lists, settings)
+        self.chart.watchlists.changed.connect(self.scanner.watchlists_changed)
         self.news = NewsView(themes, lambda: list(dict.fromkeys(self.chart.watchlists.all_symbols()
                                                                 + self.portfolio_symbols)))
         self.pairs = PairView(engine, themes, symbols)
         self.portfolio = PortfolioView(engine, themes)
         self.lab = BacktestView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)
         self.evolve = EvolveView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)
-        pages = [("Chart", "📈", self.chart), ("Screener", "🔎", self.screener), ("Backtest", "🧪", self.lab),
+        pages = [("Chart", "📈", self.chart), ("Screener", "🔎", self.screener),
+                 ("Scanner", "📡", self.scanner), ("Backtest", "🧪", self.lab),
                  ("Evolve", "🧬", self.evolve), ("Pairs", "⚖", self.pairs), ("Portfolio", "💼", self.portfolio), ("News", "📰", self.news)]
 
         self.stack = QStackedWidget()
@@ -104,6 +108,13 @@ class MainWindow(QMainWindow):
             self.chart.open_symbol(sym)
 
         self.screener.open_symbol.connect(chart_symbol)
+
+        def scanned_symbol(sym, timeframe, indicator, params):
+            self.stack.setCurrentWidget(self.chart)
+            group.buttons()[0].setChecked(True)
+            self.chart.show_scanned(sym, timeframe, indicator, params)
+
+        self.scanner.open_chart.connect(scanned_symbol)
         self.portfolio.open_symbol.connect(chart_symbol)
         self.portfolio.loaded.connect(lambda syms: setattr(self, "portfolio_symbols", syms))
 

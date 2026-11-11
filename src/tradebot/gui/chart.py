@@ -530,6 +530,18 @@ class ChartView(QWidget):
         self.symbol.setText(symbol)
         self.load()
 
+    def show_scanned(self, symbol: str, timeframe: str, indicator: str, params: dict):
+        """Chart a Scanner result: its timeframe, with the scanned indicator added (once)."""
+        from tradebot.indicators import INDICATORS
+
+        self.tf.blockSignals(True)
+        self.tf.setCurrentText(timeframe)
+        self.tf.blockSignals(False)
+        ind = INDICATORS.get(indicator)(**params)
+        if not any(i.name == ind.name and i.values == ind.values for i in self.indicators):
+            self.indicators.append(ind)
+        self.open_symbol(symbol)
+
     def load(self):
         symbol, tf, bars = self.symbol.text().strip(), self.tf.currentText(), int(self.bars.currentText())
         if not symbol:
