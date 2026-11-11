@@ -19,7 +19,7 @@ from typing import Callable
 
 import numpy as np
 import pandas as pd
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -57,6 +57,7 @@ DEFAULT_INDICATOR = "ma_cross"
 DEFAULT_TIMEFRAME = "1d"
 MAX_AUTO_COLUMNS = 10
 PROGRESS_AFTER_MS = 2000
+SUB_CHARS = 52  #: longer descriptions are cut in the picker rows (the tooltip has all of it)
 #: the engine's timeframes as the page labels them
 TF_LABELS = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1h", "2h": "2h", "4h": "4h",
              "1d": "1D", "1w": "1W", "1mo": "1M"}
@@ -80,6 +81,10 @@ def highlight(text: str, query: str) -> str:
 def pretty(name: str) -> str:
     """``ma_cross`` -> ``MA Cross``."""
     return " ".join(w.upper() if len(w) <= 4 else w.capitalize() for w in name.split("_"))
+
+
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}{'' if n == 1 else 's'}"
 
 
 def indicator_group(cls: type[BaseIndicator]) -> str:
@@ -179,7 +184,8 @@ class SearchList(QWidget):
             label.setTextFormat(Qt.TextFormat.RichText)
             label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
             label.setContentsMargins(6, 3, 6, 3)
-            item.setSizeHint(label.sizeHint())
+            item.setSizeHint(label.sizeHint().expandedTo(QSize(0, 26)))
+            item.setToolTip(tooltip(f"{row.title}: {row.sub}") if row.sub else "")
             self.list.setItemWidget(item, label)
         self.empty.setVisible(not shown)
         self.list.setVisible(bool(shown))
@@ -191,7 +197,8 @@ class SearchList(QWidget):
         parts = [f"{row.icon} " if row.icon else "", f"<b>{highlight(row.title, query)}</b>" if not query.strip()
                  else highlight(row.title, query)]
         if row.sub:
-            parts.append(f" <span style='opacity:0.7'>{highlight(row.sub, query)}</span>")
+            sub = row.sub if len(row.sub) <= SUB_CHARS else row.sub[:SUB_CHARS - 1].rstrip() + "…"
+            parts.append(f" <span style='opacity:0.7'>{highlight(sub, query)}</span>")
         if row.badge:
             parts.append(f" <small style='opacity:0.6'>· {escape(row.badge)}</small>")
         return "".join(parts)
@@ -241,7 +248,7 @@ class IndicatorDialog(QDialog):
         self.choice: str | None = None
         order = {"My scripts": 0, "Built-in": 1, "Community": 2}
         rows = [Row(c.name, pretty(c.name), c.description, group=indicator_group(c),
-                    badge=f"{len(plot_outputs(c))} plots · {len(c.alerts)} alerts", extra=c.name)
+                    badge=_count(len(plot_outputs(c)), "plot") + " · " + _count(len(c.alerts), "alert"), extra=c.name)
                 for c in sorted(classes, key=lambda c: (order[indicator_group(c)], c.name))]
         self.picker = SearchList("indicators", rows)
         self.picker.chosen.connect(self._pick)
@@ -436,11 +443,13 @@ class ScannerView(QWidget):
         self.table.doubleClicked.connect(self._row_opened)
 
         self.summary = QLabel()
+        self.summary_tail = QLabel()
         self.skipped_btn = QPushButton(flat=True)
         self.skipped_btn.clicked.connect(self.show_skipped)
         sm = QHBoxLayout()
         sm.addWidget(self.summary)
         sm.addWidget(self.skipped_btn)
+        sm.addWidget(self.summary_tail)
         sm.addStretch()
         self.summary_bar = QFrame()
         self.summary_bar.setLayout(sm)
@@ -651,6 +660,7 @@ class ScannerView(QWidget):
         while self.chips_box.count():
             w = self.chips_box.takeAt(0).widget()
             if w:
+                w.setParent(None)  # gone at once, not at the next event loop turn
                 w.deleteLater()
         self.chip_widgets = []
         for chip in self.chips:
@@ -811,10 +821,11 @@ class ScannerView(QWidget):
         total = len(symbols)
         tf = TF_LABELS[self.timeframe]
         if result.cancelled:
-            self.summary.setText(f"stopped after {result.scanned + len(result.skipped)} of {total}"
-                                 f" · {result.matched} match · {tf}")
+            head = f"stopped after {result.scanned + len(result.skipped)} of {total} · {result.matched} match"
         else:
-            self.summary.setText(f"{result.scanned} scanned · {result.matched} match · {result.seconds:.1f} s · {tf} ·")
+            head = f"{result.scanned} scanned · {result.matched} match"
+        self.summary.setText(head + (" ·" if result.skipped else " · 0 skipped"))
+        self.summary_tail.setText(f"· {result.seconds:.1f} s · {tf}")
         self.skipped_btn.setText(f"{len(result.skipped)} skipped")
         self.skipped_btn.setVisible(bool(result.skipped))
         self.summary_bar.show()

@@ -89,6 +89,11 @@ QToolButton {{ background: {input_bg}; border: 1px solid {panel_border}; border-
 QToolButton:checked {{ background: {accent}; color: #ffffff; }}
 QToolButton::menu-indicator {{ image: none; }}
 QToolButton#ChartCorner {{ padding: 0; min-height: 0; }}
+QTabWidget::pane {{ border: none; }}
+QTabBar::tab {{ background: {input_bg}; color: {muted}; border: 1px solid {panel_border}; border-radius: {radius_sm}px; padding: 5px 14px; margin-right: 4px; }}
+QTabBar::tab:selected {{ background: {selection}; color: {text}; }}
+QFrame#Chip {{ border: 1px solid {panel_border}; border-radius: {radius_sm}px; }}
+QFrame#Chip QToolButton {{ background: transparent; border: none; padding: 3px 6px; }}
 QFrame#ChartSidebar {{ background: {panel}; border: 1px solid {panel_border}; border-radius: {radius}px; }}
 QFrame#ChartSidebar QToolButton#SidebarToggle, QFrame#ChartSidebar QToolButton#SidebarTab {{
     background: transparent; border: none; border-radius: {radius_sm}px; padding: 0; min-height: 0; font-size: 24px; }}
