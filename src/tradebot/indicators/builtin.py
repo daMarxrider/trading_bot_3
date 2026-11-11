@@ -12,24 +12,37 @@ from tradebot.core.registry import IntParam, Param
 from tradebot.indicators.base import BaseIndicator, Style
 
 
+def _cross(a, b, up: bool):
+    """Alert array: ``a`` crosses above (``up``) or below ``b`` on this bar; NaN until both have two values."""
+    b = a * 0.0 + b  # a number becomes a constant line on a's backend
+    pa, pb = ops.shift(a, 1), ops.shift(b, 1)
+    return ops.flag(ops.cross_above(a, b) if up else ops.cross_below(a, b), a, b, pa, pb)
+
+
 class SMA(BaseIndicator):
     name = "sma"
     description = "Simple moving average of the close"
     params = {"period": IntParam(20, 2, 400)}
+    outputs = ("value", "cross_up", "cross_down")
+    alerts = {"cross_up": "Close crosses above the average", "cross_down": "Close crosses below the average"}
 
     @classmethod
     def compute(cls, o, period):
-        return {"value": ops.sma(o.close, period)}
+        ma = ops.sma(o.close, period)
+        return {"value": ma, "cross_up": _cross(o.close, ma, True), "cross_down": _cross(o.close, ma, False)}
 
 
 class EMA(BaseIndicator):
     name = "ema"
     description = "Exponential moving average of the close"
     params = {"period": IntParam(20, 2, 400)}
+    outputs = ("value", "cross_up", "cross_down")
+    alerts = {"cross_up": "Close crosses above the average", "cross_down": "Close crosses below the average"}
 
     @classmethod
     def compute(cls, o, period):
-        return {"value": ops.ema(o.close, period)}
+        ma = ops.ema(o.close, period)
+        return {"value": ma, "cross_up": _cross(o.close, ma, True), "cross_down": _cross(o.close, ma, False)}
 
 
 class RSI(BaseIndicator):
@@ -38,6 +51,8 @@ class RSI(BaseIndicator):
     params = {"period": IntParam(14, 2, 100)}
     overlay = False
     levels = (30.0, 70.0)
+    outputs = ("value", "cross_up", "cross_down")
+    alerts = {"cross_up": "RSI crosses above 70", "cross_down": "RSI crosses below 30"}
 
     @classmethod
     def compute(cls, o, period):
@@ -50,35 +65,55 @@ class RSI(BaseIndicator):
         rsi = ops.where(loss == 0, 100.0, rsi)
         # Wilder's average is undefined until `period` deltas have been seen
         rsi = ops.where(ops.isnan(ops.shift(o.close, period)), ops.NAN, rsi)
-        return {"value": rsi}
+        return {"value": rsi, "cross_up": _cross(rsi, 70.0, True), "cross_down": _cross(rsi, 30.0, False)}
 
 
 class MACD(BaseIndicator):
     name = "macd"
     description = "Moving Average Convergence/Divergence"
     params = {"fast": IntParam(12, 2, 100), "slow": IntParam(26, 3, 200), "signal": IntParam(9, 2, 100)}
-    outputs = ("macd", "signal", "hist")
+    outputs = ("macd", "signal", "hist", "cross_up", "cross_down")
     overlay = False
     levels = (0.0,)
+    alerts = {"cross_up": "MACD crosses above the signal line", "cross_down": "MACD crosses below the signal line"}
 
     @classmethod
     def compute(cls, o, fast, slow, signal):
         macd = ops.ema(o.close, fast) - ops.ema(o.close, slow)
         sig = ops.ema(macd, signal)
-        return {"macd": macd, "signal": sig, "hist": macd - sig}
+        return {"macd": macd, "signal": sig, "hist": macd - sig,
+                "cross_up": _cross(macd, sig, True), "cross_down": _cross(macd, sig, False)}
 
 
 class Bollinger(BaseIndicator):
     name = "bbands"
     description = "Bollinger Bands"
     params = {"period": IntParam(20, 2, 200), "width": Param(2.0, 0.5, 4.0)}
-    outputs = ("upper", "middle", "lower")
+    outputs = ("upper", "middle", "lower", "above_upper", "below_lower")
+    alerts = {"above_upper": "Close is above the upper band", "below_lower": "Close is below the lower band"}
 
     @classmethod
     def compute(cls, o, period, width):
         mid = ops.sma(o.close, period)
         dev = ops.rolling_std(o.close, period) * width
-        return {"upper": mid + dev, "middle": mid, "lower": mid - dev}
+        upper, lower = mid + dev, mid - dev
+        return {"upper": upper, "middle": mid, "lower": lower,
+                "above_upper": ops.flag(o.close > upper, upper), "below_lower": ops.flag(o.close < lower, lower)}
+
+
+class MACross(BaseIndicator):
+    name = "ma_cross"
+    description = "Fast and slow moving average (SMA or EMA) with cross alerts"
+    params = {"fast": IntParam(9, 2, 200), "slow": IntParam(21, 3, 400),
+              "ema": IntParam(0, 0, 1, "0: simple averages, 1: exponential")}
+    outputs = ("fast", "slow", "cross_up", "cross_down")
+    alerts = {"cross_up": "Fast MA crosses above slow MA", "cross_down": "Fast MA crosses below slow MA"}
+
+    @classmethod
+    def compute(cls, o, fast, slow, ema):
+        avg = ops.ema if ema else ops.sma
+        f, s = avg(o.close, fast), avg(o.close, slow)
+        return {"fast": f, "slow": s, "cross_up": _cross(f, s, True), "cross_down": _cross(f, s, False)}
 
 
 class ATR(BaseIndicator):
@@ -100,16 +135,18 @@ class Stochastic(BaseIndicator):
     name = "stoch"
     description = "Stochastic oscillator %K/%D"
     params = {"period": IntParam(14, 2, 100), "smooth": IntParam(3, 1, 20)}
-    outputs = ("k", "d")
+    outputs = ("k", "d", "cross_up", "cross_down")
     overlay = False
     levels = (20.0, 80.0)
+    alerts = {"cross_up": "%K crosses above %D", "cross_down": "%K crosses below %D"}
 
     @classmethod
     def compute(cls, o, period, smooth):
         hh, ll = ops.rolling_max(o.high, period), ops.rolling_min(o.low, period)
         with np.errstate(divide="ignore", invalid="ignore"):
             k = 100 * (o.close - ll) / (hh - ll)
-        return {"k": k, "d": ops.sma(k, smooth)}
+        d = ops.sma(k, smooth)
+        return {"k": k, "d": d, "cross_up": _cross(k, d, True), "cross_down": _cross(k, d, False)}
 
 
 # Custom Indicator made by daMarxrider
@@ -164,11 +201,17 @@ class Donchian(BaseIndicator):
     name = "donchian"
     description = "Donchian channel (highest high / lowest low)"
     params = {"period": IntParam(20, 2, 200)}
-    outputs = ("upper", "lower")
+    outputs = ("upper", "lower", "breakout_up", "breakout_down")
+    alerts = {"breakout_up": "Close breaks above the previous upper band",
+              "breakout_down": "Close breaks below the previous lower band"}
 
     @classmethod
     def compute(cls, o, period):
-        return {"upper": ops.rolling_max(o.high, period), "lower": ops.rolling_min(o.low, period)}
+        upper, lower = ops.rolling_max(o.high, period), ops.rolling_min(o.low, period)
+        prev_up, prev_low = ops.shift(upper, 1), ops.shift(lower, 1)  # the band before this bar's own high/low
+        return {"upper": upper, "lower": lower,
+                "breakout_up": ops.flag(o.close > prev_up, prev_up),
+                "breakout_down": ops.flag(o.close < prev_low, prev_low)}
 
 
 class Ichimoku(BaseIndicator):
@@ -182,7 +225,8 @@ class Ichimoku(BaseIndicator):
                                      "average of the two."),
         "span_b": IntParam(52, 10, 240, "Candles for span B, the cloud's slowest edge."),
     }
-    outputs = ("conversion", "base", "span_a", "span_b")
+    outputs = ("conversion", "base", "span_a", "span_b", "above_cloud", "below_cloud")
+    alerts = {"above_cloud": "Close is above the cloud", "below_cloud": "Close is below the cloud"}
 
     @classmethod
     def compute(cls, o, conversion, base, span_b):
@@ -190,7 +234,10 @@ class Ichimoku(BaseIndicator):
             return (ops.rolling_max(o.high, n) + ops.rolling_min(o.low, n)) / 2
 
         conv, base_line = mid(conversion), mid(base)
-        return {"conversion": conv, "base": base_line, "span_a": (conv + base_line) / 2, "span_b": mid(span_b)}
+        span_a, b = (conv + base_line) / 2, mid(span_b)
+        return {"conversion": conv, "base": base_line, "span_a": span_a, "span_b": b,
+                "above_cloud": ops.flag(o.close > ops.maximum(span_a, b), span_a, b),
+                "below_cloud": ops.flag(o.close < ops.minimum(span_a, b), span_a, b)}
 
 
 class Halving(BaseIndicator):

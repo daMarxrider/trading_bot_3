@@ -250,3 +250,11 @@ def cross_above(a, b):
 
 def cross_below(a, b):
     return (a < b) & (shift(a, 1) >= shift(b, 1))
+
+
+def flag(cond, *inputs):
+    """A 0/1 array from a boolean condition, NaN wherever any of ``inputs`` is NaN (warm-up), for indicator alerts."""
+    bad = isnan(inputs[0])
+    for x in inputs[1:]:
+        bad = bad | isnan(x)
+    return where(bad, NAN, cond * 1.0)

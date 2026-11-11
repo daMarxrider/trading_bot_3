@@ -321,7 +321,7 @@ def _indicator(cls: type[BaseIndicator], output: str, unit: str) -> Primitive:
     keys = tuple(cls.params)
     args = ", ".join("{%d}" % i for i in range(len(keys)))
     call = f"{cls.name}({args})" if keys else cls.name
-    text = call if cls.outputs == ("value",) else f"{call}.{output}"
+    text = call if cls.plot_outputs() == ("value",) else f"{call}.{output}"
     kw = ", ".join(f"{k}={{{i}}}" for i, k in enumerate(keys))
     code = f'rt.indicator("{cls.name}", o{", " + kw if kw else ""})["{output}"]'
     return Primitive(f"{cls.name}.{output}:{unit}", unit, tuple(cls.params[k] for k in keys), None, text, code,

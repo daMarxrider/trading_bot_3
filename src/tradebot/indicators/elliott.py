@@ -46,6 +46,7 @@ class ElliottWaves(BaseIndicator):
     labels = {"wave": ew.LABELS}
     label_anchor = "zigzag"
     hidden = ("state",)
+    screenable = False  # a chart pattern: labels change as new bars come in
 
     @classmethod
     def compute(cls, o, atr_period, swing_atr, min_score):
