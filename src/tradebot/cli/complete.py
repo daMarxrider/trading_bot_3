@@ -83,6 +83,15 @@ def indicators(incomplete: str) -> Completion:
     return [(prefix + n, d) for n, d in _starting(last, [(c.name, c.description) for c in INDICATORS]) if n not in taken]
 
 
+def scannable(incomplete: str) -> Completion:
+    """``scan --indicator``: the indicators the Scanner accepts."""
+    _plugins_loaded()
+    from tradebot.indicators import INDICATORS
+    from tradebot.indicators.base import is_screenable
+
+    return _starting(incomplete, [(c.name, c.description) for c in INDICATORS if is_screenable(c)[0]])
+
+
 def indicator_specs(incomplete: str) -> Completion:
     """``-i`` specs: indicator names, then ``name:param=`` for their parameters."""
     _plugins_loaded()
