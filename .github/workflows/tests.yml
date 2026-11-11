@@ -27,7 +27,23 @@ jobs:
           enable-cache: true
 
       - name: Qt runtime libraries (offscreen GUI tests)
-        run: sudo apt-get update -q && sudo apt-get install -y -q libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
+        # The runner image fetches packages from its own mirror (azure.archive.ubuntu.com, via
+        # /etc/apt/apt-mirrors.txt), which is sometimes unreachable. Retry, and from the third attempt on use
+        # archive.ubuntu.com directly.
+        run: |
+          opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+          for attempt in 1 2 3; do
+            if [ "$attempt" = 3 ]; then
+              echo "using archive.ubuntu.com instead of the runner's mirror"
+              sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|' \
+                /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+            fi
+            sudo apt-get update -q $opts || true
+            sudo apt-get install -y -q $opts libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 && exit 0
+            echo "apt attempt $attempt failed"
+            sleep $((attempt * 15))
+          done
+          exit 1
 
       # no `gpu` extra: torch is large and CI has no GPU; torch-only tests skip themselves
       - name: Install
