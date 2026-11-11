@@ -152,3 +152,52 @@ def test_stochastic_short_waves_defaults_and_drawing():
     assert not ssw.overlay and INDICATORS.get("ssw") is StochasticShortWaves
     colors = {k: s.color for k, s in ssw.styles.items()}
     assert colors == {"fast": "#ffeb3b", "slow": "#4caf50", "lower": "#4caf50", "first_drop": "#ff9800", "ath": "#ff5252"}
+
+
+def test_ma_cross_alerts_fire_on_exactly_the_crossing_bar():
+    from tradebot.indicators.builtin import MACross
+
+    close = np.r_[np.full(10, 10.0), np.linspace(10, 4, 8), np.linspace(4, 14, 12)]
+    df = pd.DataFrame({k: close for k in ("open", "high", "low", "close")})
+    out = MACross(fast=2, slow=4)(df)
+    fast, slow = out["ma_cross_fast"], out["ma_cross_slow"]
+    up, down = out["ma_cross_cross_up"], out["ma_cross_cross_down"]
+    ref_up = (fast > slow) & (fast.shift() <= slow.shift())
+    ref_down = (fast < slow) & (fast.shift() >= slow.shift())
+    valid = slow.shift().notna()
+    assert up[valid].astype(bool).equals(ref_up[valid]) and down[valid].astype(bool).equals(ref_down[valid])
+    assert up.sum() == 1 and down.sum() == 1 and up.idxmax() > down.idxmax()
+    assert up.iloc[:4].isna().all()  # warm-up is NaN, not False
+
+
+def test_alerts_are_hidden_zero_one_and_nan_in_warmup(ohlc):
+    for cls in INDICATORS:
+        for alert in cls.alerts:
+            assert alert in cls.outputs and alert in cls.hidden and not cls().is_line(f"{cls.name}_{alert}")
+            a = cls()(ohlc)[f"{cls.name}_{alert}"]
+            assert set(a.dropna().unique()) <= {0.0, 1.0} and a.iloc[0] != a.iloc[0]
+    assert [c.name for c in INDICATORS if c.alerts] == [
+        "bbands", "donchian", "ema", "ichimoku", "ma_cross", "macd", "rsi", "sma", "stoch"]
+
+
+def test_screenable_rules():
+    from tradebot.indicators.base import BaseIndicator, is_screenable
+
+    assert is_screenable(INDICATORS.get("ma_cross"))[0]
+    ok, why = is_screenable(INDICATORS.get("elliott"))
+    assert not ok and why
+
+    class OnlyHidden(BaseIndicator):
+        name = "only_hidden_test"
+        hidden = ("value",)
+
+        @classmethod
+        def compute(cls, o):
+            return {"value": o.close}
+
+    assert not is_screenable(OnlyHidden)[0]
+    INDICATORS._items.pop("only_hidden_test")
+
+
+def test_plugin_without_alerts_unchanged():
+    assert INDICATORS.get("atr").alerts == {} and INDICATORS.get("atr").hidden == ()

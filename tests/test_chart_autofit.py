@@ -104,9 +104,9 @@ def test_overlays_and_panes_fit_too(chart):
     x = chart._x
     chart.price.setXRange(x[100], x[150], padding=0)
     v = visible(chart, 100, 150)
-    bands = Bollinger()(chart.df).iloc[100:151]
+    bands = Bollinger()(chart.df)[["bbands_upper", "bbands_middle", "bbands_lower"]].iloc[100:151]
     assert_fits(chart.price, min(v.low.min(), bands.min().min()), max(v.high.max(), bands.max().max()))
-    rsi = RSI()(chart.df).iloc[100:151].to_numpy()
+    rsi = RSI()(chart.df)[["rsi_value"]].iloc[100:151].to_numpy()  # not the hidden alert columns
     (pane,) = chart.panes
     assert_fits(pane, rsi.min(), rsi.max())
 
@@ -263,7 +263,8 @@ def test_adding_indicators_through_the_menu_keeps_the_time_range(chart, added):
         app.processEvents()
     ranges = x_ranges(chart)
     assert all(r == pytest.approx(before, abs=1) for r in ranges)  # no collapse, no drift, all panes aligned
-    overlays = [ind(chart.df) for ind in chart.indicators if ind.overlay]  # all candles are visible
+    overlays = [(f := ind(chart.df))[[c for c in f if ind.is_line(c)]]  # drawn outputs, not the alerts
+                for ind in chart.indicators if ind.overlay]  # all candles are visible
     assert_fits(chart.price, min([chart.df.low.min()] + [f.min().min() for f in overlays]),
                 max([chart.df.high.max()] + [f.max().max() for f in overlays]))
 

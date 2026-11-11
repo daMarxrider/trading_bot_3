@@ -26,6 +26,12 @@ How each output is drawn can be set with :attr:`BaseIndicator.styles`::
 
 Outputs without a style (or colour) get the theme's palette colours.
 
+Alert conditions (#108) are named true/false states per bar, declared with :attr:`BaseIndicator.alerts`
+(``{output: description}``). The output is an array of 0/1 (NaN while warming up) that ``compute`` returns like any
+other output; alert outputs are always hidden, so the chart doesn't draw them and the evolver doesn't use them as
+numbers. The Scanner filters on them and uses the first two as filter templates. Build them with
+:func:`tradebot.core.ops.flag`. :attr:`BaseIndicator.screenable` marks indicators that can't be screened.
+
 The strategy evolver (``tradebot evolve``, #83) builds rules from every indicator output whose value on a
 bar depends only on that bar and earlier ones (checked automatically), using :attr:`BaseIndicator.units`
 to know what an output can be compared with.
@@ -81,8 +87,17 @@ class BaseIndicator(ABC):
     #: otherwise the indicator's own unit (comparable with its other outputs and its ``levels``).
     units: ClassVar[dict[str, str]] = {}
 
+    #: Alert conditions ``{output: description}``; each output is 0/1 per bar (NaN while warming up).
+    #: Alert outputs are implicitly hidden. The order matters: the Scanner uses the first two as filter templates.
+    alerts: ClassVar[dict[str, str]] = {}
+    #: False for indicators the Scanner must not list (e.g. chart patterns whose labels change with new bars).
+    screenable: ClassVar[bool] = True
+
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
+        extra = tuple(a for a in cls.alerts if a not in cls.hidden)
+        if extra:
+            cls.hidden = (*cls.hidden, *extra)
         INDICATORS.register(cls)
 
     def __init__(self, **params):
@@ -106,7 +121,25 @@ class BaseIndicator(ABC):
         out = self.output_of(column)
         return out not in self.labels and out not in self.hidden
 
+    @classmethod
+    def plot_outputs(cls) -> tuple[str, ...]:
+        """Outputs that aren't alerts."""
+        return tuple(o for o in cls.outputs if o not in cls.alerts)
+
     @property
     def label(self) -> str:
         args = ",".join(str(v) for v in self.values.values())
         return f"{self.name}({args})" if args else self.name
+
+
+def is_screenable(cls: type[BaseIndicator]) -> tuple[bool, str]:
+    """Whether the Scanner may list ``cls``, and if not, why (for the picker's tooltip).
+
+    Needs ``screenable``, and at least one output the Scanner can show (a visible line or label output) or an alert.
+    """
+    if not cls.screenable:
+        return False, "chart pattern: its values change as new bars come in"
+    shown = [o for o in cls.outputs if o not in cls.hidden or o in cls.alerts]
+    if not shown and not cls.alerts:
+        return False, "no plot and no alert to screen on"
+    return True, ""

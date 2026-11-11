@@ -817,7 +817,7 @@ class ChartView(QWidget):
         adding other indicators doesn't recolour it."""
         if id(ind) not in self._slots:
             self._slots[id(ind)] = self._next_slot
-            self._next_slot += len(ind.outputs)
+            self._next_slot += len(ind.plot_outputs())
         return self._slots[id(ind)]
 
     def _draw_labels(self, target, ind, frame, col, x, close, t):
