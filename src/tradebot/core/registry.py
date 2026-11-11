@@ -18,6 +18,7 @@ import inspect
 import logging
 import os
 import sys
+from contextlib import contextmanager
 from dataclasses import KW_ONLY, dataclass
 from importlib.metadata import entry_points
 from pathlib import Path
@@ -63,13 +64,23 @@ class Registry(Generic[T]):
     def __init__(self, kind: str):
         self.kind = kind
         self._items: dict[str, type[T]] = {}
+        self._reloading = False
+
+    @contextmanager
+    def reloading(self) -> Iterator[None]:
+        """Inside, replacing a class by a same-named one is deliberate (a script reload): no warning."""
+        self._reloading = True
+        try:
+            yield
+        finally:
+            self._reloading = False
 
     def register(self, cls: type[T]) -> type[T]:
         name = getattr(cls, "name", None)
         if not name or inspect.isabstract(cls):
             return cls
         existing = self._items.get(name)
-        if existing is not None and existing is not cls:
+        if existing is not None and existing is not cls and not self._reloading:
             log.warning("%s %r re-registered by %s.%s", self.kind, name, cls.__module__, cls.__qualname__)
         self._items[name] = cls
         return cls

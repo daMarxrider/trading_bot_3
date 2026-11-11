@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QTabWidget,
     QToolButton,
     QVBoxLayout,
@@ -43,11 +44,13 @@ from PyQt6.QtWidgets import (
 )
 
 from tradebot import scanner as engine_scan
-from tradebot import universes
+from tradebot import scripts, universes
 from tradebot.config import Settings
 from tradebot.core.registry import resolve_params
-from tradebot.gui.common import DataFrameModel, pct, run_async, tooltip
+from tradebot.core.series import OHLC
+from tradebot.gui.common import DataFrameModel, Panes, pct, run_async, tooltip
 from tradebot.gui.params import ParamDialog
+from tradebot.gui.script_editor import ScriptEditor
 from tradebot.gui.theme import ThemeManager
 from tradebot.gui.touch import enable_kinetic_scroll
 from tradebot.indicators import INDICATORS
@@ -57,7 +60,7 @@ DEFAULT_INDICATOR = "ma_cross"
 DEFAULT_TIMEFRAME = "1d"
 MAX_AUTO_COLUMNS = 10
 PROGRESS_AFTER_MS = 2000
-SUB_CHARS = 52  #: longer descriptions are cut in the picker rows (the tooltip has all of it)
+SUB_CHARS = 46  #: longer descriptions are cut in the picker rows (the tooltip has all of it)
 #: the engine's timeframes as the page labels them
 TF_LABELS = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1h", "2h": "2h", "4h": "4h",
              "1d": "1D", "1w": "1W", "1mo": "1M"}
@@ -135,6 +138,7 @@ class Row:
     badge: str = ""
     icon: str = ""
     extra: str = ""  #: more text the search matches
+    action: str = ""  #: text of a button on the row (e.g. "Edit")
 
     def matches(self, query: str) -> bool:
         q = query.strip().lower()
@@ -145,6 +149,7 @@ class SearchList(QWidget):
     """A search field above a list of rows; the matching part is highlighted, an empty result says so."""
 
     chosen = pyqtSignal(str)
+    action = pyqtSignal(str)  #: the button of this row's key was clicked
 
     def __init__(self, noun: str, rows: list[Row], parent=None):
         super().__init__(parent)
@@ -153,6 +158,7 @@ class SearchList(QWidget):
         self.search.textChanged.connect(self.render)
         self.list = QListWidget()
         self.list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         enable_kinetic_scroll(self.list)
         self.list.itemClicked.connect(self._clicked)
         self.empty = QLabel(objectName="Muted", alignment=Qt.AlignmentFlag.AlignCenter)
@@ -182,11 +188,24 @@ class SearchList(QWidget):
             self.list.addItem(item)
             label = QLabel(self._html(row, query))
             label.setTextFormat(Qt.TextFormat.RichText)
-            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
             label.setContentsMargins(6, 3, 6, 3)
-            item.setSizeHint(label.sizeHint().expandedTo(QSize(0, 26)))
+            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)  # clipped, so the button stays in view
+            label.setMinimumWidth(1)  # the label is clipped, never the button
+            holder = QWidget()
+            holder.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)  # a click on the row picks it
+            hl = QHBoxLayout(holder)
+            hl.setContentsMargins(0, 0, 4, 0)
+            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            if row.action:
+                btn = QToolButton(text=row.action)
+                btn.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+                btn.setMinimumWidth(btn.fontMetrics().horizontalAdvance(row.action) + 36)
+                btn.clicked.connect(lambda _, k=row.key: self.action.emit(k))
+                hl.addWidget(btn)  # on the left: the text after it is what gets clipped
+            hl.addWidget(label, 1)
+            item.setSizeHint(QSize(0, max(30, holder.sizeHint().height())))  # the width follows the list
             item.setToolTip(tooltip(f"{row.title}: {row.sub}") if row.sub else "")
-            self.list.setItemWidget(item, label)
+            self.list.setItemWidget(item, holder)
         self.empty.setVisible(not shown)
         self.list.setVisible(bool(shown))
         self.empty.setText(f"No {self.noun} match ‘{query.strip()}’." if shown == [] and query.strip()
@@ -244,15 +263,22 @@ class IndicatorDialog(QDialog):
     def __init__(self, classes: list[type[BaseIndicator]], hidden: dict[str, str], parent=None):
         super().__init__(parent)
         self.setWindowTitle("Scan indicator")
-        self.setMinimumSize(480, 480)
+        self.setMinimumSize(640, 480)
         self.choice: str | None = None
+        self.script_action: tuple[str, str] | None = None  #: ("new" | "edit" | "copy", indicator name)
         order = {"My scripts": 0, "Built-in": 1, "Community": 2}
         rows = [Row(c.name, pretty(c.name), c.description, group=indicator_group(c),
-                    badge=_count(len(plot_outputs(c)), "plot") + " · " + _count(len(c.alerts), "alert"), extra=c.name)
+                    badge=_count(len(plot_outputs(c)), "plot") + " · " + _count(len(c.alerts), "alert"), extra=c.name,
+                    action="Edit" if indicator_group(c) == "My scripts" else "Copy to my scripts")
                 for c in sorted(classes, key=lambda c: (order[indicator_group(c)], c.name))]
         self.picker = SearchList("indicators", rows)
         self.picker.chosen.connect(self._pick)
+        self.picker.action.connect(lambda key: self._script("edit" if key in {r.key for r in rows if r.action == "Edit"}
+                                                            else "copy", key))
+        new = QPushButton("New script …", toolTip="Write your own indicator in Python")
+        new.clicked.connect(lambda: self._script("new", ""))
         lay = QVBoxLayout(self)
+        lay.addWidget(new)
         lay.addWidget(self.picker)
         if hidden:
             foot = QLabel(NOT_SCREENABLE_FOOTER.format(n=len(hidden), s="" if len(hidden) == 1 else "s"))
@@ -262,6 +288,10 @@ class IndicatorDialog(QDialog):
 
     def _pick(self, key: str):
         self.choice = key
+        self.accept()
+
+    def _script(self, action: str, key: str):
+        self.script_action = (action, key)
         self.accept()
 
 
@@ -352,12 +382,14 @@ class ScannerView(QWidget):
     status = pyqtSignal(str)
     #: chart this symbol: (symbol, timeframe, indicator name, params)
     open_chart = pyqtSignal(str, str, str, object)
+    #: a script was reloaded: the names of the indicators it defines (the chart redraws them)
+    indicator_reloaded = pyqtSignal(list)
     _progress = pyqtSignal(int, int)
 
     def __init__(self, engine, themes: ThemeManager, lists: Callable[[], dict[str, list[str]]],
                  settings: Settings | None = None, scan_fn=None, index_fn=None):
         super().__init__()
-        self.themes, self.lists, self.settings = themes, lists, settings
+        self.engine, self.themes, self.lists, self.settings = engine, themes, lists, settings
         self.scan_fn = scan_fn or engine_scan.scan
         cache = getattr(getattr(engine, "disk", None), "symbols_dir", None)
         self.index_fn = index_fn or (lambda key: universes.index_symbols(key, cache))
@@ -455,7 +487,8 @@ class ScannerView(QWidget):
         self.summary_bar.setLayout(sm)
         self.summary_bar.hide()
 
-        lay = QVBoxLayout(self)
+        main = QWidget()
+        lay = QVBoxLayout(main)
         lay.setContentsMargins(16, 16, 16, 16)
         lay.addWidget(title)
         lay.addLayout(bar)
@@ -467,6 +500,19 @@ class ScannerView(QWidget):
         hint = QLabel("Columns are the indicator's own outputs · double-click a row to chart it", objectName="Muted")
         lay.addWidget(hint)
         self.themes.changed.connect(lambda _: self._style_stale())
+
+        self.editor = ScriptEditor(self.themes, self._sample)
+        self.editor.setContentsMargins(0, 16, 16, 16)
+        self.editor.reloaded.connect(self._script_reloaded)
+        self.editor.closed.connect(self.editor.hide)
+        self.editor.status.connect(self.status)
+        self.editor.hide()
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.panes = Panes(Qt.Orientation.Horizontal, "scanner.panes", self.settings)
+        self.panes.add(main, 3)
+        self.panes.add(self.editor, 2)
+        outer.addWidget(self.panes)
 
     # -- settings -----------------------------------------------------------------------------------
     def _get(self, key, default=None):
@@ -547,8 +593,50 @@ class ScannerView(QWidget):
     def choose_indicator(self):
         classes, hidden = screenable_split()
         dlg = IndicatorDialog(classes, hidden, self)
-        if dlg.exec() and dlg.choice:
+        if not dlg.exec():
+            return
+        if dlg.script_action:
+            self.open_script(*dlg.script_action)
+        elif dlg.choice:
             self._set_indicator(dlg.choice)
+
+    # -- scripts (#115) -----------------------------------------------------------------------------
+    def open_script(self, action: str, name: str = "") -> bool:
+        """Open the editor on a new script, a script of mine (``edit``) or a copy of another indicator."""
+        if action == "new":
+            path, source = scripts.new_script()
+            ok = self.editor.open_script(path, source, saved=False)
+        elif action == "edit":
+            path = scripts.source_path(INDICATORS.get(name))
+            if path is None or not path.exists():
+                self.status.emit(f"Scanner: can't find the file of {name}")
+                return False
+            ok = self.editor.open_script(path)
+        else:
+            path, source = scripts.copy_of(INDICATORS.get(name))
+            ok = self.editor.open_script(path, source, saved=False)
+        if ok:
+            self.editor.show()
+        return ok
+
+    def _sample(self):
+        """The first source symbol's candles for a script's dry run (None: a synthetic series)."""
+        if not self.symbols or self.engine is None:
+            return None
+        try:
+            df = self.engine.peek(self.symbols[0], self.timeframe, bars=scripts.DRY_RUN_BARS)
+            return None if df is None or df.empty else OHLC.from_frame(df.tail(scripts.DRY_RUN_BARS))
+        except Exception:
+            return None
+
+    def _script_reloaded(self, names: list):
+        """A reload succeeded: the Scanner's indicator, its columns and filters, and the charts follow."""
+        if self.cls.name in names:
+            self.cls = INDICATORS.get(self.cls.name)
+            self._load_indicator_state()
+            self._refresh_table()
+            self._check_stale()  # the class changed, so the rows are stale: Rescan
+        self.indicator_reloaded.emit(names)
 
     def edit_params(self):
         values = ParamDialog.ask(pretty(self.cls.name), self.cls.params, self.params, self)
@@ -721,6 +809,8 @@ class ScannerView(QWidget):
 
     def _refresh_table(self):
         cols = list(self.columns)
+        if self.result is not None and not set(cols) <= set(self.result.table.columns):
+            self.result = None  # a reloaded script has other outputs than the rows
         if self.result is not None:
             frame = self.result.table[["symbol", *cols]]
         else:
@@ -741,7 +831,7 @@ class ScannerView(QWidget):
 
     # -- scan ---------------------------------------------------------------------------------------
     def _signature(self):
-        return (self.source, hash(tuple(self.symbols)), self.cls.name, tuple(sorted(self.params.items())),
+        return (self.source, hash(tuple(self.symbols)), self.cls.name, id(self.cls), tuple(sorted(self.params.items())),
                 self.timeframe, repr(self.active_filters()))
 
     def _check_stale(self):

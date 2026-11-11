@@ -530,6 +530,21 @@ class ChartView(QWidget):
         self.symbol.setText(symbol)
         self.load()
 
+    def reload_indicators(self, names: list[str]):
+        """Scripts were reloaded: the indicators of these names are redrawn from the new classes."""
+        from tradebot.indicators import INDICATORS
+
+        changed = False
+        for i, ind in enumerate(self.indicators):
+            if ind.name in names and type(ind) is not INDICATORS.get(ind.name):
+                try:
+                    self.indicators[i] = INDICATORS.get(ind.name)(**ind.values)
+                except Exception:  # the inputs no longer fit the new version: its defaults
+                    self.indicators[i] = INDICATORS.get(ind.name)()
+                changed = True
+        if changed:
+            self.redraw()
+
     def show_scanned(self, symbol: str, timeframe: str, indicator: str, params: dict):
         """Chart a Scanner result: its timeframe, with the scanned indicator added (once)."""
         from tradebot.indicators import INDICATORS

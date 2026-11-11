@@ -61,6 +61,7 @@ class MainWindow(QMainWindow):
         self.screener = ScreenerView(engine, themes, symbols)
         self.scanner = ScannerView(engine, themes, lambda: self.chart.watchlists.lists, settings)
         self.chart.watchlists.changed.connect(self.scanner.watchlists_changed)
+        self.scanner.indicator_reloaded.connect(self.chart.reload_indicators)
         self.news = NewsView(themes, lambda: list(dict.fromkeys(self.chart.watchlists.all_symbols()
                                                                 + self.portfolio_symbols)))
         self.pairs = PairView(engine, themes, symbols)
