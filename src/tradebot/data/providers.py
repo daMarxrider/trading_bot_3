@@ -36,6 +36,22 @@ def quiet_yfinance() -> None:
     warnings.filterwarnings("ignore", category=DeprecationWarning, module="yfinance")
 
 
+def sectors(symbols: list[str], map_symbol=lambda s: s) -> dict[str, str]:
+    """Sector of each symbol from Yahoo (``"Consumer Defensive"``); symbols Yahoo knows no sector for
+    (crypto, unknown tickers, network errors) are left out."""
+    import yfinance as yf
+
+    out = {}
+    for sym in symbols:
+        try:
+            sector = (yf.Ticker(map_symbol(sym)).info or {}).get("sector")
+        except Exception:
+            sector = None
+        if sector:
+            out[sym] = sector
+    return out
+
+
 class DataUnavailable(RuntimeError):
     pass
 

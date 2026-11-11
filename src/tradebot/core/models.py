@@ -91,6 +91,16 @@ def guess_asset_class(symbol: str) -> AssetClass:
     return AssetClass.CRYPTO if "/" in symbol else AssetClass.STOCK
 
 
+def split_pair(symbol: str) -> tuple[str, str] | None:
+    """``KO:PEP`` or ``BTC/USDT:ETH/USDT`` -> the two legs (#117); anything else is no pair.
+
+    ``BTC/USDT:USDT`` (an exchange's perpetual contract) is one symbol: a slash on one side only."""
+    a, sep, b = symbol.partition(":")
+    if not sep or not a or not b or ":" in b or ("/" in a) != ("/" in b):
+        return None
+    return a, b
+
+
 def to_ohlc_frame(rows) -> pd.DataFrame:
     """Build a normalized OHLC frame (UTC DatetimeIndex, float columns) from raw rows.
 

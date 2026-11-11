@@ -880,6 +880,17 @@ def _print_comparison_results(cmp) -> None:
         warn_not_beaten(r.test_baselines, "Out-of-sample", f"the {r.method.upper()} result")
 
 
+def confirm_live_risk(live: bool) -> None:
+    """Ask once for the live-trading risk acceptance, then remember it in config.toml (#58)."""
+    from tradebot import legal
+
+    if live and not legal.live_risk_accepted():
+        console.print(legal.LIVE_RISK, highlight=False)
+        typer.confirm("Do you understand and accept this?", abort=True)
+        if not legal.accept_live_risk():
+            console.print("[yellow]couldn't save the acceptance to the config file; you'll be asked again next time[/]")
+
+
 @bot_app.command("run")
 def bot_run(
     symbol: Symbol,
@@ -894,14 +905,9 @@ def bot_run(
     once: Annotated[bool, typer.Option(help="Evaluate a single candle and exit")] = False,
 ):
     """Run an algorithm live against a broker (dry run unless --live)."""
-    from tradebot import legal
     from tradebot.live import TradingBot
 
-    if live and not legal.live_risk_accepted():  # asked once, then remembered in config.toml (#58)
-        console.print(legal.LIVE_RISK, highlight=False)
-        typer.confirm("Do you understand and accept this?", abort=True)
-        if not legal.accept_live_risk():
-            console.print("[yellow]couldn't save the acceptance to the config file; you'll be asked again next time[/]")
+    confirm_live_risk(live)
 
     kwargs = {"sandbox": True} if sandbox else {}
     b = create_broker(broker, **kwargs)
@@ -915,6 +921,49 @@ def bot_run(
                          + (f" order {e.order.id} {e.order.status.value}" if e.order else "")))
     mode = "[red]LIVE[/]" if live else "[yellow]dry run[/]"
     console.print(f"bot {algo} on {broker}:{symbol} {tf}, stake {stake} · {mode} · {b.execution_mode.value}")
+    try:
+        bot.run(max_steps=1 if once else None)
+    except KeyboardInterrupt:
+        console.print("stopped")
+
+
+@bot_app.command("pair-run")
+def bot_pair_run(
+    leg_a: Annotated[str, typer.Argument(help="First leg, e.g. BTC/USDT:USDT")],
+    leg_b: Annotated[str, typer.Argument(help="Second leg, e.g. ETH/USDT:USDT")],
+    broker: Broker = "binance",
+    tf: TF = "1h",
+    stake: Annotated[float, typer.Option(help="Quote-currency value of both legs together per entry")] = 100.0,
+    window: Annotated[int, typer.Option(help="Candles for the rolling hedge ratio and z-score")] = 60,
+    entry: Annotated[float, typer.Option(help="Open when the gap is this many σ wide")] = 2.0,
+    exit: Annotated[float, typer.Option(help="Close when it is back inside this many σ")] = 0.5,
+    stop: Annotated[float, typer.Option(help="Give up beyond this many σ")] = 4.0,
+    method: Annotated[str, typer.Option(help="Hedge ratio: rolling or kalman")] = "rolling",
+    live: Annotated[bool, typer.Option(help="Actually place orders (default: dry run)")] = False,
+    sandbox: Annotated[bool, typer.Option(help="Use the exchange testnet (ccxt brokers)")] = False,
+    once: Annotated[bool, typer.Option(help="Evaluate a single candle and exit")] = False,
+):
+    """Trade the gap of two assets live: long one and short the other (dry run unless --live).
+
+    The short leg is a plain sell, so the broker needs margin or futures for it: give the legs as symbols it
+    can short. The bot doesn't remember an open pair across a restart."""
+    from tradebot.live import PairBot
+
+    legs, symbol = (leg_a, leg_b), f"{leg_a} / {leg_b}"
+    confirm_live_risk(live)
+    b = create_broker(broker, **({"sandbox": True} if sandbox else {}))
+    if live and not b.can_trade:
+        raise typer.BadParameter(f"{broker} is read-only")
+    try:
+        bot = PairBot(b, legs, tf, stake, window, entry, exit, stop, method, dry_run=not live,
+                      on_event=lambda e: console.print(
+                          f"[dim]{e.time:%Y-%m-%d %H:%M}[/] {e.pair} z={e.z:+.2f} β={e.beta:.2f} → [bold]{e.action}[/]"
+                          + (f" {e.amount_a:.6g} {legs[0]} / {e.amount_b:.6g} {legs[1]}" if e.action != "hold" else "")
+                          + (" [yellow](dry run)[/]" if e.dry_run else "")))
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+    mode = "[red]LIVE[/]" if live else "[yellow]dry run[/]"
+    console.print(f"pair bot {symbol} on {broker} {tf}, stake {stake} · {mode} · {b.execution_mode.value}")
     try:
         bot.run(max_steps=1 if once else None)
     except KeyboardInterrupt:
@@ -1019,6 +1068,132 @@ def news(symbols: Annotated[Optional[list[str]], typer.Argument(autocompletion=c
     for n in items:
         console.print(f"[dim]{n.published:%Y-%m-%d %H:%M}[/] [cyan]{n.symbol:>9}[/] [bold]{n.title}[/] "
                       f"[dim]({n.publisher})[/]\n           [link={n.url}]{n.url}[/link]")
+
+
+@app.command()
+def pair(symbol: Annotated[str, typer.Argument(help="Two symbols joined by a colon: KO:PEP, BTC/USDT:ETH/USDT")],
+         tf: Annotated[str, typer.Option(help="Timeframe")] = "1d",
+         bars: Annotated[int, typer.Option(help="Candles to analyse")] = 500):
+    """How far two assets that move together are apart now: z-score, hedge ratio, half-life.
+
+    The pair itself is also a symbol (``chart``, ``backtest``, ... accept ``KO:PEP``): the candles are the
+    ratio of the first to the second, so everything that works on one symbol works on the gap."""
+    from tradebot.analysis.pairs import pair_stats
+    from tradebot.core.models import split_pair
+
+    legs = split_pair(symbol)
+    if legs is None:
+        raise typer.BadParameter("write the pair as A:B, e.g. KO:PEP")
+    a, b = (load_data(leg, tf, None, None, bars)["close"] for leg in legs)
+    try:
+        st = pair_stats(a, b)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+    t = Table(title=f"{legs[0]} vs {legs[1]} · {tf} · {st.bars} common candles")
+    t.add_column("measure")
+    t.add_column("value", justify="right")
+    t.add_row("correlation of returns", f"{st.correlation:.2f}")
+    t.add_row("hedge ratio β (log a ≈ α + β·log b)", f"{st.beta:.2f}")
+    t.add_row("z-score of the gap now", f"{st.zscore:+.2f}")
+    t.add_row("half-life of a gap", "does not revert" if st.half_life is None else f"{st.half_life:.1f} candles")
+    from tradebot.analysis.pairs import cointegration, pair_health
+
+    co = cointegration(a, b)
+    t.add_row("cointegration (Engle-Granger)", f"t = {co.stat:.2f}, {co.p_text}" + (" ✓" if co.passed else ""))
+    console.print(t)
+    try:
+        health = pair_health(a, b)
+    except ValueError:
+        return
+    if health.broken:
+        console.print("[bold red]this pair may have stopped working:[/] " + "; ".join(health.reasons))
+    else:
+        console.print("[green]the last 60 candles still look like the history before them[/]")
+
+
+@app.command("pair-backtest")
+def pair_backtest_(
+        symbol: Annotated[str, typer.Argument(help="A:B, e.g. KO:PEP: long one leg and short the other")],
+        tf: Annotated[str, typer.Option(help="Timeframe")] = "1d",
+        bars: Annotated[int, typer.Option(help="Candles")] = 1500,
+        window: Annotated[int, typer.Option(help="Candles for the rolling hedge ratio and z-score")] = 60,
+        entry: Annotated[float, typer.Option(help="Open when the gap is this many σ wide")] = 2.0,
+        exit: Annotated[float, typer.Option(help="Close when it is back inside this many σ")] = 0.5,
+        stop: Annotated[float, typer.Option(help="Give up beyond this many σ")] = 4.0,
+        fee: Annotated[float, typer.Option(help="Fee per change of either leg")] = 0.001,
+        borrow: Annotated[float, typer.Option(help="Yearly cost of the short leg (stocks ~0.02, crypto 0)")] = 0.02,
+        method: Annotated[str, typer.Option(help="Hedge ratio: rolling (OLS over --window) or kalman (adaptive filter)",
+                                            autocompletion=complete.choices(("rolling", "rolling regression"),
+                                                                            ("kalman", "Kalman filter")))] = "rolling"):
+    """Backtest trading the gap of two assets: long A and short B (or the reverse) at the same time."""
+    from tradebot.analysis.pairs import pair_health
+    from tradebot.backtest.pairs import pair_backtest
+    from tradebot.core.models import split_pair
+
+    legs = split_pair(symbol)
+    if legs is None:
+        raise typer.BadParameter("write the pair as A:B, e.g. KO:PEP")
+    a, b = (load_data(leg, tf, None, None, bars) for leg in legs)
+    try:
+        res = pair_backtest(a, b, window, entry, exit, stop, fee, borrow, method=method)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+    console.print(results_table(f"{symbol} · {tf} · long/short", {"pairs": res.metrics}))
+    try:
+        health = pair_health(a["close"], b["close"])
+        if health.broken:
+            console.print("[bold red]this pair may have stopped working:[/] " + "; ".join(health.reasons))
+    except ValueError:
+        pass
+
+
+@app.command("pair-scan")
+def pair_scan(symbols: Annotated[list[str], typer.Argument(help="Symbols to search for pairs, e.g. KO PEP PG MDLZ")],
+              tf: Annotated[str, typer.Option(help="Timeframe")] = "1d",
+              bars: Annotated[int, typer.Option(help="Candles")] = 1000,
+              split: Annotated[float, typer.Option(help="Share of the history pairs are picked on; the rest confirms")] = 0.6,
+              min_correlation: Annotated[float, typer.Option(help="Pre-filter: return correlation on the first part")] = 0.7,
+              correction: Annotated[str, typer.Option(
+                  help="Allowance for how many pairs were tested: fdr | bonferroni | none",
+                  autocompletion=complete.choices(("fdr", "about 5 % of the pairs kept are false"),
+                                                  ("bonferroni", "at most 5 % chance of any false pair"),
+                                                  ("none", "no correction (many chance finds in big scans)")))] = "fdr",
+              same_sector: Annotated[bool, typer.Option(
+                  help="Pre-filter: only pair stocks Yahoo lists in the same sector (cuts the pairs to test)")] = False):
+    """Find pairs that move together: picked on the first part of the history, confirmed on the rest."""
+    from tradebot.analysis.pairs import find_pairs
+
+    if len(symbols) < 2:
+        raise typer.BadParameter("give at least two symbols")
+    closes = {}
+    for sym in symbols:
+        try:
+            closes[sym] = load_data(sym, tf, None, None, bars)["close"]
+        except Exception as e:  # one dead symbol shouldn't end the scan
+            console.print(f"[yellow]skipping {sym}: {e}[/]")
+    try:
+        groups = None
+        if same_sector:
+            from tradebot.data.providers import sectors
+
+            with console.status("looking up sectors ..."):
+                groups = sectors(list(closes))
+            console.print(f"sector known for {len(groups)} of {len(closes)} symbols; the others aren't paired")
+        scan = find_pairs(closes, split, min_correlation, correction=correction, groups=groups)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+    console.print(f"{scan.tested} pairs tested ({scan.skipped} dropped by the correlation filter), "
+                  f"{scan.passed_train} passed the test on the first {split:.0%} (correction: {correction}; "
+                  f"without it about {scan.expected_by_chance:.1f} would pass by chance alone). [bold]{len(scan.found)}[/] held up on the rest.")
+    if not scan.found:
+        return
+    t = Table(title="Pairs confirmed on data they weren't picked on")
+    for col in ("pair", "correlation", "β", "t (picked)", "t (confirmed)", "half-life", "z now"):
+        t.add_column(col, justify="left" if col == "pair" else "right")
+    for c in scan.found:
+        t.add_row(c.symbol, f"{c.correlation:.2f}", f"{c.beta:.2f}", f"{c.train.stat:.2f}", f"{c.test.stat:.2f}",
+                  f"{c.half_life:.1f}", f"{c.zscore:+.2f}")
+    console.print(t)
 
 
 @app.command()

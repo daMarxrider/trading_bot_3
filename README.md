@@ -139,6 +139,12 @@ tradebot optimize -w all rsi_threshold --min-symbols-beating 5 --samples 4 --sam
 tradebot optimize AAPL macd_cross --walk-forward 5 --holdout 250   # re-optimize in 5 folds, then a holdout
 tradebot optimize -w Crypto sma_cross --meta 20                 # also tune the optimizer's own settings
 tradebot evolve AAPL,MSFT,NVDA --generations 60 --save my_rule    # evolve a whole strategy from scratch
+tradebot pair KO:PEP                                           # a pair: gap z-score, hedge ratio, half-life, cointegration
+tradebot pair-backtest KO:PEP --window 60 --entry 2            # long one leg, short the other, fees and borrow cost
+tradebot pair-backtest KO:PEP --method kalman                  # hedge ratio from a Kalman filter instead of a rolling window
+tradebot pair-scan KO PEP PG MDLZ                              # find pairs: picked on 60% of the history, confirmed on the rest
+tradebot pair-scan KO PEP PG MDLZ --same-sector --correction bonferroni   # fewer pairs to test, stricter about chance finds
+tradebot bot pair-run BTC/USDT:USDT ETH/USDT:USDT --once       # live pair bot (dry run; --live to trade): long one, short the other
 tradebot halving --live                                        # Bitcoin halvings and the forecast of the next
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50          # dry run
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50 --live   # real orders
@@ -522,6 +528,10 @@ number of symbols, and `--permutations N` repeats the whole search N times.
     Remove. Prices come from the cache first, then refresh every minute while the list is shown. The
     lists are saved in `config.toml` (see [Configuration](#configuration)), the shown list in the app's
     settings.
+* **Pairs**: two assets normalised on one chart, their gap as a z-score, correlation, hedge ratio,
+  half-life, an Engle-Granger cointegration test and a warning when a pair seems to have stopped working.
+  The hedge ratio comes from a rolling regression or a Kalman filter.
+  `A:B` (e.g. `KO:PEP`) is also a symbol everywhere: candles of the ratio, converted into one currency.
 * **Screener**: filter any universe by technicals, volume and market cap using
   expressions or presets. Double-click a row to open it in the chart.
 * **Backtest lab**: parameter forms generated from each algorithm, equity vs.

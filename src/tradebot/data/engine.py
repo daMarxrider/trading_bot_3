@@ -27,9 +27,10 @@ import time
 
 import pandas as pd
 
-from tradebot.core.models import AssetClass, guess_asset_class
+from tradebot.core.models import AssetClass, guess_asset_class, split_pair
 from tradebot.core.timeframes import to_timedelta
 from tradebot.data.cache import DiskCache
+from tradebot.data.currency import quote_currency, yahoo_currency
 from tradebot.data.providers import (
     AlphaVantageProvider,
     BaseDataProvider,
@@ -59,8 +60,10 @@ def default_providers() -> list[BaseDataProvider]:
 
 class MarketDataEngine:
     def __init__(self, providers: list[BaseDataProvider] | None = None, cache: bool = True,
-                 disk: DiskCache | bool | None = True):
-        """``disk``: True = the cache as config.toml sets it up, False/None = memory only."""
+                 disk: DiskCache | bool | None = True, currency_lookup=yahoo_currency):
+        """``disk``: True = the cache as config.toml sets it up, False/None = memory only.
+        ``currency_lookup``: symbol -> the currency a stock is quoted in (for pairs across currencies)."""
+        self.currency_lookup = currency_lookup
         self.providers = providers if providers is not None else default_providers()
         self._cache: dict[tuple, pd.DataFrame] | None = {} if cache else None
         self.disk = DiskCache.from_config() if disk is True else (disk or None)
@@ -97,6 +100,15 @@ class MarketDataEngine:
         A ``bars`` request returns fewer candles only when no more history exists (provider limit
         or listing date); that is logged as a warning.
         """
+        legs = split_pair(symbol)
+        if legs is not None:  # a spread symbol (#117): built from both legs' candles
+            a, b = self.pair_legs(legs, timeframe, start, end, asset_class, bars)
+            spread = ratio_ohlc(a, b)
+            if spread.empty:
+                raise DataUnavailable(f"{legs[0]} and {legs[1]} have no {timeframe} candles in common")
+            spread = spread.iloc[-bars:] if start is None and bars else spread
+            spread.attrs["offline"] = bool(a.attrs.get("offline") or b.attrs.get("offline"))
+            return spread
         step = to_timedelta(timeframe)
         end = _utc(end) if end is not None else pd.Timestamp.now(tz="UTC")
         asset_class = asset_class or guess_asset_class(symbol)
@@ -130,6 +142,37 @@ class MarketDataEngine:
         if self._cache is not None and not errors:
             self._cache[key] = result
         return result
+
+    def pair_legs(self, legs, timeframe="1d", start=None, end=None, asset_class=None, bars=None):
+        """Candles of both legs of a pair, the second one in the first one's currency."""
+        a, b = (self.get_ohlc(leg, timeframe, start, end, asset_class, bars) for leg in legs)
+        return a, self._in_currency_of(legs, b, timeframe, start, end, bars)
+
+    def _in_currency_of(self, legs, b, timeframe, start, end, bars) -> pd.DataFrame:
+        """The second leg's candles in the first leg's currency, so the gap isn't partly an exchange rate.
+        Daily and longer only: an intraday stock candle has no FX candle closing with it (#120)."""
+        try:
+            (ca, fa), (cb, fb) = (quote_currency(leg, self.currency_lookup) for leg in legs)
+        except Exception as exc:
+            raise DataUnavailable(f"{legs[0]}:{legs[1]}: can't tell which currencies the legs are quoted in ({exc})") from exc
+        if ca == cb:
+            return b * fb / fa if fa != fb else b
+        if to_timedelta(timeframe) < pd.Timedelta(days=1):
+            raise DataUnavailable(f"{legs[0]} is in {ca} and {legs[1]} in {cb}: pairs across currencies need a daily "
+                                  "or longer timeframe (intraday: issue #120)")
+        fx_symbol = f"{cb}{ca}=X"  # units of ca per unit of cb
+        try:
+            fx = self.get_ohlc(fx_symbol, timeframe, _utc(start) - pd.Timedelta(days=10) if start is not None else None,
+                               end, AssetClass.STOCK, bars + 10 if bars else None)
+        except DataUnavailable as exc:
+            raise DataUnavailable(f"{legs[0]}:{legs[1]}: no {cb}->{ca} exchange rate ({exc})") from exc
+        rate = fx["close"].reindex(fx.index.union(b.index)).ffill().reindex(b.index)  # the last rate at or before
+        if rate.isna().any():
+            b, rate = b[rate.notna()], rate.dropna()
+        out = b.copy()
+        for col in ("open", "high", "low", "close"):
+            out[col] = b[col] * rate * fb / fa
+        return out
 
     def _fetch(self, symbol, timeframe, asset_class, start, end, step, cached, listed, fresh):
         """``(candles, errors, fetched)`` for ``[start, end)``: the cached candles except the last two (all of
@@ -216,6 +259,17 @@ class MarketDataEngine:
 
     def latest_price(self, symbol: str) -> float:
         return float(self.get_ohlc(symbol, "1d", start=pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=10))["close"].iloc[-1])
+
+
+def ratio_ohlc(a: pd.DataFrame, b: pd.DataFrame) -> pd.DataFrame:
+    """Candles of the ratio ``a / b`` on the timestamps both have (stocks and crypto differ in calendar).
+    Open and close are the ratios of the legs' opens and closes; high and low just bound the two."""
+    idx = a.index.intersection(b.index)
+    o, c = a["open"].loc[idx] / b["open"].loc[idx], a["close"].loc[idx] / b["close"].loc[idx]
+    out = pd.DataFrame({"open": o, "high": pd.concat([o, c], axis=1).max(axis=1),
+                        "low": pd.concat([o, c], axis=1).min(axis=1), "close": c})
+    out.index.name = "timestamp"
+    return out.replace([float("inf"), float("-inf")], float("nan")).dropna()
 
 
 def _utc(ts) -> pd.Timestamp:
