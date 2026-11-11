@@ -48,7 +48,7 @@ def test_algorithm_params_from_positional_or_option():
 
 def test_brokers_timeframes_choices():
     assert ("binance", "live · crypto") in complete.brokers("bin")
-    assert values(complete.timeframes("1")) == ["1m", "15m", "1h", "1d", "1w"]
+    assert values(complete.timeframes("1")) == ["1m", "15m", "1h", "1d", "1w", "1mo"]
     assert values(complete.choices(("ga", ""), ("pso", ""))("p")) == ["pso"]
 
 
