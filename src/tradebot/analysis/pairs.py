@@ -83,6 +83,44 @@ def rolling_pair(a: pd.Series, b: pd.Series, window: int = 60) -> Rolling:
     return Rolling(beta, corr, z)
 
 
+def kalman_pair(a: pd.Series, b: pd.Series, delta: float = 1e-4, obs_var: float = 1e-3, span: int = 100) -> Rolling:
+    """Hedge ratio and z-score from a Kalman filter: ``log a = α + β·log b`` with (α, β) drifting as a random walk.
+
+    Unlike :func:`rolling_pair` there is no window for β: it follows the pair smoothly instead of jumping when
+    an old candle leaves the window. ``delta`` is how fast (α, β) may drift (larger: reacts faster, but
+    absorbs the gap that is to be traded), ``obs_var`` the assumed noise of the gap (sets how much one candle
+    moves the state). The z-score is each bar's forecast error from the state *before* seeing the bar, in
+    units of the recent forecast errors (exponentially weighted over ``span`` candles, up to the previous
+    bar), so a bar never shapes its own yardstick (no look-ahead). The first ~30 candles are NaN while the
+    filter settles. ``correlation`` is the rolling one over 60 candles."""
+    la, lb = _logs(a, b)
+    y, x = la.to_numpy(), lb.to_numpy()
+    n = len(y)
+    state, cov = np.array([1.0, 0.0]), np.eye(2)  # (β, α)
+    drift = delta / (1 - delta)
+    lam, warm = 1 - 2 / (span + 1), 30
+    beta, z = np.full(n, np.nan), np.full(n, np.nan)
+    errs = np.zeros(n)
+    var = 0.0
+    for t in range(n):
+        h = np.array([x[t], 1.0])
+        cov = cov + drift * np.eye(2)  # predict
+        err = y[t] - h @ state
+        errs[t] = err
+        if t == warm:
+            var = float(np.mean(errs[:warm] ** 2))
+        if t >= warm:
+            beta[t] = state[0]
+            z[t] = err / np.sqrt(var) if var > 0 else np.nan
+            var = lam * var + (1 - lam) * err**2
+        s_var = h @ cov @ h + obs_var  # update
+        gain = cov @ h / s_var
+        state = state + gain * err
+        cov = cov - np.outer(gain, h) @ cov
+    corr = la.rolling(60, min_periods=60).corr(lb).shift(1)
+    return Rolling(pd.Series(beta, la.index), corr, pd.Series(z, la.index))
+
+
 # -- cointegration: does the gap come back at all? ----------------------------------------------------------
 #: Engle-Granger critical values for two series with a constant (MacKinnon), as {significance level: t value}
 CRITICAL = {0.01: -3.90, 0.05: -3.34, 0.10: -3.04}
@@ -99,8 +137,27 @@ class Cointegration:
         return self.level < 1.0
 
     @property
+    def p(self) -> float:
+        return p_value(self.stat)
+
+    @property
     def p_text(self) -> str:
         return f"p < {self.level:g}" if self.passed else f"p > {max(CRITICAL):g}"
+
+
+def p_value(stat: float) -> float:
+    """Approximate p-value of an Engle-Granger t value: log-linear interpolation between the three critical
+    values in :data:`CRITICAL` (extended past 1 % with the last slope, 1.0 beyond 10 %). Good enough to rank
+    pairs and to correct for how many were tested; not a substitute for the exact MacKinnon tables."""
+    pts = sorted(CRITICAL.items(), key=lambda kv: kv[1])  # (level, t) from most to least negative t, i.e. 0.01 first
+    (p0, t0), (p1, t1) = pts[0], pts[1]
+    if stat >= pts[-1][1]:
+        return 1.0
+    for (pa, ta), (pb, tb) in zip(pts, pts[1:]):
+        if ta <= stat <= tb:
+            return float(np.exp(np.log(pa) + (stat - ta) / (tb - ta) * (np.log(pb) - np.log(pa))))
+    slope = (np.log(p1) - np.log(p0)) / (t1 - t0)
+    return float(max(np.exp(np.log(p0) + (stat - t0) * slope), 1e-12))
 
 
 def adf_stat(x: np.ndarray, lags: int | None = None) -> float:
@@ -187,22 +244,47 @@ class Candidate:
 
 @dataclass
 class Scan:
-    tested: int  #: pairs that passed the correlation pre-filter and were tested
-    skipped: int  #: pairs dropped by the pre-filter
-    passed_train: int
+    tested: int  #: pairs that passed the pre-filters and were tested
+    skipped: int  #: pairs dropped by the pre-filters (correlation, group)
+    passed_train: int  #: pairs the training test let through (after the correction)
     expected_by_chance: float  #: pairs a 5 % test passes with no real pairs at all: tested × 0.05
     found: list[Candidate]  #: passed the training test AND held up on the test part
 
 
+CORRECTIONS = ("fdr", "bonferroni", "none")
+
+
+def significant(pvalues: list[float], correction: str, level: float) -> list[bool]:
+    """Which of ``pvalues`` count as significant at ``level`` after correcting for how many were tested:
+    ``bonferroni`` (``p ≤ level / n``: no more than ``level`` false pair expected in the whole scan),
+    ``fdr`` (Benjamini-Hochberg: about ``level`` of the pairs kept are false) or ``none`` (``p ≤ level``)."""
+    n = len(pvalues)
+    if correction == "none" or n == 0:
+        return [p <= level for p in pvalues]
+    if correction == "bonferroni":
+        return [p <= level / n for p in pvalues]
+    if correction == "fdr":
+        order = sorted(range(n), key=pvalues.__getitem__)
+        cut = max((k for k, i in enumerate(order, 1) if pvalues[i] <= level * k / n), default=0)
+        keep = set(order[:cut])
+        return [i in keep for i in range(n)]
+    raise ValueError(f"correction must be one of {', '.join(CORRECTIONS)}")
+
+
 def find_pairs(closes: dict[str, pd.Series], split: float = 0.6, min_correlation: float = 0.7,
                train_level: float = 0.05, test_level: float = 0.10, half_life_range: tuple[float, float] = (2, 60),
-               ) -> Scan:
+               correction: str = "fdr", groups: dict[str, str] | None = None) -> Scan:
     """Search ``closes`` (symbol -> close prices) for cointegrated pairs without fooling itself.
 
-    The history is split in time. Pairs are picked on the first part only: correlated returns, then a
-    cointegration test at ``train_level``. With thousands of pairs some pass by chance (shown as
-    ``expected_by_chance``), so a pair counts as found only if it also holds up on the later part it
-    wasn't picked on: cointegrated there at ``test_level`` and with a half-life in ``half_life_range``."""
+    The history is split in time. Pairs are picked on the first part only. Pre-filters keep the number of
+    tests down: ``groups`` (symbol -> sector or any label; only symbols with the same label are paired, a
+    symbol without a label is never paired) and ``min_correlation`` of the returns. Every remaining pair gets
+    a cointegration test at ``train_level``, **corrected for the number of pairs tested** (``correction``,
+    see :func:`significant`): without it, thousands of tests let some pass by chance, shown as
+    ``expected_by_chance``. A pair counts as found only if it also holds up on the later part it wasn't
+    picked on: cointegrated there at ``test_level`` and with a half-life in ``half_life_range``."""
+    if correction not in CORRECTIONS:
+        raise ValueError(f"correction must be one of {', '.join(CORRECTIONS)}")
     frame = pd.concat(closes, axis=1, join="inner").dropna()
     frame = frame[(frame > 0).all(axis=1)]
     if len(frame) < 120:
@@ -211,27 +293,31 @@ def find_pairs(closes: dict[str, pd.Series], split: float = 0.6, min_correlation
     train, test = frame.iloc[:cut], frame.iloc[cut:]
     rets = np.log(train).diff().dropna().corr()
     names = list(frame.columns)
-    tested = skipped = passed = 0
-    found: list[Candidate] = []
+    skipped = 0
+    tested: list[tuple[str, str, float, Cointegration]] = []
     for i, a in enumerate(names):
         for b in names[i + 1:]:
+            same = groups is None or (groups.get(a) is not None and groups.get(a) == groups.get(b))
             corr = float(rets.loc[a, b])
-            if corr < min_correlation:
+            if not same or corr < min_correlation:
                 skipped += 1
                 continue
-            tested += 1
-            tr = cointegration(train[a], train[b])
-            if tr.level > train_level:
-                continue
-            passed += 1
-            te = cointegration(test[a], test[b])
-            spread_tr = np.log(train[a]) - tr.beta * np.log(train[b])
-            spread_te = (np.log(test[a]) - tr.beta * np.log(test[b])).to_numpy()
-            hl = half_life(spread_te)
-            if te.level > test_level or hl is None or not half_life_range[0] <= hl <= half_life_range[1]:
-                continue
-            std = float(spread_tr.std())
-            now = (np.log(frame[a].iloc[-1]) - tr.beta * np.log(frame[b].iloc[-1]) - spread_tr.mean()) / std
-            found.append(Candidate(a, b, corr, tr, te, tr.beta, hl, float(now)))
+            tested.append((a, b, corr, cointegration(train[a], train[b])))
+    keep = significant([t[3].p for t in tested], correction, train_level)
+    passed = 0
+    found: list[Candidate] = []
+    for (a, b, corr, tr), ok in zip(tested, keep):
+        if not ok:
+            continue
+        passed += 1
+        te = cointegration(test[a], test[b])
+        spread_tr = np.log(train[a]) - tr.beta * np.log(train[b])
+        spread_te = (np.log(test[a]) - tr.beta * np.log(test[b])).to_numpy()
+        hl = half_life(spread_te)
+        if te.level > test_level or hl is None or not half_life_range[0] <= hl <= half_life_range[1]:
+            continue
+        std = float(spread_tr.std())
+        now = (np.log(frame[a].iloc[-1]) - tr.beta * np.log(frame[b].iloc[-1]) - spread_tr.mean()) / std
+        found.append(Candidate(a, b, corr, tr, te, tr.beta, hl, float(now)))
     found.sort(key=lambda c: c.test.stat)
-    return Scan(tested, skipped, passed, tested * 0.05, found)
+    return Scan(len(tested), skipped, passed, len(tested) * 0.05, found)

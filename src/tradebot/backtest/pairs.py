@@ -17,36 +17,48 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from tradebot.analysis.pairs import rolling_pair
+from tradebot.analysis.pairs import kalman_pair, rolling_pair
 from tradebot.backtest import metrics as m
 from tradebot.backtest.engine import BacktestResult
 
 
+def next_side(s: float, z: float, beta: float, entry: float, exit: float, stop: float) -> float:
+    """The position (+1 long the gap: long A / short B, -1 short it, 0 flat) after seeing z-score ``z`` and
+    hedge ratio ``beta`` while holding ``s``. The one rule shared by the backtest and the live bot."""
+    if np.isnan(z) or np.isnan(beta):
+        return 0.0
+    if s == 0.0:
+        # a negative β is no pair: the legs move against each other
+        return (-1.0 if z > 0 else 1.0) if entry <= abs(z) < stop and beta > 0 else 0.0
+    return 0.0 if abs(z) <= exit or abs(z) >= stop else s
+
+
 def pair_backtest(a: pd.DataFrame, b: pd.DataFrame, window: int = 60, entry: float = 2.0, exit: float = 0.5,
                   stop: float = 4.0, fee: float = 0.001, borrow: float = 0.02, initial_capital: float = 10_000.0,
-                  periods_per_year: float | None = None) -> BacktestResult:
+                  periods_per_year: float | None = None, method: str = "rolling") -> BacktestResult:
     """Trade the gap of two OHLC frames: open when its z-score passes ``±entry``, close inside ``±exit``,
-    give up (stop) beyond ``±stop``. ``borrow`` is the yearly cost of the short leg (stocks; ~0 for crypto)."""
+    give up (stop) beyond ``±stop``. ``borrow`` is the yearly cost of the short leg (stocks; ~0 for crypto).
+    ``method`` picks the hedge ratio: ``rolling`` (OLS over ``window`` candles) or ``kalman`` (a filter that
+    follows the pair smoothly, no window)."""
+    if method not in ("rolling", "kalman"):
+        raise ValueError("method must be rolling or kalman")
     if not 0 <= exit < entry < stop:
         raise ValueError("need 0 <= exit < entry < stop")
     idx = a.index.intersection(b.index)
     ca, cb = a["close"].loc[idx], b["close"].loc[idx]
     if len(idx) < window + 10:
         raise ValueError(f"need at least {window + 10} common candles")
-    roll = rolling_pair(ca, cb, window)
+    roll = kalman_pair(ca, cb) if method == "kalman" else rolling_pair(ca, cb, window)
     z, beta = roll.zscore.to_numpy(), roll.beta.to_numpy()
     n = len(idx)
     side, wa, wb = np.zeros(n), np.zeros(n), np.zeros(n)
     s = 0.0
     held_beta = 1.0
     for t in range(n):
-        if np.isnan(z[t]) or np.isnan(beta[t]):
-            s = 0.0
-        elif s == 0.0:
-            if entry <= abs(z[t]) < stop and beta[t] > 0:  # a negative β is no pair: the legs move against each other
-                s, held_beta = (-1.0 if z[t] > 0 else 1.0), beta[t]
-        elif abs(z[t]) <= exit or abs(z[t]) >= stop:
-            s = 0.0
+        new = next_side(s, z[t], beta[t], entry, exit, stop)
+        if s == 0.0 and new != 0.0:
+            held_beta = beta[t]
+        s = new
         side[t] = s
         wa[t] = s / (1 + held_beta)
         wb[t] = -s * held_beta / (1 + held_beta)
@@ -60,6 +72,6 @@ def pair_backtest(a: pd.DataFrame, b: pd.DataFrame, window: int = 60, entry: flo
     positions = pd.Series(side, index=idx, name="position")
     trades = m.extract_trades(positions, returns)
     return BacktestResult(
-        algorithm="pairs", params={"window": window, "entry": entry, "exit": exit, "stop": stop},
+        algorithm="pairs", params={"method": method, "window": window, "entry": entry, "exit": exit, "stop": stop},
         positions=positions, returns=returns, equity=(initial_capital * (1 + returns).cumprod()).rename("equity"),
         trades=trades, metrics=m.compute_metrics(returns, positions, trades, ppy))

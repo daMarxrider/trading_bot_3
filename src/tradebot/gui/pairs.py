@@ -9,7 +9,7 @@ import pyqtgraph as pg
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget
 
-from tradebot.analysis.pairs import cointegration, pair_health, pair_stats, rolling_pair
+from tradebot.analysis.pairs import cointegration, pair_health, kalman_pair, pair_stats, rolling_pair
 from tradebot.core.models import split_pair
 from tradebot.core.timeframes import TIMEFRAMES
 from tradebot.gui.common import card, run_async
@@ -31,11 +31,14 @@ class PairView(QWidget):
         self.window = QSpinBox(minimum=10, maximum=1000, value=60,
                                toolTip="Candles for the rolling hedge ratio and z-score: short follows the pair "
                                        "but absorbs the gap, long reacts slowly to a changed relationship")
+        self.method = QComboBox(toolTip="Rolling: OLS over the window. Kalman: an adaptive filter, no window, "
+                                        "the hedge ratio follows the pair smoothly")
+        self.method.addItems(["rolling", "kalman"])
         run = QPushButton("Analyse", objectName="Primary")
         run.clicked.connect(self.run)
         row = QHBoxLayout()
         for label, w in (("A", self.symbol_a), ("B", self.symbol_b), ("Timeframe", self.tf), ("Candles", self.bars),
-                         ("Window", self.window)):
+                         ("Window", self.window), ("Hedge ratio", self.method)):
             row.addWidget(QLabel(label))
             row.addWidget(w)
         row.addWidget(run)
@@ -73,7 +76,7 @@ class PairView(QWidget):
         if not a or not b:
             self.status.emit("pairs: enter both symbols")
             return
-        bars, window = self.bars.value(), self.window.value()
+        bars, window, method = self.bars.value(), self.window.value(), self.method.currentText()
         self.status.emit(f"pairs: loading {a} and {b} …")
 
         def work():
@@ -81,16 +84,16 @@ class PairView(QWidget):
             both = ca.to_frame("a").join(cb.rename("b"), how="inner")
             return both["a"], both["b"]
 
-        run_async(work, lambda r: self._show(a, b, window, *r), lambda err: self.status.emit(f"pairs failed: {err}"))
+        run_async(work, lambda r: self._show(a, b, window, method, *r), lambda err: self.status.emit(f"pairs failed: {err}"))
 
-    def _show(self, a, b, window, ca, cb):
+    def _show(self, a, b, window, method, ca, cb):
         t = self.themes.current
         x = ca.index.as_unit("ns").asi8 / 1e9
         self.prices.clear()
         self.zplot.clear()
         for series, name, color in ((ca, a, t.series[0]), (cb, b, t.series[1])):
             self.prices.plot(x, (series / series.iloc[0] * 100).to_numpy(), pen=pg.mkPen(color, width=2), name=name)
-        roll = rolling_pair(ca, cb, window)
+        roll = kalman_pair(ca, cb) if method == "kalman" else rolling_pair(ca, cb, window)
         z = roll.zscore.reindex(ca.index).to_numpy()
         self.zplot.plot(x, z, pen=pg.mkPen(qcolor(t.accent), width=2))
         for level, color in ((0, t.muted), (2, t.down), (-2, t.up)):
@@ -100,8 +103,8 @@ class PairView(QWidget):
         try:
             st = pair_stats(ca, cb)
             co = cointegration(ca, cb)
-            text.append(f"correlation <b>{st.correlation:.2f}</b> · hedge ratio β <b>{st.beta:.2f}</b> (rolling "
-                        f"{np.nanmean(roll.beta.to_numpy()[-window:]):.2f}) · gap now <b>{st.zscore:+.2f} σ</b> · "
+            text.append(f"correlation <b>{st.correlation:.2f}</b> · hedge ratio β <b>{st.beta:.2f}</b> ({method} "
+                        f"{np.nanmean(roll.beta.to_numpy()[-(1 if method == 'kalman' else window):]):.2f}) · gap now <b>{st.zscore:+.2f} σ</b> · "
                         f"half-life <b>{'does not revert' if st.half_life is None else f'{st.half_life:.1f} candles'}</b> · "
                         f"cointegration t = <b>{co.stat:.2f}</b>, {co.p_text}{' ✓' if co.passed else ''}")
             health = pair_health(ca, cb)

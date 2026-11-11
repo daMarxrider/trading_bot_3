@@ -187,6 +187,64 @@ def test_pair_backtest_is_market_neutral_and_pays_costs():
         pair_backtest(frame_of(a), frame_of(b), entry=1, exit=2)
 
 
+def test_p_value_and_multiple_testing_correction():
+    from tradebot.analysis.pairs import CRITICAL, p_value, significant
+
+    assert p_value(CRITICAL[0.05]) == pytest.approx(0.05) and p_value(CRITICAL[0.01]) == pytest.approx(0.01)
+    assert 0.01 < p_value(-3.6) < 0.05 and p_value(-2.0) == 1.0 and p_value(-6.0) < 0.001
+    p = [0.001, 0.009, 0.02, 0.04, 0.2]
+    assert significant(p, "none", 0.05) == [True, True, True, True, False]
+    assert significant(p, "bonferroni", 0.05) == [True, True, False, False, False]  # p <= 0.05 / 5
+    assert significant(p, "fdr", 0.05) == [True, True, True, True, False]  # BH: largest k with p_k <= 0.05 k / 5
+    assert significant([0.04, 0.5, 0.6, 0.7], "fdr", 0.05) == [False] * 4  # 0.04 > 0.05 / 4
+    with pytest.raises(ValueError):
+        significant(p, "magic", 0.05)
+
+
+def test_find_pairs_group_prefilter_and_correction():
+    from tradebot.analysis.pairs import find_pairs
+
+    a, b = synthetic_pair()
+    rng = np.random.default_rng(3)
+    loners = {f"L{i}": pd.Series(100 * np.exp(np.cumsum(rng.normal(0, 0.01, len(a)))), a.index) for i in range(6)}
+    closes = {"AAA": a, "BBB": b, **loners}
+    plain = find_pairs(closes, min_correlation=-1, correction="none")
+    fdr = find_pairs(closes, min_correlation=-1, correction="fdr")
+    bonf = find_pairs(closes, min_correlation=-1, correction="bonferroni")
+    assert plain.passed_train >= fdr.passed_train >= bonf.passed_train
+    assert "AAA:BBB" in [c.symbol for c in bonf.found]  # a real pair survives the strictest correction
+    sectors = {"AAA": "x", "BBB": "x", "L0": "x", "L1": "y"}  # L2.. unknown: never paired
+    grouped = find_pairs(closes, min_correlation=-1, groups=sectors)
+    assert grouped.tested == 3 and grouped.skipped == len(closes) * (len(closes) - 1) // 2 - 3
+    assert "AAA:BBB" in [c.symbol for c in grouped.found]
+
+
+def test_kalman_beta_follows_a_changing_hedge_ratio():
+    from tradebot.analysis.pairs import kalman_pair
+
+    a, b = synthetic_pair(n=1500, beta=1.5)
+    k = kalman_pair(a, b)
+    assert k.beta.iloc[:30].isna().all() and abs(k.beta.iloc[-1] - 1.5) < 0.3
+    z = k.zscore.dropna()
+    assert abs(z.mean()) < 0.5 and 0.5 < z.std() < 2  # roughly standardised forecast errors
+    # no look-ahead: changing the last candle leaves every earlier value alone
+    a2 = a.copy()
+    a2.iloc[-1] *= 3
+    k2 = kalman_pair(a2, b)
+    pd.testing.assert_series_equal(k.beta.iloc[:-1], k2.beta.iloc[:-1])
+    pd.testing.assert_series_equal(k.zscore.iloc[:-1], k2.zscore.iloc[:-1])
+
+
+def test_pair_backtest_with_kalman_beta():
+    from tradebot.backtest.pairs import pair_backtest
+
+    a, b = synthetic_pair(n=1500, seed=11)
+    res = pair_backtest(frame_of(a), frame_of(b), fee=0.0, borrow=0.0, method="kalman")
+    assert res.params["method"] == "kalman" and res.metrics["trades"] > 5 and res.metrics["total_return"] > 0
+    with pytest.raises(ValueError):
+        pair_backtest(frame_of(a), frame_of(b), method="magic")
+
+
 def test_pair_view_draws_without_network(tmp_path):
     import os
 
@@ -205,3 +263,90 @@ def test_pair_view_draws_without_network(tmp_path):
     assert len(view.prices.getPlotItem().listDataItems()) == 2 and len(view.zplot.getPlotItem().listDataItems()) == 1
     view._show("KO", "PEP", 60, a.iloc[:20], b.iloc[:20])  # too short: says so instead of failing
     assert "need at least" in view.numbers.text()
+
+
+class StubData:
+    def __init__(self, a, b):
+        self.a, self.b, self.upto = frame_of(a), frame_of(b), len(a)
+
+    def pair_legs(self, legs, timeframe="1d", start=None, end=None, asset_class=None, bars=None):
+        return self.a.iloc[:self.upto], self.b.iloc[:self.upto]
+
+
+def stub_broker(data, fail_on=None):
+    from tradebot.brokers.base import BaseBroker
+    from tradebot.core.models import Balance, Order, OrderStatus, OrderType, Ticker
+
+    class Stub(BaseBroker):
+        name = "stub-pairs"
+
+        def __init__(self):
+            super().__init__(data=data)
+            self.orders = []
+
+        def get_ticker(self, symbol):
+            return Ticker(symbol, 1.0)
+
+        def place_order(self, symbol, side, amount, type=OrderType.MARKET, price=None):
+            if symbol == fail_on and side.value == "sell":
+                raise RuntimeError("can't short on spot")
+            self.orders.append((symbol, side.value, amount))
+            return Order(str(len(self.orders)), symbol, side, type, amount, price, OrderStatus.CLOSED)
+
+        def cancel_order(self, order_id, symbol=None):
+            return True
+
+        def get_balance(self):
+            return {}
+
+    return Stub()
+
+
+def test_pair_bot_follows_the_backtest_and_trades_both_legs():
+    from tradebot.backtest.pairs import pair_backtest
+    from tradebot.live import PairBot
+
+    a, b = synthetic_pair(n=700, seed=11)
+    data = StubData(a, b)
+    broker = stub_broker(data)
+    bot = PairBot(broker, ("AAA", "BBB"), "1d", stake=1000.0, window=60, dry_run=False)
+    for k in range(100, len(a) + 1):
+        data.upto = k
+        bot.step()
+    ref = pair_backtest(frame_of(a), frame_of(b), window=60).positions
+    # the bot decides on the same candles the backtest does: same position on the last bar it saw
+    assert bot.side == ref.iloc[-1]
+    opens = [e for e in bot.events if e.action.startswith("open")]
+    closes = [e for e in bot.events if e.action == "close"]
+    assert opens and len(opens) - len(closes) in (0, 1)
+    first = opens[0]
+    assert first.amount_a * first.price_a + first.amount_b * first.price_b == pytest.approx(1000.0)
+    side_a = [o[1] for o in broker.orders if o[0] == "AAA"]
+    side_b = [o[1] for o in broker.orders if o[0] == "BBB"]
+    assert len(side_a) == len(side_b) == len(opens) + len(closes)
+    assert all(x != y for x, y in zip(side_a, side_b))  # always one bought, the other sold
+    assert broker.orders[0][:2] == (("AAA", "buy") if first.action == "open long" else ("BBB", "buy"))  # the long leg
+
+
+def test_pair_bot_dry_run_places_nothing_and_a_failed_short_is_undone():
+    from tradebot.live import PairBot
+
+    a, b = synthetic_pair(n=700, seed=11)
+    data = StubData(a, b)
+    quiet = stub_broker(data)
+    bot = PairBot(quiet, ("AAA", "BBB"), "1d", window=60)
+    for k in range(100, len(a) + 1):
+        data.upto = k
+        bot.step()
+    assert quiet.orders == [] and any(e.action != "hold" for e in bot.events)
+
+    spot = stub_broker(data, fail_on="BBB")  # shorting BBB isn't possible; AAA short works but BBB short doesn't
+    live = PairBot(spot, ("AAA", "BBB"), "1d", window=60, dry_run=False)
+    with pytest.raises(RuntimeError):
+        for k in range(100, len(a) + 1):
+            data.upto = k
+            live.step()
+    (s1, d1, x1), (s2, d2, x2) = spot.orders[-2:]
+    assert (s1, d1, d2) == ("AAA", "buy", "sell") and s2 == "AAA" and x1 == x2  # bought AAA, short failed: undone
+    with pytest.raises(ValueError):
+        PairBot(spot, ("AAA", "BBB"), entry=1, exit=2)
