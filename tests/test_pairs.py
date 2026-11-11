@@ -258,10 +258,11 @@ def test_pair_view_draws_without_network(tmp_path):
     app = QApplication.instance() or QApplication([])  # noqa: F841 - must stay referenced
     a, b = synthetic_pair()
     view = PairView(engine(KO=frame_of(a), PEP=frame_of(b)), ThemeManager(user_dir=tmp_path), ["KO", "PEP"])
-    view._show("KO", "PEP", 60, a, b)
+    view._show("KO", "PEP", 60, "rolling", a, b)
+    view._show("KO", "PEP", 60, "kalman", a, b)
     assert "cointegration" in view.numbers.text() and "half-life" in view.numbers.text()
     assert len(view.prices.getPlotItem().listDataItems()) == 2 and len(view.zplot.getPlotItem().listDataItems()) == 1
-    view._show("KO", "PEP", 60, a.iloc[:20], b.iloc[:20])  # too short: says so instead of failing
+    view._show("KO", "PEP", 60, "rolling", a.iloc[:20], b.iloc[:20])  # too short: says so instead of failing
     assert "need at least" in view.numbers.text()
 
 
