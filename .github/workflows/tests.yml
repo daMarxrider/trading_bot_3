@@ -28,20 +28,21 @@ jobs:
 
       - name: Qt runtime libraries (offscreen GUI tests)
         # The runner image fetches packages from its own mirror (azure.archive.ubuntu.com, via
-        # /etc/apt/apt-mirrors.txt), which is sometimes unreachable. Retry, and from the third attempt on use
-        # archive.ubuntu.com directly.
+        # /etc/apt/apt-mirrors.txt), which is sometimes unreachable. Retry, and from the second attempt on use
+        # archive.ubuntu.com directly. Every apt call is capped with `timeout`: with the mirror down apt otherwise
+        # hangs for many minutes.
         run: |
-          opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+          opts="-o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15"
           for attempt in 1 2 3; do
-            if [ "$attempt" = 3 ]; then
+            if [ "$attempt" = 2 ]; then
               echo "using archive.ubuntu.com instead of the runner's mirror"
               sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|' \
                 /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
             fi
-            sudo apt-get update -q $opts || true
-            sudo apt-get install -y -q $opts libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 && exit 0
+            sudo timeout 90 apt-get update -q $opts || true
+            sudo timeout 120 apt-get install -y -q $opts libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 && exit 0
             echo "apt attempt $attempt failed"
-            sleep $((attempt * 15))
+            sleep 10
           done
           exit 1
 
