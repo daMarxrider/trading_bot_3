@@ -221,6 +221,9 @@ class PopulationOptimizer(ABC):
         self.min_trades = min_trades
         if backend == "auto" and not getattr(algorithm, "vectorized", True):
             backend = "numpy"  # loop-based algorithms run on the CPU anyway; the GPU would only add transfers
+        elif backend == "auto" and all(s.integer for k, s in algorithm.param_space().items() if k not in (fixed or {})):
+            # integer-only searches batch one individual per group, so kernel-launch overhead beats the GPU (#9)
+            backend = "numpy"
         self.backend = backend if isinstance(backend, Backend) else select_backend(backend)
         self.rng = np.random.default_rng(seed)
         self.fixed = fixed or {}

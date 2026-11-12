@@ -71,6 +71,16 @@ def test_backend_selection():
     assert b.kind in {"cuda", "rocm", "cpu", "numpy"}
 
 
+def test_auto_backend_uses_numpy_for_integer_only_algorithms():
+    df = make_ohlc(200, seed=1)
+    assert GeneticOptimizer(build_algorithm("macd_cross"), df, seed=0).backend.kind == "numpy"
+    # fixing the float params leaves an integer-only search
+    fixed = {"lower": 30.0, "upper": 70.0}
+    algo = build_algorithm("rsi_threshold")
+    assert all(k in algo.param_space() for k in fixed)
+    assert GeneticOptimizer(algo, df, seed=0, fixed=fixed).backend.kind == "numpy"
+
+
 # -- PSO and GA/PSO comparison ------------------------------------------------------------------------
 from tradebot.optimize import OPTIMIZERS, ParticleSwarmOptimizer, compare, optimize, run_comparison  # noqa: E402
 from tradebot.optimize.base import OptimizationResult  # noqa: E402
