@@ -695,6 +695,45 @@ class ChartView(QWidget):
             self.indicators = [i for i in self.indicators if i.name != "volume"]
         self.redraw()
 
+    @property
+    def volume_overlay(self) -> bool:
+        """Whether semi-transparent volume bars run along the bottom of the price pane (setting, #116)."""
+        return bool(self.settings.get("chart.volume_overlay", False)) if self.settings else getattr(self, "_overlay", False)
+
+    def _toggle_volume_overlay(self):
+        if self.settings:
+            self.settings.set("chart.volume_overlay", not self.volume_overlay)
+        else:
+            self._overlay = not self.volume_overlay
+        self.redraw()
+
+    def _clear_volume_overlay(self):
+        vb = getattr(self, "_overlay_vb", None)
+        if vb is not None:
+            self.price.scene().removeItem(vb)
+            self._overlay_vb = None
+
+    def _draw_volume_overlay(self, x, volume, o, c, width, t):
+        """Volume bars in the bottom quarter of the price pane, on their own hidden y-axis."""
+        vb = pg.ViewBox(enableMenu=False)
+        vb.setMouseEnabled(False, False)
+        vb.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self.price.scene().addItem(vb)
+        vb.setXLink(self.price.vb)
+        sync = lambda *_: vb.setGeometry(self.price.vb.sceneBoundingRect())  # noqa: E731
+        self.price.vb.sigResized.connect(sync)
+        sync()
+        ok = np.isfinite(volume)
+        up, down = qcolor(t.up), qcolor(t.down)
+        up.setAlpha(90)
+        down.setAlpha(90)
+        bars = VolumeBarsItem()
+        bars.set_data(x[ok], volume[ok], o[ok], c[ok], width, up, down)
+        vb.addItem(bars)
+        vb.setYRange(0, max(float(np.nanmax(volume)), 1e-12) * 4, padding=0)
+        vb.setLimits(yMin=0)
+        self._overlay_vb = vb
+
     def _choose_algorithm(self, name):
         if name not in ALGORITHMS:
             self.algorithm = None
@@ -797,6 +836,7 @@ class ChartView(QWidget):
             for item in list(plot.items):
                 if id(item) not in keep:
                     plot.removeItem(item)
+        self._clear_volume_overlay()
         spare, self.panes = self.panes, []  # indicator panes are reused in order: building one takes ~30 ms (#68)
         self._fit_series = {}
         self._rows = {self.price: []}
@@ -826,6 +866,9 @@ class ChartView(QWidget):
             candles = CandlestickItem()
             candles.set_data(x, ty(o), ty(h), ty(l), ty(c), width, qcolor(t.up), qcolor(t.down))
             self.price.addItem(candles)
+
+        if self.volume_overlay and np.isfinite(volume_of(df)).any():
+            self._draw_volume_overlay(x, volume_of(df), o, c, width, t)
 
         for ind in self.indicators:
             frame = ind(df)
@@ -1153,6 +1196,7 @@ class ChartView(QWidget):
                 lists.addAction(name, lambda n=name, s=self._loaded_symbol: self.watchlists.add_symbol(s, n))
         menu.addSeparator()
         menu.addAction("Line chart" if not self.style_btn.isChecked() else "Candles", self.style_btn.toggle)
+        menu.addAction("Volume overlay off" if self.volume_overlay else "Volume overlay on", self._toggle_volume_overlay)
         menu.addAction("Hide volume" if self.vol_btn.isChecked() else "Show volume", self.vol_btn.toggle)
         menu.popup(global_pos)
         self._menu = menu  # keep a reference while open (and for tests)

@@ -197,3 +197,12 @@ def test_log_and_autofit_buttons_are_the_same_square(app, tmp_path, touch):
     QApplication.processEvents()
     side = 40 if touch else 28
     assert c.fit_btn.size() == c.log_btn.size() and (c.log_btn.width(), c.log_btn.height()) == (side, side)
+
+
+def test_volume_overlay_is_a_setting_drawn_in_its_own_viewbox(chart):
+    assert chart.volume_overlay is False and getattr(chart, "_overlay_vb", None) is None
+    chart._toggle_volume_overlay()
+    assert chart.volume_overlay and chart._overlay_vb is not None
+    assert chart.settings.get("chart.volume_overlay") is True
+    chart._toggle_volume_overlay()
+    assert chart._overlay_vb is None

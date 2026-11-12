@@ -64,3 +64,34 @@ def test_volume_indicators_are_causal():
 def test_volume_unit():
     assert INDICATORS.get("volume").units["volume"] == "volume"
     assert set(INDICATORS.get("volume_ratio").units.values()) == {"ratio"}
+
+
+def test_screener_volume_ratio():
+    from tradebot.screener import screen_row
+    vol = np.r_[np.full(29, 10.0), 40.0]
+    row = screen_row("X", frame(30, volume=vol))
+    assert row["avg_volume"] == vol[-20:].mean() and np.isclose(row["volume_ratio"], 40 / vol[-20:].mean())
+    assert np.isnan(screen_row("X", frame(30, volume=None))["volume_ratio"])
+
+
+def test_cli_chart_volume_flag():
+    from tradebot.cli.charts import render_chart
+    df = frame(60, volume=np.arange(1, 61, dtype=float))
+    with_vol = render_chart(df, "t", window=60, volume=True)
+    without = render_chart(df, "t", window=60, volume=False)
+    assert "volume" in with_vol and "volume" not in without
+    assert "volume" not in render_chart(frame(60, volume=None), "t", window=60, volume=True)
+
+
+def test_optimizer_windows_carry_volume():
+    from tradebot.algorithms import build_algorithm
+    from tradebot.optimize import GeneticOptimizer
+    from .conftest import make_ohlc
+    df = make_ohlc(400, seed=1)
+    df["volume"] = np.arange(len(df), dtype=float) + 1
+    opt = GeneticOptimizer(build_algorithm("rsi_threshold"), df, backend="numpy", seed=0, samples=3,
+                           sample_length=100, train_fraction=1.0, min_trades=0)
+    assert opt.resample()
+    w = opt._windows.ohlc
+    assert w.volume.shape == w.close.shape and np.isfinite(w.volume).all()
+    assert all(np.isfinite(r.volume).all() for r in opt._windows.ohlc_np)
