@@ -11,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PyQt6")
 pytest.importorskip("pyqtgraph")
 
-from PyQt6.QtWidgets import QApplication, QScrollArea, QWidget  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QScrollArea  # noqa: E402
 
 from tradebot.gui.theme import ThemeManager  # noqa: E402
 from tradebot.gui.views import BacktestView  # noqa: E402
@@ -147,24 +147,4 @@ def test_side_panel_never_scrolls_sideways(lab):
     for i in range(lab.algo.count()):  # each algorithm has its own parameter rows; a pool also shows its cards
         lab.algo.setCurrentIndex(i)
         QApplication.processEvents()
-        QApplication.processEvents()  # let the layout settle after the cards were shown or hidden
-        content = scroll.widget()
-        if content.minimumSizeHint().width() > scroll.viewport().width():  # temporary diagnostics (#134)
-            lay = content.layout()
-            info = [f"algo={lab.algo.itemText(i)} min={content.minimumSizeHint().width()} viewport={scroll.viewport().width()} "
-                    f"layout={type(lay).__name__} margins={lay.contentsMargins().left()},{lay.contentsMargins().right()}"]
-            for k in range(lay.count()):
-                w = lay.itemAt(k).widget()
-                if w is not None:
-                    info.append(f"  item {k} {type(w).__name__} hidden={w.isHidden()} visible={w.isVisible()} "
-                                f"min={w.minimumSizeHint().width()} sizehint={w.sizeHint().width()} geom={w.width()}")
-            lay.invalidate(); lay.activate()
-            info.append(f"after invalidate+activate: {content.minimumSizeHint().width()}")
-            QApplication.sendPostedEvents(None, 0)
-            info.append(f"after sendPostedEvents: {content.minimumSizeHint().width()}")
-            lab.algo.setCurrentIndex(0); QApplication.processEvents(); lab.algo.setCurrentIndex(i); QApplication.processEvents()
-            info.append(f"after toggling the algo: {content.minimumSizeHint().width()}")
-            wide = "\n".join(info)
-        else:
-            wide = ""
-        assert scroll.widget().minimumSizeHint().width() <= scroll.viewport().width(), lab.algo.itemText(i) + "\n" + wide
+        assert scroll.widget().minimumSizeHint().width() <= scroll.viewport().width(), lab.algo.itemText(i)
