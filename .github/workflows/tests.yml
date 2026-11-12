@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Runs the test suite on every pull request and on pushes to main; release.yml reuses it.
-# The `pytest` job is a required status check for merging into main. Tests marked slow run only on PRs
+# The `pytest` job (Linux) is a required status check for merging into main; `pytest-os` runs the same suite on
+# Windows and macOS (#6). Tests marked slow run only on PRs
 # labelled `slow tests` (adding the label reruns the job).
 name: tests
 
@@ -47,6 +48,29 @@ jobs:
           exit 1
 
       # no `gpu` extra: torch is large and CI has no GPU; torch-only tests skip themselves
+      - name: Install
+        run: uv sync --extra gui --python 3.14
+
+      - name: Test
+        run: uv run pytest -q ${{ contains(github.event.pull_request.labels.*.name, 'slow tests') && '--slow' || '' }}
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+  pytest-os:
+    name: pytest (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false  # one OS failing must not hide the other
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          enable-cache: true
+
       - name: Install
         run: uv sync --extra gui --python 3.14
 
