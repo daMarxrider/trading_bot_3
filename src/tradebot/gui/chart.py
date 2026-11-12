@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
 
 from tradebot.algorithms import ALGORITHMS, algorithm_names, build_algorithm
 from tradebot.config import Settings
+from tradebot.core.series import volume_of
 from tradebot.core.timeframes import TIMEFRAMES
 from tradebot.gui.common import (
     DateRange,
@@ -87,6 +88,17 @@ def fmt_value(v) -> str:
     if not np.isfinite(v):
         return "–"
     return f"{v:,.0f}" if v.is_integer() else f"{v:,.{_decimals(v)}f}"  # levels read "66", not "66.000"
+
+
+def fmt_amount(v) -> str:
+    """A volume for the cursor readout, abbreviated: 950 · 12.3K · 1.2M · 4.5B; NaN shows as a dash."""
+    v = float(v)
+    if not np.isfinite(v):
+        return "–"
+    for div, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if abs(v) >= div:
+            return f"{v / div:.{1 if abs(v) >= 10 * div else 2}f}{suffix}"
+    return fmt_value(v)
 
 
 def _spaced_label(name: str, values: dict) -> str:
@@ -350,11 +362,15 @@ class CandlestickItem(pg.GraphicsObject):
             if i1 <= i0:
                 shapes = []
             elif k > 1:
-                shapes = self._shapes(*ohlc_buckets(x, o, h, l, c, i0, i1, k), self.width * k)
+                shapes = self._shapes(*self._buckets(i0, i1, k), self.width * k)
             else:
                 shapes = self._shapes(*(a[i0:i1] for a in (x, o, h, l, c)), self.width)
             self._cache = (key, shapes)
         return self._cache[1]
+
+    def _buckets(self, i0: int, i1: int, k: int):
+        """The visible candles merged ``k`` at a time (see :func:`ohlc_buckets`)."""
+        return ohlc_buckets(*self._data, i0, i1, k)
 
     def paint(self, p, *args):
         if self._data is None:
@@ -382,6 +398,34 @@ class HistogramItem(CandlestickItem):
 
     def _shapes(self, x, o, h, l, c, width):
         return [(0, None, _rects(x, l, h, width))] if len(x) else []  # a merged bar spans its group's range
+
+
+def volume_buckets(x, o, v, c, i0: int, i1: int, k: int):
+    """Volume bars ``i0 <= i < i1`` merged ``k`` at a time like :func:`ohlc_buckets`, their volumes summed (a gap
+    counts as 0), so a merged bar is the volume traded over its candles; the first open and last close give its
+    direction."""
+    start = i0 - i0 % k
+    edges = np.arange(start, i1, k)
+    last = np.minimum(edges + k, i1) - 1
+    return (x[edges] + x[last]) / 2, o[edges], np.add.reduceat(np.nan_to_num(v[start:i1]), edges - start), c[last]
+
+
+class VolumeBarsItem(CandlestickItem):
+    """Volume bars from 0 in the candles' up/down colours (#116), culled and merged per pixel like the candles;
+    merged bars add up their volume instead of taking the largest."""
+
+    def set_data(self, x, volume, o, c, width, up, down):
+        v = np.asarray(volume, dtype=float)
+        super().set_data(x, o, v, np.zeros_like(v), c, width, up, down)
+
+    def _buckets(self, i0: int, i1: int, k: int):
+        x, o, v, _, c = self._data
+        xm, om, vm, cm = volume_buckets(x, o, v, c, i0, i1, k)
+        return xm, om, vm, np.zeros_like(vm), cm
+
+    def _shapes(self, x, o, h, l, c, width):
+        rising = c >= o
+        return [(style, None, _rects(x[m], l[m], h[m], width)) for style, m in ((0, rising), (1, ~rising)) if m.any()]
 
 
 class ChartView(QWidget):
@@ -499,6 +543,11 @@ class ChartView(QWidget):
         self.log_btn.setChecked(bool(settings.get("chart.log", False)) if settings else False)
         self.log_btn.setFixedSize(size, size)
         self.log_btn.toggled.connect(self._log_toggled)
+        # the volume pane (#116) is the "volume" indicator under the candles, so loadouts and the session keep it
+        self.vol_btn = QToolButton(self.canvas, text="vol", checkable=True, toolTip="Volume pane under the candles",
+                                   objectName="ChartCorner")
+        self.vol_btn.setFixedSize(size, size)
+        self.vol_btn.toggled.connect(self._volume_toggled)
         self.canvas.installEventFilter(self)  # keeps the button in the bottom-left corner
 
         # -- sidebar at the right (#41): news for the charted symbol, the watchlists (#67) ----------------
@@ -637,6 +686,15 @@ class ChartView(QWidget):
         self.indicators.remove(ind)
         self.redraw()
 
+    def _volume_toggled(self, on: bool):
+        """Show the volume pane (the ``volume`` indicator, first below the candles) or remove it."""
+        has = [i for i in self.indicators if i.name == "volume"]
+        if on and not has:
+            self.indicators.insert(0, INDICATORS.get("volume")())
+        elif not on and has:
+            self.indicators = [i for i in self.indicators if i.name != "volume"]
+        self.redraw()
+
     def _choose_algorithm(self, name):
         if name not in ALGORITHMS:
             self.algorithm = None
@@ -698,11 +756,11 @@ class ChartView(QWidget):
         i = self._hover if self._hover is not None and self._hover < len(self.df) else len(self.df) - 1
         muted = lambda text: f"<span style='color:{t.muted}'>{text}</span>"  # noqa: E731
 
-        def colored(v, color):
-            return f"<span style='color:{color}'>{fmt_value(v)}</span>"
+        def colored(v, color, fmt=fmt_value):
+            return f"<span style='color:{color}'>{fmt(v)}</span>"
 
         def line(label, values):
-            return " ".join([muted(escape(label)), *(colored(series[i], color) for series, color in values)])
+            return " ".join([muted(escape(label)), *(colored(series[i], *rest) for series, *rest in values)])
 
         row = self.df.iloc[i]
         direction = t.up if row.close >= row.open else t.down
@@ -744,6 +802,9 @@ class ChartView(QWidget):
         self._rows = {self.price: []}
         self._positions = None
         self._style(t)
+        self.vol_btn.blockSignals(True)
+        self.vol_btn.setChecked(any(i.name == "volume" for i in self.indicators))
+        self.vol_btn.blockSignals(False)
         if self.df is None or self.df.empty:
             self._drop_panes(spare)
             self._legend[self.price].setText("")
@@ -775,7 +836,10 @@ class ChartView(QWidget):
                     target.addItem(pg.InfiniteLine(level, angle=0, pen=pg.mkPen(qcolor(t.muted), style=Qt.PenStyle.DotLine)))
                 self.panes.append(target)
             values = []  # this indicator's drawn outputs for the value line
-            self._rows.setdefault(target, []).append((_spaced_label(ind.name, ind.values), values))
+            label = _spaced_label(ind.name, ind.values)
+            if ind.uses_volume and not np.isfinite(volume_of(df)).any():
+                label += f" · no volume data for {self._loaded_symbol or 'this symbol'}"
+            self._rows.setdefault(target, []).append((label, values))
             slot = self._palette_slot(ind)
             for k, col in enumerate(frame.columns):
                 if not ind.is_line(col):
@@ -789,7 +853,14 @@ class ChartView(QWidget):
                 hist = col.endswith("_hist")
                 default = t.muted if hist else t.series[(slot + k) % len(t.series)]
                 color = qcolor(resolve_color(t, style.color) if style.color else default)
-                if hist:
+                amount = ind.units.get(ind.output_of(col)) in ("volume", "money")
+                if style.bars:  # amounts like volume: up/down by candle (or the style's colour), merged bars add up
+                    up, down = (color, color) if style.color else (qcolor(t.up), qcolor(t.down))
+                    bars = VolumeBarsItem()
+                    bars.set_data(x[ok], y[ok], o[ok], c[ok], width, up, down)
+                    target.addItem(bars)
+                    self._fit_series.setdefault(target, []).append(np.zeros_like(y))  # bars grow from 0
+                elif hist:
                     bars = HistogramItem()
                     bars.set_data(x[ok], y[ok], width, color, pg.mkPen(pg.getConfigOption("foreground")))
                     target.addItem(bars)
@@ -799,7 +870,7 @@ class ChartView(QWidget):
                     target.addItem(Curve(x[ok], y[ok], pen=pen, name=col))
                 color = color.name()  # "#rrggbb" for the value line's rich text
                 self._fit_series.setdefault(target, []).append(y)
-                values.append((raw, color))  # the readout shows prices, also on the log scale
+                values.append((raw, color, fmt_amount if amount else fmt_value))  # prices also on the log scale
         self._drop_panes(spare)
         if self.algorithm is not None:
             self._positions = self.algorithm.run(df).to_numpy()
@@ -1057,6 +1128,7 @@ class ChartView(QWidget):
             bottom = self.canvas.height() - self.fit_btn.height() - 8
             self.fit_btn.move(8, bottom)
             self.log_btn.move(8 + self.fit_btn.width() + 4, bottom)
+            self.vol_btn.move(8 + self.fit_btn.width() + self.log_btn.width() + 8, bottom)
         elif obj is self.canvas and event.type() == QEvent.Type.Leave and self._hover is not None:
             self._hover = None  # cursor left the chart: show the latest bar again
             self._show_values()
@@ -1081,6 +1153,7 @@ class ChartView(QWidget):
                 lists.addAction(name, lambda n=name, s=self._loaded_symbol: self.watchlists.add_symbol(s, n))
         menu.addSeparator()
         menu.addAction("Line chart" if not self.style_btn.isChecked() else "Candles", self.style_btn.toggle)
+        menu.addAction("Hide volume" if self.vol_btn.isChecked() else "Show volume", self.vol_btn.toggle)
         menu.popup(global_pos)
         self._menu = menu  # keep a reference while open (and for tests)
 
