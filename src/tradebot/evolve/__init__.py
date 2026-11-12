@@ -9,9 +9,11 @@
 """
 
 from tradebot.evolve.export import plugin_source, valid_name
+from tradebot.evolve.autoconfig import AutoConfig, auto_configure
+from tradebot.evolve.preset import best_result_settings
 from tradebot.evolve.primitives import PrimitiveSet
 from tradebot.evolve.program import Evaluator, Node, Program
 from tradebot.evolve.search import EvolutionResult, Evolver, PermutationTest, evolve, shuffle_candles
 
-__all__ = ["EvolutionResult", "Evaluator", "Evolver", "Node", "PermutationTest", "PrimitiveSet", "Program",
+__all__ = ["AutoConfig", "auto_configure", "best_result_settings", "EvolutionResult", "Evaluator", "Evolver", "Node", "PermutationTest", "PrimitiveSet", "Program",
            "evolve", "plugin_source", "shuffle_candles", "valid_name"]

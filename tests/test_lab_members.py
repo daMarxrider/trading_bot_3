@@ -32,7 +32,10 @@ def lab(app, tmp_path):
     view.show()
     view.algo.setCurrentText("vote")
     QApplication.processEvents()
-    return view
+    yield view
+    view.close()  # a shown view freed by Python's refcount segfaults in sip (#143)
+    view.deleteLater()
+    QApplication.processEvents()
 
 
 def members(lab):

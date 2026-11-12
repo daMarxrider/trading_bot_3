@@ -14,6 +14,7 @@ from PyQt6.QtCore import QEvent, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QAbstractSpinBox,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -29,6 +30,7 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTableView,
     QToolButton,
@@ -553,12 +555,12 @@ class BacktestView(QWidget):
             box.setRange(0, 100000)
             box.setSpecialValueText(off)
             box.setSuffix(" candles")
-        self.wf_anchored = QCheckBox("Training grows from the first candle")
+        self.wf_anchored = QCheckBox("From first candle")
         self.meta = QSpinBox()  # meta-search (#90): combinations of the optimizer's own settings; 0 = off
         self.meta.setRange(0, 1000)
         self.meta.setSpecialValueText("off")
         self.meta.setSuffix(" combinations")
-        self.meta_compute = QCheckBox("Also population and generations")
+        self.meta_compute = QCheckBox("Incl. population")
         self.meta.valueChanged.connect(lambda _: self._walk_forward_changed(self.wf_folds.value()))
         self.wf_folds.valueChanged.connect(self._walk_forward_changed)
         self.wf_folds.setValue(5)  # on by default: the honest check; holdout off, since it's a fixed candle count
@@ -640,12 +642,15 @@ class BacktestView(QWidget):
         left.addWidget(opt_card)
         buttons = QHBoxLayout()
         for b in (run, opt, chart, self.stop_btn):
-            buttons.addWidget(b)
+            b.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)  # Windows' wider text must not widen the panel
+            buttons.addWidget(b, len(b.text()))
         left.addLayout(buttons)
         left.addWidget(self.progress)
         left.addStretch()
         left_w = QWidget()
         left_w.setLayout(left)
+        for field in left_w.findChildren((QComboBox, QAbstractSpinBox)):
+            field.setMinimumWidth(min(field.minimumSizeHint().width(), 90))  # not the longest item's / suffix's width: a wide font must not widen the side panel
         scroll = QScrollArea()
         scroll.setWidget(left_w)
         scroll.setWidgetResizable(True)
