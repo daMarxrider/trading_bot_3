@@ -492,6 +492,9 @@ number of symbols, and `--permutations N` repeats the whole search N times.
 
 `tradebot gui` opens these pages:
 
+* **Scanner**: runs one indicator (built-in, community, or your own Python script written in an
+  in-app editor with live reload) over a watchlist or a market index, filtered on its values and
+  alerts. See [docs/scanner.md](docs/scanner.md); the CLI twin is `tradebot scan`.
 * **Chart**: the symbol field suggests matches while you type: your watchlists and
   portfolio first, then stocks, ETFs and indices by ticker or company name (Yahoo
   search), and crypto pairs from the exchange (e.g. `sol` → `SOL/USDT`). Pick one
@@ -781,7 +784,8 @@ the past easily: use `--walk-forward` and compare with buy & hold.
 Built-ins and plugins register themselves when their class is defined. Put
 plugin files in `~/.config/tradebot/plugins/` (or `$TRADEBOT_PLUGIN_DIR`), or
 publish them under the `tradebot.plugins` entry-point group. See
-`examples/plugins/donchian_breakout.py`.
+`examples/plugins/donchian_breakout.py`; indicator scripts can be written and reloaded live in the
+Scanner's editor (`examples/plugins/near_high.py`, [docs/scanner.md](docs/scanner.md)).
 
 **Algorithm**
 
