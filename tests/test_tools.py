@@ -33,9 +33,13 @@ def config_file(tmp_path, monkeypatch):
     return path
 
 
+def same_file(found, expected):
+    return found is not None and os.path.normcase(found) == os.path.normcase(str(expected))  # PATHEXT may change the case
+
+
 @pytest.fixture
 def executable(tmp_path):
-    path = tmp_path / "bin" / "sc"
+    path = tmp_path / "bin" / ("sc.bat" if os.name == "nt" else "sc")  # Windows runs files by extension
     path.parent.mkdir()
     path.write_text("#!/bin/sh\n")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
@@ -85,13 +89,13 @@ def test_a_table_name_isnt_matched_inside_another(config_file):
 def test_configured_path_wins_over_path_lookup(config_file, executable, monkeypatch):
     monkeypatch.setenv("PATH", str(executable.parent))
     assert tools.configured_path("sc") == ""
-    assert tools.locate("sc") == str(executable)  # found on PATH
+    assert same_file(tools.locate("sc"), executable)  # found on PATH
     assert tools.set_path("sc", "/nowhere/sc")
     assert tools.configured_path("sc") == "/nowhere/sc"
     assert tools.locate("sc") is None  # a configured path that doesn't exist isn't replaced by PATH
     assert tools.set_path("sc", "  ")  # empty: back to PATH
     assert "tools" not in load_config() or "sc" not in load_config()["tools"]
-    assert tools.locate("sc") == str(executable)
+    assert same_file(tools.locate("sc"), executable)
 
 
 def test_a_non_executable_file_is_not_found(tmp_path):
