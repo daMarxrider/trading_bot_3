@@ -39,7 +39,10 @@ def lab(app, tmp_path, monkeypatch):
     view.algo.setCurrentText("sma_cross")
     monkeypatch.setattr("tradebot.gui.views.run_async", lambda work, done, fail: done(work()))
     QApplication.processEvents()
-    return view
+    yield view
+    view.close()  # a shown view freed by Python's refcount segfaults in sip (#143)
+    view.deleteLater()
+    QApplication.processEvents()
 
 
 def test_meta_search_needs_walk_forward_and_is_off_by_default(lab):
