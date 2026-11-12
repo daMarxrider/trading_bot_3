@@ -51,6 +51,7 @@ class RSI(BaseIndicator):
     params = {"period": IntParam(14, 2, 100)}
     overlay = False
     levels = (30.0, 70.0)
+    level_styles = {30.0: Style(color="up"), 70.0: Style(color="down")}
     outputs = ("value", "cross_up", "cross_down")
     alerts = {"cross_up": "RSI crosses above 70", "cross_down": "RSI crosses below 30"}
 
@@ -91,6 +92,7 @@ class Bollinger(BaseIndicator):
     params = {"period": IntParam(20, 2, 200), "width": Param(2.0, 0.5, 4.0)}
     outputs = ("upper", "middle", "lower", "above_upper", "below_lower")
     alerts = {"above_upper": "Close is above the upper band", "below_lower": "Close is below the lower band"}
+    fills = (("upper", "lower", Style(color="rgba(76, 201, 240, 0.08)")),)
 
     @classmethod
     def compute(cls, o, period, width):
@@ -227,6 +229,7 @@ class Ichimoku(BaseIndicator):
     }
     outputs = ("conversion", "base", "span_a", "span_b", "above_cloud", "below_cloud")
     alerts = {"above_cloud": "Close is above the cloud", "below_cloud": "Close is below the cloud"}
+    fills = (("span_a", "span_b", Style(color="rgba(128, 128, 128, 0.15)")),)
 
     @classmethod
     def compute(cls, o, conversion, base, span_b):
