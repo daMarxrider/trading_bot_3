@@ -118,6 +118,11 @@ plugin directory, or install tradebot from source.
 (ROCm) GPUs through the same API, so there is no vendor-specific code. For AMD,
 install a ROCm build of torch, for example
 `pip install torch --index-url https://download.pytorch.org/whl/rocm6.2`.
+The `gpu` extra installs the default (CUDA) build on Linux; with it an AMD card goes unnoticed and the optimizer
+quietly falls back to NumPy, so reinstall torch from the ROCm index afterwards. `--backend cuda` / `--backend rocm`
+(alias `amd`) require that vendor and fail with an error instead of falling back; `--backend gpu` takes either.
+Algorithms marked `period_batched` (`macd_cross`, `sma_cross`) evaluate a whole population in one GPU call even when
+their window lengths differ; for the other integer-only algorithms `auto` picks NumPy, which is faster for them.
 Without a GPU it falls back to a multi-threaded NumPy pool. Run
 `tradebot device` to see which backend is selected.
 

@@ -71,6 +71,42 @@ def test_backend_selection():
     assert b.kind in {"cuda", "rocm", "cpu", "numpy"}
 
 
+@pytest.mark.parametrize("name", ["macd_cross", "sma_cross"])
+@pytest.mark.parametrize("backend", backends())
+def test_period_batching_matches_grouped_evaluation(name, backend):
+    df = make_ohlc(600, seed=7)
+    algo = build_algorithm(name)
+    genomes = np.random.default_rng(2).random((200, len(algo.param_space())))
+    ref = GeneticOptimizer(algo, df, backend="numpy", seed=1, train_fraction=1.0, min_trades=0)
+    batched = GeneticOptimizer(algo, df, backend=backend, seed=1, train_fraction=1.0, min_trades=0)
+    algo.period_batched = False  # reference: one group per distinct window length
+    expected = ref.evaluate(genomes)
+    algo.period_batched = True
+    np.testing.assert_allclose(batched.evaluate(genomes), expected, rtol=1e-6, atol=1e-7)
+    del algo.period_batched
+
+
+def test_select_backend_vendor_options():
+    for prefer in ("cuda", "rocm", "amd"):
+        try:
+            kind = select_backend(prefer).kind
+        except RuntimeError:
+            continue  # that vendor's GPU is not present here
+        assert kind == ("rocm" if prefer == "amd" else prefer)
+
+
+def test_auto_backend_uses_numpy_for_integer_only_algorithms():
+    df = make_ohlc(200, seed=1)
+    algo = build_algorithm("ichimoku_cloud")
+    assert all(s.integer for s in algo.param_space().values()) and not algo.period_batched
+    assert GeneticOptimizer(algo, df, seed=0).backend.kind == "numpy"
+    # fixing the float params leaves an integer-only search
+    fixed = {"lower": 30.0, "upper": 70.0}
+    algo = build_algorithm("rsi_threshold")
+    assert all(k in algo.param_space() for k in fixed)
+    assert GeneticOptimizer(algo, df, seed=0, fixed=fixed).backend.kind == "numpy"
+
+
 # -- PSO and GA/PSO comparison ------------------------------------------------------------------------
 from tradebot.optimize import OPTIMIZERS, ParticleSwarmOptimizer, compare, optimize, run_comparison  # noqa: E402
 from tradebot.optimize.base import OptimizationResult  # noqa: E402

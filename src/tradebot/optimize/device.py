@@ -26,18 +26,23 @@ class Backend:
 
 
 def select_backend(prefer: str = "auto") -> Backend:
-    """``prefer``: ``auto`` (GPU, else NumPy threads), ``gpu``, ``cpu`` (torch threads) or ``numpy``."""
+    """``prefer``: ``auto`` (GPU, else NumPy threads), ``gpu`` (any), ``cuda`` (NVIDIA only), ``rocm``/``amd``
+    (AMD only), ``cpu`` (torch threads) or ``numpy``."""
+    if prefer == "amd":
+        prefer = "rocm"
     torch = ops.torch
     threads = os.cpu_count() or 1
     if prefer == "numpy" or torch is None:
-        if prefer == "gpu":
+        if prefer in ("gpu", "cuda", "rocm"):
             raise RuntimeError("GPU requested but PyTorch is not installed (pip install 'tradebot[gpu]')")
         return Backend("numpy", None, f"NumPy, {threads} threads")
-    if prefer in ("auto", "gpu") and torch.cuda.is_available():
+    if prefer in ("auto", "gpu", "cuda", "rocm") and torch.cuda.is_available():
         kind = "rocm" if getattr(torch.version, "hip", None) else "cuda"
+        if prefer in ("cuda", "rocm") and prefer != kind:
+            raise RuntimeError(f"{prefer.upper()} requested but the visible GPU runs on {kind.upper()}")
         return Backend(kind, "cuda", f"{kind.upper()}: {torch.cuda.get_device_name(0)}")
-    if prefer == "gpu":
-        raise RuntimeError("GPU requested but no CUDA/ROCm device is visible to PyTorch")
+    if prefer in ("gpu", "cuda", "rocm"):
+        raise RuntimeError(f"{'GPU' if prefer == 'gpu' else prefer.upper()} requested but no CUDA/ROCm device is visible to PyTorch")
     if prefer == "auto":
         # without a GPU the NumPy thread pool beats torch-CPU on these small batched kernels
         return Backend("numpy", None, f"NumPy, {threads} threads (no CUDA/ROCm GPU found)")

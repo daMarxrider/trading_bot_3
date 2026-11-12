@@ -188,6 +188,9 @@ class OptimizationResult:
         return bool(self.symbols) and carried_by_few(values)
 
 
+CHUNK = 1024  #: candidates per batched call, bounding the ``[group, T]`` intermediates
+
+
 class PopulationOptimizer(ABC):
     method: ClassVar[str]
 
@@ -221,6 +224,9 @@ class PopulationOptimizer(ABC):
         self.min_trades = min_trades
         if backend == "auto" and not getattr(algorithm, "vectorized", True):
             backend = "numpy"  # loop-based algorithms run on the CPU anyway; the GPU would only add transfers
+        elif backend == "auto" and not algorithm.period_batched and all(s.integer for k, s in algorithm.param_space().items() if k not in (fixed or {})):
+            # integer-only searches batch one individual per group (unless period_batched), so launch overhead beats the GPU (#9)
+            backend = "numpy"
         self.backend = backend if isinstance(backend, Backend) else select_backend(backend)
         self.rng = np.random.default_rng(seed)
         self.fixed = fixed or {}
@@ -327,7 +333,9 @@ class PopulationOptimizer(ABC):
         """Fitness for every genome (row); groups share integer params and run batched."""
         decoded = [self.decode(g) for g in genomes]
         keys = [tuple(p.values()) for p in decoded]
-        int_keys = [k for k, s in self.algorithm.param_space().items() if s.integer]
+        batched = getattr(self.algorithm, "period_batched", False)
+        # period-batched algorithms take window lengths as arrays, so no grouping by them (chunked for memory)
+        int_keys = [] if batched else [k for k, s in self.algorithm.param_space().items() if s.integer]
         fitness = np.empty(len(genomes))
         pending: dict[tuple, list[int]] = {}  # uncached parameter set -> rows holding it
         for i in range(len(genomes)):
@@ -344,7 +352,7 @@ class PopulationOptimizer(ABC):
             for i in indices:
                 self._cache[keys[i]] = fitness[i]
 
-        jobs = list(groups.values())
+        jobs = [g[i:i + CHUNK] for g in groups.values() for i in range(0, len(g), CHUNK)]
         if self.backend.kind == "numpy":
             with ThreadPoolExecutor() as pool:
                 list(pool.map(run, jobs))
@@ -379,9 +387,9 @@ class PopulationOptimizer(ABC):
         params = {}
         for key in self.algorithm.param_space():
             values = [p[key] for p in group]
-            if isinstance(values[0], int) or len(set(values)) == 1:
+            if len(set(values)) == 1 or (isinstance(values[0], int) and not self.algorithm.period_batched):
                 params[key] = values[0]
-            else:
+            else:  # float params, and window lengths of a period-batched algorithm
                 arr = np.asarray(values, dtype=np.float64)[:, None]
                 params[key] = ops.asarray(arr, o.close)
         return self.algorithm.signals(o, params)
