@@ -23,7 +23,7 @@ from tradebot.indicators.builtin import ATR, RSI, SMA
 log = logging.getLogger(__name__)
 
 COLUMNS = ["symbol", "close", "change_1d", "change_1m", "change_1y", "rsi", "sma50", "sma200",
-           "atr_pct", "avg_volume", "market_cap"]
+           "atr_pct", "avg_volume", "volume_ratio", "market_cap"]
 
 
 def screen_row(symbol: str, df: pd.DataFrame, market_cap: float | None = None,
@@ -44,7 +44,9 @@ def screen_row(symbol: str, df: pd.DataFrame, market_cap: float | None = None,
         "sma50": float(SMA.compute(o, period=50)["value"][-1]),
         "sma200": float(SMA.compute(o, period=200)["value"][-1]),
         "atr_pct": float(ATR.compute(o, period=14)["value"][-1] / c.iloc[-1]),
-        "avg_volume": float(df["volume"].tail(20).mean()) if "volume" in df else np.nan,
+        # NaN without volume data (#116); volume_ratio: the last candle's volume / the 20-candle average
+        "avg_volume": float(np.mean(o.volume[-20:])),
+        "volume_ratio": float(o.volume[-1] / np.mean(o.volume[-20:])),
         "market_cap": market_cap if market_cap is not None else np.nan,
     }
     for col, (name, params, output) in (extra or {}).items():
