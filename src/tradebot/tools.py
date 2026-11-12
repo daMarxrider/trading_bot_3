@@ -52,11 +52,18 @@ def set_path(key: str, path: str) -> bool:
     return save_config_value(key, os.path.expanduser(path) if path else None, table=TABLE)
 
 
+def _runnable(path: str) -> bool:
+    """Executable? Windows has no exec bit (``os.access`` says yes to every file): it goes by the extension."""
+    if os.name == "nt":
+        return os.path.splitext(path)[1].lower() in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").lower().split(";")
+    return os.access(path, os.X_OK)
+
+
 def locate(key: str, path: str | None = None) -> str | None:
     """The executable to run: ``path`` (default: the configured one) if it's an executable file, otherwise the
     tool's command on PATH when no path is set. None if not found."""
     path = configured_path(key) if path is None else path.strip()
     if path:
         path = os.path.expanduser(path)
-        return path if os.path.isfile(path) and os.access(path, os.X_OK) else None
+        return path if os.path.isfile(path) and _runnable(path) else None
     return shutil.which(tool(key).command)

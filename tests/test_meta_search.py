@@ -111,8 +111,9 @@ def test_cli_meta(monkeypatch):
                                        "--population", "12", "--generations", "2", "--min-trades", "0",
                                        "--backend", "numpy", "--seed", "0"], env={"COLUMNS": "200"})
     assert res.exit_code == 0, res.output
-    for text in ("3 combinations × 2 folds", "meta-search: 3 of", "(yours)", "winning settings:", "holdout",
+    for text in ("3 combinations × 2 folds", "meta-search: 3 of", "winning settings:", "holdout",
                  "scored once", "tradebot backtest A,BB sma_cross"):
         assert text in res.output
+    assert "(yours)" in res.output or "★" in res.output  # the first row is yours, or the winner if it beat the rest
     bad = CliRunner().invoke(cli.app, ["optimize", "A", "sma_cross", "--meta", "2", "--walk-forward", "500"])
     assert bad.exit_code != 0 and "folds don't fit" in bad.output
