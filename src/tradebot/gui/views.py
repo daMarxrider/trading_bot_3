@@ -650,7 +650,7 @@ class BacktestView(QWidget):
         left_w = QWidget()
         left_w.setLayout(left)
         for field in left_w.findChildren((QComboBox, QAbstractSpinBox)):
-            field.setMinimumWidth(min(field.minimumSizeHint().width(), 120))  # not the longest item's / suffix's width: a wide font must not widen the side panel
+            field.setMinimumWidth(min(field.minimumSizeHint().width(), 90))  # not the longest item's / suffix's width: a wide font must not widen the side panel
         scroll = QScrollArea()
         scroll.setWidget(left_w)
         scroll.setWidgetResizable(True)
