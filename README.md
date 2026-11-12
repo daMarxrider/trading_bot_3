@@ -149,6 +149,7 @@ tradebot pair-backtest KO:PEP --window 60 --entry 2            # long one leg, s
 tradebot pair-backtest KO:PEP --method kalman                  # hedge ratio from a Kalman filter instead of a rolling window
 tradebot pair-scan KO PEP PG MDLZ                              # find pairs: picked on 60% of the history, confirmed on the rest
 tradebot pair-scan KO PEP PG MDLZ --same-sector --correction bonferroni   # fewer pairs to test, stricter about chance finds
+tradebot pair-scan $(cat sp500.txt) --backend gpu               # big universes: all tests batched on a CUDA/ROCm GPU (auto picks it when there is one)
 tradebot bot pair-run BTC/USDT:USDT ETH/USDT:USDT --once       # live pair bot (dry run; --live to trade): long one, short the other
 tradebot halving --live                                        # Bitcoin halvings and the forecast of the next
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50          # dry run
