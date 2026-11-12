@@ -1058,6 +1058,9 @@ def scan(
     where: Annotated[list[str], typer.Option("--where", help='e.g. --where "fast > slow" --where "rsi < 30"')] = [],
     alert: Annotated[list[str], typer.Option("--alert", help="Alert that must be on; !NAME: off. e.g. --alert cross_up")] = [],
     watchlist: Annotated[Optional[str], typer.Option("--watchlist", "-w", help=WATCHLIST_HELP)] = None,
+    index: Annotated[Optional[str], typer.Option("--index", help="Scan a market index instead: sp500, nasdaq100, "
+                                                 "dow30, dax40, ftse100, crypto_top100 (weekly cached list)",
+                                                 autocompletion=complete.indices)] = None,
 ):
     """Scan symbols with one indicator, filtered on its values and alerts (the Scanner tab's engine)."""
     from tradebot import scanner
@@ -1071,6 +1074,10 @@ def scan(
             raise typer.BadParameter(f"{item!r}: use name=number", param_hint="--param") from None
     filters = [parse_where(w) for w in where] + [
         {"alert": a.lstrip("!"), "state": not a.startswith("!")} for a in alert]
+    if index:
+        if symbols or watchlist:
+            raise typer.BadParameter("use either symbols, --watchlist or --index", param_hint="--index")
+        symbols = _index_symbols(index)
     symbols = symbols or _watchlist(watchlist)
     try:
         with console.status("scanning ..."):
@@ -1089,6 +1096,16 @@ def scan(
 
 
 WATCHLIST_HELP = "Without symbols: only this watchlist's (default: all watchlists)"
+
+
+def _index_symbols(key: str) -> list[str]:
+    from tradebot import universes
+    from tradebot.data.cache import DiskCache
+
+    if key not in universes.INDICES:
+        raise typer.BadParameter(f"unknown index {key!r}; one of: {', '.join(universes.INDICES)}", param_hint="--index")
+    cache = DiskCache.from_config()
+    return universes.index_symbols(key, cache.symbols_dir if cache else None)
 
 
 def _watchlist(name: str | None) -> list[str]:

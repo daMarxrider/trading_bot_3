@@ -51,3 +51,10 @@ def test_cap_and_duplicates(monkeypatch, tmp_path, caplog):
     patched(monkeypatch, lambda: [f"S{i}" for i in range(MAX_SYMBOLS + 50)] + ["S0"])
     assert len(index_symbols("dow30", tmp_path)) == MAX_SYMBOLS
     assert "first 4000" in caplog.text
+
+
+def test_nasdaq100_from_the_nasdaq_api_and_a_complete_bundled_dow(monkeypatch):
+    rows = [{"symbol": "AAPL"}, {"symbol": "BRK.B"}, {"symbol": ""}]
+    monkeypatch.setattr(universes, "_get", lambda url: json.dumps({"data": {"data": {"rows": rows}}}))
+    assert INDICES["nasdaq100"].fetch() == ["AAPL", "BRK-B"]
+    assert INDICES["dow30"].fetch() == universes.BUNDLED["dow30"] and len(universes.BUNDLED["dow30"]) == 30
