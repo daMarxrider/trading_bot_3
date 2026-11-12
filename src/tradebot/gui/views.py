@@ -14,6 +14,7 @@ from PyQt6.QtCore import QEvent, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QAbstractSpinBox,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -28,8 +29,8 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
-    QSizePolicy,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTableView,
     QToolButton,
@@ -648,6 +649,8 @@ class BacktestView(QWidget):
         left.addStretch()
         left_w = QWidget()
         left_w.setLayout(left)
+        for field in left_w.findChildren((QComboBox, QAbstractSpinBox)):
+            field.setMinimumWidth(min(field.minimumSizeHint().width(), 120))  # not the longest item's / suffix's width: a wide font must not widen the side panel
         scroll = QScrollArea()
         scroll.setWidget(left_w)
         scroll.setWidgetResizable(True)
