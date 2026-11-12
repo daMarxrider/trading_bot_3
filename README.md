@@ -596,7 +596,7 @@ number of symbols, and `--permutations N` repeats the whole search N times.
 Lists and tables scroll with a kinetic flick. With a touchscreen present, controls automatically get finger-sized hit targets. Override this with `touch_mode = "on"` or `"off"` in the config.
 
 **⚙ Settings** (bottom left of the sidebar) opens the settings, with the categories on the left:
-* **Appearance**: the theme. It applies right away.
+* **Appearance**: the theme. It applies right away. **GPU rendering (experimental)** draws the chart through OpenGL for smoother panning (`gpu_rendering = true` in the config). It is off by default and applies after a restart. Without OpenGL (no driver, a VM, a remote desktop) the chart uses the normal renderer and the status bar says so.
 * **Integrations**:
   * *Third-party tools*: the path to each external tool tradebot can use, such as the Scalable Capital
     CLI (`sc`). Leave it empty to find the tool on `PATH`. Each tool shows whether it was found, and a
@@ -852,6 +852,7 @@ For venues without an API, subclass `ManualExecutionBroker` or
 uv run pytest
 uv run pytest --slow                   # also the minutes-long tests (CI runs them on PRs labelled `slow tests`)
 uv run python scripts/bench_chart.py   # chart redraw and pan times for 500 / 5,000 / 50,000 candles
+uv run python scripts/bench_chart.py --onscreen   # the same on the real display; --opengl with GPU rendering
 ```
 
 Don't add third-party tools or broker assets to the repo or the binaries. Integrations call a tool the

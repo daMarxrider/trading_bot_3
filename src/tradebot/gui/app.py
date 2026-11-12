@@ -45,7 +45,8 @@ log = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, themes: ThemeManager, theme_key: str = "glass", settings: Settings | None = None):
+    def __init__(self, themes: ThemeManager, theme_key: str = "glass", settings: Settings | None = None,
+                 opengl: bool = False):
         super().__init__()
         self.setWindowTitle("tradebot")
         self.resize(1440, 900)
@@ -57,7 +58,7 @@ class MainWindow(QMainWindow):
         # own symbols first, then crypto pairs and Yahoo, from the disk cache when they can (#63)
         search = disk_symbol_search(lambda: self.chart.watchlists.all_symbols() + self.portfolio_symbols,
                                     engine.disk.symbols_dir if engine.disk else None, yahoo=yahoo_search)
-        self.chart = ChartView(engine, themes, symbols, settings, search)
+        self.chart = ChartView(engine, themes, symbols, settings, search, opengl=opengl)  # opengl: #71
         self.screener = ScreenerView(engine, themes, symbols)
         self.scanner = ScannerView(engine, themes, lambda: self.chart.watchlists.lists, settings)
         self.chart.watchlists.changed.connect(self.scanner.watchlists_changed)
@@ -147,6 +148,8 @@ class MainWindow(QMainWindow):
         self.theme_key = theme_key if theme_key in themes.themes else "glass"  # e.g. a deleted user theme
         themes.apply(self.theme_key)  # starting with the configured theme isn't a choice to save
         self.chart.load()
+        if self.chart.opengl_note:  # GPU rendering is on but OpenGL isn't available (#71)
+            self.statusBar().showMessage(self.chart.opengl_note, 15000)
         run_async(partial(warm_up, engine, symbols), lambda _: None, lambda err: None)
 
     def show_about(self):
@@ -200,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
     # touch_mode: "auto" (default, on when a touchscreen is present), "on" or "off"
     mode = str(config.get("touch_mode", "auto")).lower()
     themes = ThemeManager(touch=mode == "on" or (mode == "auto" and has_touchscreen()))
-    window = MainWindow(themes, config.get("theme", "glass"), Settings())
+    window = MainWindow(themes, config.get("theme", "glass"), Settings(), opengl=bool(config.get("gpu_rendering", False)))
     window.show()
     return app.exec()
 
