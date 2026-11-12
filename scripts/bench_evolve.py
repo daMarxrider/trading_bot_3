@@ -13,11 +13,14 @@ part), which only the final run touches (Auto-configure keeps it out of its own 
 * ``best``       ``best_result_settings(level="best")``
 * ``auto-good``  ``auto_configure(level="good")``, then a run with the chosen settings
 * ``auto-best``  ``auto_configure(level="best")``, then a run with the chosen settings
+* ``fast-p01``, ``good-p01``  as ``fast`` / ``good``, but with parsimony 0.01 (a direct test of the parsimony
+  Auto-configure tended to pick)
 
 The datasets are real prices (stocks, crypto, one basket of three stocks, daily and weekly) plus two *random
 walks* as a control: there the test score has no business being positive, and the permutation test should
 not call the result an edge. Results are appended to ``benchmarks/evolve/results.jsonl`` (finished jobs are
-skipped on a restart), ``report`` writes ``benchmarks/evolve/report.md``.
+skipped on a restart), ``report`` writes ``benchmarks/evolve/report.md``. ``--results NAME`` uses
+``NAME.jsonl`` / ``NAME.md`` instead, e.g. for an experiment on a newer data snapshot.
 """
 
 from __future__ import annotations
@@ -34,8 +37,8 @@ import numpy as np
 import pandas as pd
 
 OUT = Path(__file__).resolve().parents[1] / "benchmarks" / "evolve"
-RESULTS = OUT / "results.jsonl"
-METHODS = ("fast", "good", "best", "auto-good", "auto-best")
+METHODS = ("fast", "good", "best", "auto-good", "auto-best", "fast-p01", "good-p01")
+P01 = 0.01  #: the parsimony of the "-p01" methods, about what Auto-configure picked (median 0.009)
 #: name -> (symbols or "random walk", timeframe, candles); a weight for the job order (cost ~ symbols)
 DATASETS = {
     "AAPL 1d": (["AAPL"], "1d", 2000),
@@ -84,10 +87,10 @@ def run_job(name: str, method: str, data_file: str, seed: int = SEED) -> dict:
     candles, n = min(len(f) for f in frames), len(frames)
     started = time.monotonic()
     extra = {}
-    if method == "fast":
+    if method.startswith("fast"):
         settings, permutations, folds = {}, 0, 0
-    elif method in ("good", "best"):
-        settings = best_result_settings(candles, n, level=method)
+    elif method.split("-")[0] in ("good", "best"):
+        settings = best_result_settings(candles, n, level=method.split("-")[0])
     else:
         auto = auto_configure(data, level=method.split("-")[1], seed=seed)
         settings = auto.settings
@@ -96,8 +99,10 @@ def run_job(name: str, method: str, data_file: str, seed: int = SEED) -> dict:
                  "auto_seconds": round(time.monotonic() - started, 1),
                  "best_trial_scores": sorted((round(t.score, 3) for t in auto.trials if t.round == max(
                      x.round for x in auto.trials)), reverse=True)}
-    if method != "fast":
+    if not method.startswith("fast"):
         permutations, folds = settings.pop("permutations"), settings.pop("folds")
+    if method.endswith("-p01"):
+        settings["parsimony"] = P01
     res = evolve(data, permutations=permutations, folds=folds, seed=seed, **settings)
     rows = res.rows()
     lead = [r["vs buy & hold"] for r in rows if r["vs buy & hold"] is not None]
@@ -113,10 +118,10 @@ def run_job(name: str, method: str, data_file: str, seed: int = SEED) -> dict:
     }
 
 
-def done_jobs() -> set[tuple[str, str, int]]:
-    if not RESULTS.exists():
+def done_jobs(results: Path) -> set[tuple[str, str, int]]:
+    if not results.exists():
         return set()
-    return {(r["dataset"], r["method"], r["seed"]) for r in map(json.loads, RESULTS.read_text().splitlines()) if r}
+    return {(r["dataset"], r["method"], r["seed"]) for r in map(json.loads, results.read_text().splitlines()) if r}
 
 
 def run(args) -> None:
@@ -129,8 +134,10 @@ def run(args) -> None:
         files[name] = str(cache / (name.replace("/", "-").replace(" ", "_") + ".pkl"))
         if not Path(files[name]).exists():  # fixed once loaded, so every method sees the same candles
             pd.to_pickle(load(name), files[name])
-    todo = [(d, m, sd) for sd in args.seeds for m in args.methods for d in names if (d, m, sd) not in done_jobs()]
-    weight = {"fast": 1, "good": 12, "best": 60, "auto-good": 20, "auto-best": 300}
+    results = OUT / f"{args.results}.jsonl"
+    done = done_jobs(results)
+    todo = [(d, m, sd) for sd in args.seeds for m in args.methods for d in names if (d, m, sd) not in done]
+    weight = {"fast": 1, "good": 12, "best": 60, "auto-good": 20, "auto-best": 300, "fast-p01": 1, "good-p01": 12}
     todo.sort(key=lambda j: -weight[j[1]] * (3 if "basket" in j[0] else 1))  # longest first, for the workers' balance
     print(f"{len(todo)} jobs, {args.workers} workers", flush=True)
     with ProcessPoolExecutor(args.workers) as pool:
@@ -142,13 +149,13 @@ def run(args) -> None:
             except Exception as e:  # keep going; the job is retried on the next start
                 print(f"FAILED {d} / {m} / seed {sd}: {type(e).__name__}: {e}", flush=True)
                 continue
-            with RESULTS.open("a") as out:
+            with results.open("a") as out:
                 out.write(json.dumps(r) + "\n")
             print(f"done {d} / {m} / seed {sd}: test {r['test']:.3f} p {r['p']} in {r['seconds']:.0f}s", flush=True)
 
 
-def report(_args) -> None:
-    rows = [json.loads(line) for line in RESULTS.read_text().splitlines() if line]
+def report(args) -> None:
+    rows = [json.loads(line) for line in (OUT / f"{args.results}.jsonl").read_text().splitlines() if line]
     df = pd.DataFrame(rows)
     methods = [m for m in METHODS if m in set(df["method"])]
     real = df[~df["dataset"].str.startswith("random")]
@@ -179,6 +186,19 @@ def report(_args) -> None:
             cells.append("–" if x.empty else f"{f(x['test'].mean(), 2)} · {f(x['p'].mean(), 2)} · "
                                              f"{x['seconds'].mean() / 60:.0f} (n={len(x)})")
         out.append(f"| {d} | " + " | ".join(cells) + " |")
+    pairs = [(m, m.split("-")[0]) for m in methods if m.endswith("-p01") and m.split("-")[0] in methods]
+    if pairs:
+        out += ["", "## Paired differences (same dataset and seed; mean ± standard error of the test Sharpe)", "",
+                "| comparison | real datasets | pairs | random walks | pairs |", "|---|---|---|---|---|"]
+        for m, base in pairs:
+            cells = []
+            for part in (real, noise):
+                a = part[part.method == m].set_index(["dataset", "seed"])["test"]
+                b = part[part.method == base].set_index(["dataset", "seed"])["test"]
+                d = (a - b).dropna()
+                cells += [f"{d.mean():+.3f} ± {d.std(ddof=1) / np.sqrt(len(d)):.3f}" if len(d) > 1 else "–",
+                          str(len(d))]
+            out.append(f"| {m} minus {base} | " + " | ".join(cells) + " |")
     auto = df[df.method.str.startswith("auto")]
     if len(auto):
         out += ["", "## What Auto-configure chose", "",
@@ -189,7 +209,7 @@ def report(_args) -> None:
             out.append(f"| {r['dataset']} | {r['method']} | {c['max_depth']} | {c['max_size']} | "
                        f"{c['parsimony']:.4f} | {c['segments']} | {c['min_trades']} | {c['aggregate']} | "
                        f"{c['tournament']} | {c['mutation']:.2f} |")
-    (OUT / "report.md").write_text("\n".join(out) + "\n")
+    (OUT / ("report.md" if args.results == "results" else f"{args.results}.md")).write_text("\n".join(out) + "\n")
     print("\n".join(out))
 
 
@@ -202,6 +222,9 @@ if __name__ == "__main__":
     r.add_argument("--workers", type=int, default=6)
     r.add_argument("--seeds", nargs="+", type=int, default=[SEED], help="repeat every job with these seeds")
     r.set_defaults(func=run)
-    sub.add_parser("report").set_defaults(func=report)
+    rp = sub.add_parser("report")
+    rp.set_defaults(func=report)
+    for p in (r, rp):
+        p.add_argument("--results", default="results", help="results file name in benchmarks/evolve/ (no suffix)")
     a = ap.parse_args()
     sys.exit(a.func(a))
