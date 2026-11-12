@@ -230,3 +230,28 @@ def test_date_fields_and_calendar_are_readable(app, key, tmp_path):
     grid = calendar.grab().toImage()
     assert _contrast(grid.pixelColor(grid.width() // 2, grid.height() - 3), qcolor(t.text)) > 4.5
     calendar.hide()
+
+
+def test_combo_builder(app, tmp_path, monkeypatch):
+    """The Backtest lab's combo builder (#22): blocks into rules, parameters follow, save registers the strategy."""
+    from tradebot.algorithms import ALGORITHMS
+    from tradebot.algorithms.combo import delete_combo
+
+    monkeypatch.setattr("tradebot.algorithms.combo.combos_path", lambda: tmp_path / "combos.toml")
+    view = BacktestView(None, ThemeManager(user_dir=tmp_path), ["TEST"])
+    view.algo.setCurrentText("combo")
+    assert not view.combo_card.isHidden()
+    b = view.combo
+    b.entry.setText("macd_cross")
+    b.block.setCurrentText("sma_cross")
+    b.logic.setCurrentText("weighted")
+    b.add(b.entry)
+    assert b.entry.text() == "weighted(macd_cross:1, sma_cross:1) >= 0.5"
+    assert "w.macd_cross" in view._algorithm().param_space()
+    b.exit.setText("stop_atr(2")
+    assert view._algorithm() is not None and "Rule error" in b.status.text()
+    b.exit.setText("")
+    b.name.setText("gui_test_combo")
+    b.save.click()
+    assert "gui_test_combo" in ALGORITHMS and view.algo.currentText() == "gui_test_combo"
+    delete_combo("gui_test_combo")

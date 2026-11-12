@@ -191,10 +191,18 @@ class VotingEnsemble(BaseAlgorithm):
         return [ind for m in self.members for ind in m.chart_indicators()]
 
 
-def build_algorithm(name: str, params: dict | None = None, members: list[str] | None = None) -> BaseAlgorithm:
-    """Instantiate a registered algorithm by name (``members`` only applies to ``vote`` and ``pool``)."""
+def build_algorithm(name: str, params: dict | None = None, members: list[str] | None = None,
+                    entry: str | None = None, exit: str | None = None) -> BaseAlgorithm:
+    """Instantiate a registered algorithm by name (``members`` only applies to ``vote`` and ``pool``,
+    ``entry``/``exit`` to combos, #22)."""
+    from tradebot.algorithms.combo import Combo
+
     cls = ALGORITHMS.get(name)
     params = params or {}
     if issubclass(cls, VotingEnsemble):
         return cls(members or None, **params)
+    if issubclass(cls, Combo):
+        return cls(entry=entry, exit=exit, **params)
+    if entry or exit:
+        raise ValueError(f"--entry and --exit need the combo strategy, not {name!r}")
     return cls(**params)

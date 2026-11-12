@@ -16,9 +16,11 @@ Completion = list[tuple[str, str]]
 
 def _plugins_loaded() -> None:
     """Plugin algorithms, indicators and brokers complete like built-ins (the CLI callback doesn't run here)."""
+    from tradebot.algorithms.combo import load_combos
     from tradebot.core.registry import load_plugins
 
     load_plugins()
+    load_combos()
 
 
 def _starting(incomplete: str, items: Completion) -> Completion:
@@ -119,7 +121,11 @@ def algorithm_params(ctx: typer.Context, incomplete: str) -> Completion:
     members_ = ctx.params.get("members")
     if not name or name not in ALGORITHMS:
         return []
-    algo = build_algorithm(name, members=members_.split(",") if members_ else None)
+    try:
+        algo = build_algorithm(name, members=members_.split(",") if members_ else None,
+                               entry=ctx.params.get("entry"), exit=ctx.params.get("exit"))
+    except ValueError:  # e.g. an unfinished combo rule
+        return []
     return _starting(incomplete, [(f"{key}=", _param_help(p)) for key, p in algo.param_space().items()])
 
 

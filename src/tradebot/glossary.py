@@ -73,6 +73,9 @@ STRATEGIES = {
     "range": "Buys at a fixed price and sells at a higher fixed price, with an optional stop loss. For a market "
              "moving sideways in a known range.",
     "vote": "Combines several strategies: buys when most of them say buy and sells when most say sell.",
+    "combo": "Builds a strategy from rules without code: an entry rule and an exit rule made of strategies, indicator "
+             "conditions and risk exits (stop-loss, take-profit, trailing stop, max holding time), joined with "
+             "and, or, not, vote or weighted.",
     "pool": "Like vote, but the optimizer picks which strategies vote and which indicators must agree before "
             "buying. Not every candidate ends up being used.",
     "elliott_wave": "Looks for the wave pattern of Elliott wave theory and trades the breakout of its strongest "

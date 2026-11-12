@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 
 from tradebot import __version__
 from tradebot.config import Settings, config_path, load_config, save_config_value, watchlist
+from tradebot.algorithms.combo import load_combos
 from tradebot.core.registry import load_plugins
 from tradebot.data import MarketDataEngine
 from tradebot.data.cache import DiskCache
@@ -194,6 +195,7 @@ def warm_up(engine: MarketDataEngine, symbols: list[str]) -> None:
 def main(argv: list[str] | None = None) -> int:
     quiet_yfinance()
     load_plugins()
+    load_combos()
     app = QApplication(argv if argv is not None else sys.argv)
     app.setApplicationName("tradebot")
     config = load_config()
