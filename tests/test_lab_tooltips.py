@@ -96,6 +96,18 @@ def touch_press(widget, pos, kind=QEvent.Type.MouseButtonPress):
     QApplication.sendEvent(widget, event)
 
 
+def diag(lab, field, hit):  # temporary diagnostics (#134)
+    chain, w = [], hit
+    while w is not None and len(chain) < 6:
+        chain.append(f"{type(w).__name__}:{w.objectName()}:{w.width()}x{w.height()}")
+        w = w.parentWidget()
+    c = field.rect().center()
+    return (f"hit chain={chain}; field geom={field.geometry()} visible={field.isVisible()} "
+            f"region_empty={field.visibleRegion().isEmpty()} global={field.mapToGlobal(c)} "
+            f"lab global={lab.mapToGlobal(QPoint(0, 0))} lab size={lab.size()} "
+            f"screen={QApplication.primaryScreen().geometry()} tip={QToolTip.text()[:50]!r}")
+
+
 def test_long_press_by_touch_shows_the_tooltip(lab):
     field = lab.population
     lab.findChild(QScrollArea).ensureWidgetVisible(field)  # a field clipped by the viewport would hit another widget
@@ -104,7 +116,7 @@ def test_long_press_by_touch_shows_the_tooltip(lab):
     hit = QApplication.widgetAt(field.mapToGlobal(center))
     touch_press(field, center)
     QTest.qWait(700)
-    assert QToolTip.isVisible() and QToolTip.text() == field.toolTip(), (hit, QToolTip.text()[:60])
+    assert QToolTip.isVisible() and QToolTip.text() == field.toolTip(), diag(lab, field, hit)
     QToolTip.hideText()
 
     touch_press(field, center)  # a short tap shows nothing

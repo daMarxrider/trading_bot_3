@@ -63,7 +63,7 @@ jobs:
     strategy:
       fail-fast: false  # one OS failing must not hide the other
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [windows-latest]
     steps:
       - uses: actions/checkout@v7
 
@@ -75,6 +75,6 @@ jobs:
         run: uv sync --extra gui --python 3.14
 
       - name: Test
-        run: uv run pytest -q ${{ contains(github.event.pull_request.labels.*.name, 'slow tests') && '--slow' || '' }}
+        run: uv run pytest -q tests/test_brokers_data.py::test_plugin_loader tests/test_lab_symbols.py::test_side_panel_never_scrolls_sideways tests/test_lab_tooltips.py::test_long_press_by_touch_shows_the_tooltip
         env:
           QT_QPA_PLATFORM: offscreen

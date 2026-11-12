@@ -145,12 +145,23 @@ def test_side_panel_never_scrolls_sideways(lab):
         lab.algo.setCurrentIndex(i)
         QApplication.processEvents()
         QApplication.processEvents()  # let the layout settle after the cards were shown or hidden
-        def tree(w, depth=0):  # temporary diagnostics (#134): every visible widget with its minimum width
-            out = [f"{'  ' * depth}{type(w).__name__} {w.objectName()} min={w.minimumSizeHint().width()} "
-                   f"fixed_min={w.minimumWidth()} {getattr(w, 'text', lambda: '')()[:30] if hasattr(w, 'text') else ''}"]
-            for c in w.children():
-                if isinstance(c, QWidget) and c.isVisible():
-                    out += tree(c, depth + 1)
-            return out
-        wide = "\n".join(tree(scroll.widget())) if scroll.widget().minimumSizeHint().width() > scroll.viewport().width() else ""
+        content = scroll.widget()
+        if content.minimumSizeHint().width() > scroll.viewport().width():  # temporary diagnostics (#134)
+            lay = content.layout()
+            info = [f"algo={lab.algo.itemText(i)} min={content.minimumSizeHint().width()} viewport={scroll.viewport().width()} "
+                    f"layout={type(lay).__name__} margins={lay.contentsMargins().left()},{lay.contentsMargins().right()}"]
+            for k in range(lay.count()):
+                w = lay.itemAt(k).widget()
+                if w is not None:
+                    info.append(f"  item {k} {type(w).__name__} hidden={w.isHidden()} visible={w.isVisible()} "
+                                f"min={w.minimumSizeHint().width()} sizehint={w.sizeHint().width()} geom={w.width()}")
+            lay.invalidate(); lay.activate()
+            info.append(f"after invalidate+activate: {content.minimumSizeHint().width()}")
+            QApplication.sendPostedEvents(None, 0)
+            info.append(f"after sendPostedEvents: {content.minimumSizeHint().width()}")
+            lab.algo.setCurrentIndex(0); QApplication.processEvents(); lab.algo.setCurrentIndex(i); QApplication.processEvents()
+            info.append(f"after toggling the algo: {content.minimumSizeHint().width()}")
+            wide = "\n".join(info)
+        else:
+            wide = ""
         assert scroll.widget().minimumSizeHint().width() <= scroll.viewport().width(), lab.algo.itemText(i) + "\n" + wide
