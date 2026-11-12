@@ -145,6 +145,12 @@ def test_side_panel_never_scrolls_sideways(lab):
         lab.algo.setCurrentIndex(i)
         QApplication.processEvents()
         QApplication.processEvents()  # let the layout settle after the cards were shown or hidden
-        wide = [(w.objectName() or type(w).__name__, w.minimumSizeHint().width())
-                for w in scroll.widget().findChildren(QWidget) if w.isVisible() and w.minimumSizeHint().width() > 300]
-        assert scroll.widget().minimumSizeHint().width() <= scroll.viewport().width(), (lab.algo.itemText(i), wide)
+        def tree(w, depth=0):  # temporary diagnostics (#134): every visible widget with its minimum width
+            out = [f"{'  ' * depth}{type(w).__name__} {w.objectName()} min={w.minimumSizeHint().width()} "
+                   f"fixed_min={w.minimumWidth()} {getattr(w, 'text', lambda: '')()[:30] if hasattr(w, 'text') else ''}"]
+            for c in w.children():
+                if isinstance(c, QWidget) and c.isVisible():
+                    out += tree(c, depth + 1)
+            return out
+        wide = "\n".join(tree(scroll.widget())) if scroll.widget().minimumSizeHint().width() > scroll.viewport().width() else ""
+        assert scroll.widget().minimumSizeHint().width() <= scroll.viewport().width(), lab.algo.itemText(i) + "\n" + wide
