@@ -24,7 +24,12 @@ How each output is drawn can be set with :attr:`BaseIndicator.styles`::
 
     styles = {"value": Style(color="#ffd166", width=2), "signal": Style(color="accent", dash="dash")}
 
-Outputs without a style (or colour) get the theme's palette colours.
+Outputs without a style (or colour) get the theme's palette colours. ``Style(bars=True)`` draws an output as bars
+from 0 that add up when the chart merges candles (volume); without a colour they take the candle's up/down colour.
+
+``compute`` gets the candles as :class:`~tradebot.core.series.OHLC`: ``o.open``, ``o.high``, ``o.low``,
+``o.close``, ``o.time`` and ``o.volume`` (#116). Volume is venue-dependent and all NaN for symbols without volume
+data (many indices), so an indicator using it sets :attr:`BaseIndicator.uses_volume` and simply returns NaN there.
 
 Alert conditions (#108) are named true/false states per bar, declared with :attr:`BaseIndicator.alerts`
 (``{output: description}``). The output is an array of 0/1 (NaN while warming up) that ``compute`` returns like any
@@ -61,6 +66,9 @@ class Style:
     color: str | None = None
     width: float | None = None  #: line width in pixels (default 1.6)
     dash: str | None = None  #: ``None`` (solid), ``"dash"`` or ``"dot"``
+    #: bars from 0 instead of a line; merged bars (more candles than pixels) add up, as volume does.
+    #: Without a colour, each bar takes its candle's up/down colour.
+    bars: bool = False
 
 
 class BaseIndicator(ABC):
@@ -82,14 +90,17 @@ class BaseIndicator(ABC):
     #: How outputs are drawn: ``{output: Style(...)}``; outputs without a colour use the theme palette.
     styles: ClassVar[dict[str, Style]] = {}
     #: What each output measures, for the strategy evolver (#83), which only compares like with like:
-    #: ``"price"``, ``"osc"`` (0-100), ``"ratio"`` (0.05 = 5 %), ``"dist"`` (a price distance, like the ATR) or
-    #: any other name. Unset outputs: ``"price"`` on overlays, ``"osc"`` when all ``levels`` are within 0-100,
+    #: ``"price"``, ``"osc"`` (0-100), ``"ratio"`` (0.05 = 5 %), ``"dist"`` (a price distance, like the ATR),
+    #: ``"volume"`` (an amount traded, like OBV), ``"money"`` (price × volume) or any other name. Unset outputs: ``"price"`` on overlays, ``"osc"`` when all ``levels`` are within 0-100,
     #: otherwise the indicator's own unit (comparable with its other outputs and its ``levels``).
     units: ClassVar[dict[str, str]] = {}
 
     #: Alert conditions ``{output: description}``; each output is 0/1 per bar (NaN while warming up).
     #: Alert outputs are implicitly hidden. The order matters: the Scanner uses the first two as filter templates.
     alerts: ClassVar[dict[str, str]] = {}
+    #: True for indicators that need ``o.volume``: their outputs are NaN on symbols without volume data, and the
+    #: chart says so instead of showing an empty pane.
+    uses_volume: ClassVar[bool] = False
     #: False for indicators the Scanner must not list (e.g. chart patterns whose labels change with new bars).
     screenable: ClassVar[bool] = True
 

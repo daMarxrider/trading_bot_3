@@ -60,7 +60,7 @@ from tradebot.algorithms.base import BaseAlgorithm
 from tradebot.backtest import BacktestResult, Baselines, backtest, baselines, batch_fitness, simulate
 from tradebot.backtest.metrics import infer_periods_per_year
 from tradebot.core import ops
-from tradebot.core.series import OHLC, unix_seconds
+from tradebot.core.series import OHLC, unix_seconds, volume_of
 from tradebot.optimize.device import Backend, select_backend
 
 log = logging.getLogger(__name__)
@@ -300,15 +300,16 @@ class PopulationOptimizer(ABC):
         rows, symbols = [], []
         for i in self._sampled:
             d = self.data[i]
-            # open, high, low, close and time (NaN without timestamps, as OHLC.time would be None)
+            # open, high, low, close, time (NaN without timestamps, as OHLC.time would be None) and volume
             time = unix_seconds(d.train_df.index)
             arrays = np.stack([d.train_df[c].to_numpy(dtype=np.float64) for c in ("open", "high", "low", "close")]
-                              + [time if time is not None else np.full(len(d.train_df), np.nan)])
+                              + [time if time is not None else np.full(len(d.train_df), np.nan),
+                                 volume_of(d.train_df)])
             for start in self.rng.integers(0, len(d.train_df) - total + 1, self.samples):
                 rows.append(arrays[:, start:start + total])
                 symbols.append(i)
-        stack = np.stack(rows)[:, :, None, :]  # [K, 5, 1, total]
-        cols = [np.ascontiguousarray(stack[:, j]) for j in range(5)]  # 5 x [K, 1, total]
+        stack = np.stack(rows)[:, :, None, :]  # [K, 6, 1, total]
+        cols = [np.ascontiguousarray(stack[:, j]) for j in range(stack.shape[1])]  # 6 x [K, 1, total]
         device = self.backend.device
         ohlc = OHLC(*[ops.torch.tensor(c, dtype=ops.torch.float64, device=device) for c in cols]) if device else OHLC(*cols)
         ppy = ops.asarray(np.array([[self.data[i].ppy] for i in symbols]), ohlc.close)

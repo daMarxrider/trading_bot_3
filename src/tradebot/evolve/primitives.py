@@ -11,6 +11,9 @@ the search builds is a valid rule that also means the same on every symbol:
 * ``osc`` - 0-100 oscillators (RSI, stochastic); compared with each other or with a level 0-100
 * ``ratio`` - relative changes (0.05 = 5 %), e.g. ``change(close, 20)``, ``gap(close, sma(close, 50))``
 * ``dist`` - a price distance (ATR), used as ``price + k * atr(n)`` (stops and bands)
+* ``volume`` - the traded amount (#116): the ``volume`` leaf, OBV, volume averages; compared with other volumes
+  only. ``money`` - price × volume (from scratch: ``close * volume``), the stuff of VWAP and money flow.
+  Volume is venue-dependent and NaN on symbols without volume data, where rules using it never fire
 * an indicator's own unit (e.g. ``macd``): comparable with its other outputs and its ``levels``
 
 Constants (window lengths, offsets, levels, indicator parameters) are leaves with a search range.
@@ -44,7 +47,7 @@ from tradebot.core.series import OHLC
 from tradebot.evolve import runtime as rt
 from tradebot.indicators.base import INDICATORS, BaseIndicator
 
-BOOL, PRICE, OSC, RATIO, DIST = "bool", "price", "osc", "ratio", "dist"
+BOOL, PRICE, OSC, RATIO, DIST, VOLUME, MONEY = "bool", "price", "osc", "ratio", "dist", "volume", "money"
 
 WINDOW = IntParam(20, 2, 200, "candles")
 LAG = IntParam(1, 1, 20, "candles back")
@@ -140,13 +143,30 @@ def _generic(unit: str, level: Param | None, scratch: bool = False) -> list[Prim
     return out
 
 
-def _field(name: str) -> Primitive:
-    return Primitive(name, PRICE, (), lambda o, _f=name: getattr(o, _f), name, f"o.{name}", kind="data")
+def _field(name: str, unit: str = PRICE) -> Primitive:
+    return Primitive(name, unit, (), lambda o, _f=name: getattr(o, _f), name, f"o.{name}", kind="data")
+
+
+#: the candle leaves: the four prices and the volume (#116)
+FIELDS = ("open", "high", "low", "close", "volume")
+
+
+def uses_volume(node) -> bool:
+    """Whether a rule (a tree of nodes) reads the volume: the leaf, a volume indicator or a module built on them."""
+    p = node.prim
+    if p is None:
+        return False
+    if p.name == "volume" or (p.indicator and p.indicator[0] in INDICATORS
+                              and INDICATORS.get(p.indicator[0]).uses_volume):
+        return True
+    if p.kind == "module" and uses_volume(p.body):
+        return True
+    return any(uses_volume(a) for a in node.args)
 
 
 def _core(units: set[str]) -> list[Primitive]:
     """Candles, logic, trade state and the unit-specific arithmetic."""
-    out = [_field(f) for f in ("open", "high", "low", "close")]
+    out = [_field(f) for f in ("open", "high", "low", "close")] + [_field("volume", VOLUME)]
     out += [
         Primitive("always", BOOL, (), rt.always, "always", "rt.always(o)", kind="data", weight=0.0),
         Primitive("never", BOOL, (), rt.never, "never", "rt.never(o)", kind="data", weight=0.0),
@@ -178,13 +198,18 @@ def _core(units: set[str]) -> list[Primitive]:
     if DIST in units:
         out.append(Primitive("offset:price", PRICE, (PRICE, DIST, MULT), lambda p, d, k: p + k * d,
                              "{0} + {2} * {1}", "({0} + {2} * {1})", weight=0.4, prec=5))
+    # volume relative to another volume (e.g. its average): 1.0 = twice as much, like gap() of prices
+    out.append(Primitive("gap:volume", RATIO, (VOLUME, VOLUME), lambda a, b: rt.div(a, b) - 1, "gap({0}, {1})",
+                         "(rt.div({0}, {1}) - 1)", weight=0.4))
     return out
 
 
 # -- from scratch (#100) ------------------------------------------------------------------------------
-#: what a unit measures for the arithmetic: (power of the price, a level rather than a difference). A price is
-#: a point on the price axis, a distance the gap between two points, a ratio has no dimension.
-DIMENSION = {PRICE: (1, True), DIST: (1, False), RATIO: (0, False)}
+#: what a unit measures for the arithmetic: (power of the price, power of the volume, a level rather than a
+#: difference). A price is a point on the price axis, a distance the gap between two points, a ratio has no
+#: dimension; a volume is an amount, money (price × volume) too.
+DIMENSION = {PRICE: (1, 0, True), DIST: (1, 0, False), RATIO: (0, 0, False), VOLUME: (0, 1, False),
+             MONEY: (1, 1, False)}
 ARITH = {"add": "+", "sub": "-", "mul": "*", "div": "/"}
 
 
@@ -193,27 +218,31 @@ def arith_unit(op: str, a: str, b: str) -> str | None:
 
     Dimensional analysis as in physics, with prices as points and distances as differences:
     ``price - price`` and ``price ± dist`` are fine, ``price + price`` is not; ``price / price`` and
-    ``dist / price`` are ratios, ``price * ratio`` a price, ``price * price`` nothing.
+    ``dist / price`` are ratios, ``price * ratio`` a price, ``price * price`` nothing. With volume (#116):
+    ``volume / volume`` is a ratio, ``price * volume`` money (an amount, so sums of it mean something), and
+    ``money / volume`` a volume-weighted average price, a level again (VWAP).
     """
     if a not in DIMENSION or b not in DIMENSION or op not in ARITH:
         return None
-    (pa, la), (pb, lb) = DIMENSION[a], DIMENSION[b]
+    (pa, va, la), (pb, vb, lb) = DIMENSION[a], DIMENSION[b]
     if op in ("add", "sub"):
-        if pa != pb or (la and lb and op == "add") or (lb and not la):
+        if pa != pb or va != vb or (la and lb and op == "add") or (lb and not la):
             return None
-        power, level = pa, (la or lb) if op == "add" else la and not lb
+        power, volume, level = pa, va, (la or lb) if op == "add" else la and not lb
     elif op == "mul":
-        power, level = pa + pb, la or lb
-        if la and lb:
+        power, volume, level = pa + pb, va + vb, (la or lb) and not (va or vb)  # a price weighted by an amount
+        if la and lb or volume > 1:
             return None
     else:
-        power, level = pa - pb, la and not lb
-    return {(0, False): RATIO, (1, True): PRICE, (1, False): DIST}.get((power, level))
+        power, volume = pa - pb, va - vb
+        level = la and not lb or (power == 1 and volume == 0 and va > 0)  # money / volume: an average price
+    return {(0, 0, False): RATIO, (1, 0, True): PRICE, (1, 0, False): DIST, (0, 1, False): VOLUME,
+            (1, 1, False): MONEY}.get((power, volume, level))
 
 
 def _arithmetic() -> list[Primitive]:
     """Every meaningful ``a op b`` (one order of the commutative ones)."""
-    order = [PRICE, DIST, RATIO]
+    order = [PRICE, DIST, RATIO, VOLUME, MONEY]
     fns = {"add": lambda a, b: a + b, "sub": lambda a, b: a - b,
            "mul": lambda a, b: rt.finite(a * b), "div": rt.div_checked}
     out = []
@@ -233,7 +262,7 @@ def _arithmetic() -> list[Primitive]:
 def _scratch_core() -> list[Primitive]:
     """Candles, logic, trade state, constants, the arithmetic and the low-level series maths."""
     core = {p.name: p for p in _core(set())}
-    keep = ("open", "high", "low", "close", "always", "never", "and", "or", "not", "if_else:bool",
+    keep = ("open", "high", "low", "close", "volume", "always", "never", "and", "or", "not", "if_else:bool",
             "held", "stop", "target", "trail", "mid:price")
     out = [core[k] for k in keep]
     out += [
@@ -242,7 +271,7 @@ def _scratch_core() -> list[Primitive]:
         Primitive("squash:osc", OSC, (RATIO,), rt.squash, "squash({0})", "rt.squash({0})", weight=0.3),
     ]
     out += _arithmetic()
-    for u in (PRICE, DIST, RATIO):
+    for u in (PRICE, DIST, RATIO, VOLUME, MONEY):
         spread = DIST if u == PRICE else u  # what a difference or deviation of u is: price - price = dist
         out += [
             Primitive(f"diff:{u}", spread, (u, LAG), rt.diff, "diff({0}, {1})",
@@ -275,7 +304,8 @@ def _sample_ohlc(n: int, seed: int = 7) -> OHLC:
     open_ = np.r_[close[0], close[:-1]]
     spread = np.abs(rng.normal(0, 0.01, n)) * close
     time = 1.42e9 + 86_400.0 * np.arange(n)  # daily candles from 2015, for calendar indicators
-    return OHLC(open_, np.maximum(open_, close) + spread, np.minimum(open_, close) - spread, close, time)
+    volume = rng.lognormal(10, 0.5, n)  # so volume indicators are checked on real numbers, not NaN
+    return OHLC(open_, np.maximum(open_, close) + spread, np.minimum(open_, close) - spread, close, time, volume)
 
 
 def output_unit(cls: type[BaseIndicator], output: str) -> str | None:
@@ -394,9 +424,9 @@ class PrimitiveSet:
     def default(cls, indicators: list[str] | None = None, state: bool = True) -> "PrimitiveSet":
         """Candles, logic and arithmetic, plus every usable indicator output (or those of ``indicators``)."""
         found = indicator_outputs(indicators)
-        units = {PRICE, OSC, RATIO} | {u for _, _, u in found}
+        units = {PRICE, OSC, RATIO, VOLUME} | {u for _, _, u in found}
         prims = _core(units)
-        owner = {u: c for c, _, u in found if u not in (PRICE, OSC, RATIO, DIST)}
+        owner = {u: c for c, _, u in found if u not in (PRICE, OSC, RATIO, DIST, VOLUME, MONEY)}
         for unit in sorted(units):
             prims += _generic(unit, _level(unit, owner.get(unit)))
         # the indicator outputs of one unit share a weight, so many outputs don't crowd out the rest; so do
@@ -414,7 +444,7 @@ class PrimitiveSet:
         """No ready-made indicators: candles, logic, constants and low-level maths with unit-checked arithmetic,
         enough to build RSI, Stochastic, Bollinger, ATR and MACD (#100)."""
         prims = _scratch_core()
-        for unit in (PRICE, DIST, RATIO, OSC):
+        for unit in (PRICE, DIST, RATIO, OSC, VOLUME, MONEY):
             prims += _generic(unit, SCRATCH_LEVELS.get(unit), scratch=True)
         comparisons = sum(p.family in COMPARISONS | LEVEL_COMPARISONS for p in prims)
         prims = [replace(p, weight=6.0 / comparisons) if p.family in COMPARISONS | LEVEL_COMPARISONS else p
