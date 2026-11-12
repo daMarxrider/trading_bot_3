@@ -14,7 +14,7 @@ pytest.importorskip("pyqtgraph")
 from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
 from PyQt6.QtGui import QInputDevice, QMouseEvent, QPointingDevice  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QFormLayout, QLabel, QToolTip  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QFormLayout, QLabel, QScrollArea, QToolTip  # noqa: E402
 
 from tradebot.algorithms import build_algorithm  # noqa: E402
 from tradebot.backtest import backtest  # noqa: E402
@@ -98,10 +98,13 @@ def touch_press(widget, pos, kind=QEvent.Type.MouseButtonPress):
 
 def test_long_press_by_touch_shows_the_tooltip(lab):
     field = lab.population
+    lab.findChild(QScrollArea).ensureWidgetVisible(field)  # a field clipped by the viewport would hit another widget
+    QApplication.processEvents()
     center = field.rect().center()
+    hit = QApplication.widgetAt(field.mapToGlobal(center))
     touch_press(field, center)
     QTest.qWait(700)
-    assert QToolTip.isVisible() and QToolTip.text() == field.toolTip()
+    assert QToolTip.isVisible() and QToolTip.text() == field.toolTip(), (hit, QToolTip.text()[:60])
     QToolTip.hideText()
 
     touch_press(field, center)  # a short tap shows nothing
