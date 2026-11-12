@@ -98,6 +98,8 @@ def full(shape, value, like):
 
 def shift(x, n: int = 1, fill=NAN):
     """Shift along time: ``shift(x, 1)[t] == x[t-1]``."""
+    if not isinstance(n, int):
+        return _shift_each(x, n, fill)
     if n == 0:
         return x
     T = x.shape[-1]
@@ -106,6 +108,20 @@ def shift(x, n: int = 1, fill=NAN):
     if n > 0:
         return concat([pad, x[..., : T - n_abs]])
     return concat([x[..., n_abs:], pad])
+
+
+def _shift_each(x, n, fill):
+    """``shift`` with a lag per row: ``n`` is a ``[..., G, 1]`` array of non-negative whole numbers (period batching)."""
+    T = x.shape[-1]
+    if is_torch(x):
+        idx = torch.arange(T, device=x.device) - n.long()
+        ok, idx = idx >= 0, idx.clamp(min=0)
+        shape = torch.broadcast_shapes(x.shape[:-1], idx.shape[:-1]) + (T,)
+        return torch.where(ok, x.expand(shape).gather(-1, idx.expand(shape)), torch.tensor(fill, dtype=x.dtype, device=x.device))
+    idx = np.arange(T) - np.asarray(n).astype(int)
+    ok, idx = idx >= 0, np.clip(idx, 0, None)
+    shape = np.broadcast_shapes(x.shape[:-1], idx.shape[:-1]) + (T,)
+    return np.where(ok, np.take_along_axis(np.broadcast_to(x, shape), np.broadcast_to(idx, shape), -1), fill)
 
 
 def window_sum(x, n: int):
@@ -162,20 +178,19 @@ def rolling_min(x, n: int):
 def ewm(x, alpha):
     """Exponential moving average, ``adjust=False`` semantics, seeded at the first non-NaN value.
 
-    ``alpha`` may be a scalar or broadcastable array (e.g. one value per population member).
-    Scalar ``alpha`` with at most leading NaNs (the common case) uses a chunked
-    parallel scan; anything else falls back to a per-bar loop.
+    ``alpha`` may be a scalar or a ``[G, 1]`` array (one value per population member).
+    With at most leading NaNs (the common case) it uses a chunked parallel scan;
+    anything else falls back to a per-bar loop.
     """
-    if isinstance(alpha, (int, float)):
-        valid = ~isnan(x)
-        n_valid = cumsum(valid.to(x.dtype) if is_torch(x) else valid.astype(x.dtype))
-        started = n_valid > 0
-        if not bool((started & ~valid).any()):
-            # seeding y[t0] = x[t0] equals feeding x[t0]/alpha into the recurrence from a zero state
-            first = valid & (n_valid == 1)
-            x0 = where(valid, x, 0.0)
-            x0 = where(first, x0 / alpha, x0)
-            return where(started, _linear_scan(alpha * x0, 1.0 - alpha), NAN)
+    valid = ~isnan(x)
+    n_valid = cumsum(valid.to(x.dtype) if is_torch(x) else valid.astype(x.dtype))
+    started = n_valid > 0
+    if not bool((started & ~valid).any()):
+        # seeding y[t0] = x[t0] equals feeding x[t0]/alpha into the recurrence from a zero state
+        first = valid & (n_valid == 1)
+        x0 = where(valid, x, 0.0)
+        x0 = where(first, x0 / alpha, x0)
+        return where(started, _linear_scan(alpha * x0, 1.0 - alpha), NAN)
     out = []
     state = None
     for t in range(x.shape[-1]):
@@ -191,8 +206,10 @@ def ewm(x, alpha):
     return np.stack(out, axis=-1) if out else x.copy()
 
 
-def _linear_scan(u, b: float, chunk: int = 64):
-    """``y[t] = b * y[t-1] + u[t]`` with ``y[-1] = 0``, via block matmuls instead of a per-bar loop."""
+def _linear_scan(u, b, chunk: int = 64):
+    """``y[t] = b * y[t-1] + u[t]`` with ``y[-1] = 0``, via block matmuls instead of a per-bar loop.
+
+    ``b`` is a number or a ``[G, 1]`` array holding one decay per row of ``u``'s ``G`` axis."""
     T = u.shape[-1]
     n_chunks = -(-T // chunk)
     pad = n_chunks * chunk - T
@@ -200,10 +217,16 @@ def _linear_scan(u, b: float, chunk: int = 64):
         u = concat([u, full((*u.shape[:-1], pad), 0.0, u)])
     blocks = u.reshape(*u.shape[:-1], n_chunks, chunk)
     k = np.arange(chunk)
-    powers = b ** np.clip(k[:, None] - k[None, :], 0, None) * (k[:, None] >= k[None, :])  # L[k, j] = b^(k-j)
-    decay = b ** (k + 1)  # weight of the previous chunk's last value
-    powers, decay = asarray(powers, u), asarray(decay, u)
-    local = blocks @ powers.T  # within-chunk response from a zero start
+    lag = k[:, None] - k[None, :]
+    mask = asarray(lag >= 0, u)
+    lag = asarray(np.clip(lag, 0, None), u)
+    steps = asarray(k + 1, u)
+    if not isinstance(b, (int, float)):  # a decay per row: [G, chunk, chunk] kernels
+        powers = b[..., None] ** lag * mask  # L[g, k, j] = b_g^(k-j)
+        decay = b ** steps  # weight of the previous chunk's last value, [G, chunk]
+    else:
+        powers, decay = b ** lag * mask, b ** steps
+    local = blocks @ (powers.transpose(-1, -2) if is_torch(powers) else np.swapaxes(powers, -1, -2))  # within-chunk response from a zero start
     carry = None
     outs = []
     for c in range(n_chunks):

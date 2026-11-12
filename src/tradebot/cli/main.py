@@ -250,8 +250,8 @@ def optimize(
     objective: Annotated[str, typer.Option(help="sharpe | return | calmar", autocompletion=complete.choices(
         ("sharpe", ""), ("return", ""), ("calmar", "")))] = "sharpe",
     train: Annotated[float, typer.Option(help="Fraction of data used for training")] = 0.7,
-    backend: Annotated[str, typer.Option(help="auto | gpu | cpu | numpy", autocompletion=complete.choices(
-        ("auto", "GPU if available"), ("gpu", ""), ("cpu", "torch on the CPU"), ("numpy", "")))] = "auto",
+    backend: Annotated[str, typer.Option(help="auto | gpu | cuda | rocm | cpu | numpy", autocompletion=complete.choices(
+        ("auto", "GPU if available"), ("gpu", "any GPU"), ("cuda", "NVIDIA only"), ("rocm", "AMD only (alias: amd)"), ("cpu", "torch on the CPU"), ("numpy", "")))] = "auto",
     fee: float = 0.001,
     min_trades: Annotated[int, typer.Option(help="Reject parameter sets with fewer round trips")] = 4,
     dca_amount: DcaAmount = None,

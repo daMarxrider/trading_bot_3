@@ -39,6 +39,7 @@ class RsiThreshold(BaseAlgorithm):
 
 class MacdCross(BaseAlgorithm):
     name = "macd_cross"
+    period_batched = True
     description = "Long while the MACD line is above its signal line"
     params = {
         "fast": IntParam(12, 2, 50, "Candles in the short average that follows the price closely."),
@@ -70,6 +71,7 @@ class IchimokuCloud(BaseAlgorithm):
 
 class SmaCross(BaseAlgorithm):
     name = "sma_cross"
+    period_batched = True
     description = "Long while the fast SMA is above the slow SMA"
     params = {
         "fast": IntParam(20, 2, 100, "Candles in the short moving average, which follows the price closely."),

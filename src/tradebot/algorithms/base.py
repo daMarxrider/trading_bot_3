@@ -56,6 +56,10 @@ class BaseAlgorithm(ABC):
     #: False for loop-based algorithms that cannot take ``[population, 1]`` parameter arrays;
     #: the optimizer then evaluates candidates one by one on the CPU.
     vectorized: ClassVar[bool] = True
+    #: True when ``signals`` also accepts integer params (window lengths) as ``[population, 1]`` arrays,
+    #: i.e. only uses ops that take an array period (``sma``, ``ema``, ``window_sum``, ``shift``).
+    #: The optimizer then batches candidates with different windows in one call (#9).
+    period_batched: ClassVar[bool] = False
     #: False keeps it out of the optimizer's automatic member selection (the ``pool``), e.g. for composites.
     poolable: ClassVar[bool] = True
 
