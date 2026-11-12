@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QScrollArea,
     QSpinBox,
     QTableView,
@@ -640,7 +641,8 @@ class BacktestView(QWidget):
         left.addWidget(opt_card)
         buttons = QHBoxLayout()
         for b in (run, opt, chart, self.stop_btn):
-            buttons.addWidget(b)
+            b.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)  # Windows' wider text must not widen the panel
+            buttons.addWidget(b, len(b.text()))
         left.addLayout(buttons)
         left.addWidget(self.progress)
         left.addStretch()
