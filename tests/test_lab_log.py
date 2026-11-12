@@ -44,7 +44,10 @@ def lab(themes, tmp_path):
     view._show((df, {"in-sample": backtest(df.iloc[:300], build_algorithm("sma_cross")),
                      "out-of-sample": backtest(df.iloc[300:], build_algorithm("sma_cross"))}))
     QApplication.processEvents()
-    return view
+    yield view
+    view.close()  # a shown view freed by Python's refcount segfaults in sip (#143)
+    view.deleteLater()
+    QApplication.processEvents()
 
 
 def vb(lab):

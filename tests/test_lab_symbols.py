@@ -45,7 +45,10 @@ def lab(app, tmp_path, monkeypatch):
     view.generations.setValue(2)
     monkeypatch.setattr("tradebot.gui.views.run_async", lambda work, done, fail: done(work()))
     QApplication.processEvents()
-    return view
+    yield view
+    view.close()  # a shown view freed by Python's refcount segfaults in sip (#143)
+    view.deleteLater()
+    QApplication.processEvents()
 
 
 def test_watchlist_menu_fills_the_symbols(lab):
