@@ -372,6 +372,7 @@ class DateRange(QWidget):
     @staticmethod
     def _edit(unset_text: str, tip: str) -> QDateEdit:
         edit = QDateEdit(calendarPopup=True, displayFormat="yyyy-MM-dd", toolTip=tip)
+        edit.setMinimumWidth(96)  # not the font-dependent size hint: a wide font must not widen the side panels
         edit.setMinimumDate(QDate(1970, 1, 1))
         edit.setSpecialValueText(unset_text)  # shown while the date sits at the minimum, i.e. unset
         edit.setCalendarWidget(_Calendar(edit))  # the edit doesn't take ownership: parent it so it outlives Python's ref
