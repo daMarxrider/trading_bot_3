@@ -4,7 +4,6 @@
 
 import os
 
-import sys
 
 import pytest
 
@@ -97,7 +96,6 @@ def touch_press(widget, pos, kind=QEvent.Type.MouseButtonPress):
     QApplication.sendEvent(widget, event)
 
 
-@pytest.mark.xfail(sys.platform == "win32", reason="#6: offscreen Windows shows another widget's tooltip after the long press")
 def test_long_press_by_touch_shows_the_tooltip(lab):
     field = lab.population
     center = field.rect().center()

@@ -553,12 +553,12 @@ class BacktestView(QWidget):
             box.setRange(0, 100000)
             box.setSpecialValueText(off)
             box.setSuffix(" candles")
-        self.wf_anchored = QCheckBox("Training grows from the first candle")
+        self.wf_anchored = QCheckBox("From first candle")
         self.meta = QSpinBox()  # meta-search (#90): combinations of the optimizer's own settings; 0 = off
         self.meta.setRange(0, 1000)
         self.meta.setSpecialValueText("off")
         self.meta.setSuffix(" combinations")
-        self.meta_compute = QCheckBox("Also population and generations")
+        self.meta_compute = QCheckBox("Incl. population")
         self.meta.valueChanged.connect(lambda _: self._walk_forward_changed(self.wf_folds.value()))
         self.wf_folds.valueChanged.connect(self._walk_forward_changed)
         self.wf_folds.setValue(5)  # on by default: the honest check; holdout off, since it's a fixed candle count

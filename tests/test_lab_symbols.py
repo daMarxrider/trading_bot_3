@@ -4,7 +4,6 @@
 
 import os
 
-import sys
 
 import pytest
 
@@ -140,7 +139,6 @@ def test_optional_beating_and_random_windows(lab, monkeypatch):
     assert lab.per_symbol_card.isVisible()
 
 
-@pytest.mark.xfail(sys.platform == "win32", reason="#6: the offscreen Windows font makes the plugin test algorithm's panel 549 px wide against a 370 px viewport")
 def test_side_panel_never_scrolls_sideways(lab):
     scroll = lab.findChild(QScrollArea)
     for i in range(lab.algo.count()):  # each algorithm has its own parameter rows; a pool also shows its cards
