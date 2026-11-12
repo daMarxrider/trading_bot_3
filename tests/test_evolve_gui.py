@@ -176,3 +176,38 @@ def test_main_window_has_the_page_and_lists_saved_strategies(app, tmp_path, monk
     assert window.lab.algo.findText("evolved_window_test") >= 0
     assert window.chart.algo_box.findText("evolved_window_test") >= 0
     window.close()
+
+
+def test_best_result_and_fast_presets_fill_the_form(app):
+    view = page.EvolveView(Engine(), ThemeManager(), ["AAA"])
+    view.use_best_result()
+    assert view.population.value() > 300 and view.permutations.value() >= 19 and view.folds.value() >= 3
+    kw = view.settings_kwargs()
+    assert kw["hall_of_fame"] == 100 and kw["tournament"] == 5
+    view.use_fast()
+    assert (view.population.value(), view.generations.value(), view.permutations.value()) == (300, 40, 0)
+    assert "hall_of_fame" not in view.settings_kwargs()
+
+
+def test_auto_configure_fills_the_form_and_reports(app, monkeypatch):
+    from tradebot.evolve import auto_configure as real
+
+    monkeypatch.setattr(page, "run_async", sync)
+    monkeypatch.setattr("tradebot.evolve.auto_configure",
+                        lambda df, **kw: real(df, candidates=3, rounds=2, population=20, generations=4, permutations=1,
+                                              folds=2, **kw))
+    view = page.EvolveView(Engine(), ThemeManager(), ["AAA"])
+    view.bars.setValue(900)
+    view.auto_btn.click()
+    assert view.auto_btn.isEnabled() and view.run_btn.isEnabled() and not view.stop_btn.isEnabled()
+    assert "kept out" in view.info.text() and view.population.value() == 20
+    assert view.permutations.value() >= 19
+
+
+def test_good_preset_is_lighter_than_best(app):
+    view = page.EvolveView(Engine(), ThemeManager(), ["AAA"])
+    view.bars.setValue(3000)
+    view.good_btn.click()
+    good = (view.population.value(), view.permutations.value())
+    view.best_btn.click()
+    assert good[0] < view.population.value() and good[1] < view.permutations.value()
