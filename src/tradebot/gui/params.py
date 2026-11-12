@@ -39,6 +39,7 @@ class ParamForm(QWidget):
             box.setMinimumWidth(min(box.minimumSizeHint().width(), 90))  # a wide font must not widen the side panel
             self.editors[key] = box
             self.form.addRow(key.replace("_", " "), box)
+            self.form.labelForField(box).setWordWrap(True)  # a long name wraps instead of widening the side panel
             if spec.description:
                 for widget in (box, self.form.labelForField(box)):
                     widget.setToolTip(tooltip(spec.description))
