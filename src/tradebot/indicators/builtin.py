@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 daMarxrider
-"""Built-in technical indicators (all OHLC-only, backend-agnostic)."""
+"""Built-in technical indicators (backend-agnostic; the volume ones need volume data, #116)."""
 
 from __future__ import annotations
 
@@ -260,3 +260,130 @@ class Halving(BaseIndicator):
             nan = ops.full(tuple(o.close.shape), ops.NAN, o.close)
             return {k: nan for k in cls.outputs}
         return halving.cycle(o.time)
+
+
+# -- volume (#116) ------------------------------------------------------------------------------------
+# Volume is venue-dependent (see OHLC): these give NaN on symbols without volume data.
+class Volume(BaseIndicator):
+    name = "volume"
+    description = "Volume bars (up/down by candle) with their moving average"
+    params = {"period": IntParam(20, 2, 200, "candles of the average"),
+              "spike": Param(2.0, 1.1, 10.0, "a spike is volume above this multiple of the average")}
+    outputs = ("volume", "sma", "spike")
+    overlay = False
+    uses_volume = True
+    units = {"volume": "volume", "sma": "volume"}
+    styles = {"volume": Style(bars=True), "sma": Style(color="accent", width=1.2)}
+    alerts = {"spike": "Volume spike: above N× its average"}
+
+    @classmethod
+    def compute(cls, o, period, spike):
+        ma = ops.sma(o.volume, period)
+        return {"volume": o.volume, "sma": ma, "spike": ops.flag(o.volume > spike * ma, ma, o.volume)}
+
+
+class OBV(BaseIndicator):
+    name = "obv"
+    description = "On-balance volume: volume added on up closes, subtracted on down closes"
+    params = {"period": IntParam(20, 2, 200, "candles of its moving average")}
+    outputs = ("value", "sma", "cross_up", "cross_down")
+    overlay = False
+    uses_volume = True
+    units = {"value": "volume", "sma": "volume"}
+    styles = {"sma": Style(color="muted", width=1.2)}
+    alerts = {"cross_up": "OBV crosses above its average", "cross_down": "OBV crosses below its average"}
+
+    @classmethod
+    def compute(cls, o, period):
+        delta = o.close - ops.shift(o.close, 1)
+        signed = ops.where(delta > 0, o.volume, ops.where(delta < 0, -o.volume, o.volume * 0.0))
+        obv = ops.cumsum(signed)  # starts at 0 on the first bar (no previous close); NaN without volume
+        ma = ops.sma(obv, period)
+        return {"value": obv, "sma": ma, "cross_up": _cross(obv, ma, True), "cross_down": _cross(obv, ma, False)}
+
+
+#: VWAP anchors: a new average starts with each of these periods (UTC)
+ANCHORS = ("day", "week", "month", "year")
+
+
+def _period_starts(time, anchor: int, like):
+    """True on the first candle of each UTC day/week/month/year (on ``like``'s backend); NaN times never start one."""
+    t = time.detach().cpu().numpy() if ops.is_torch(time) else np.asarray(time, dtype=float)
+    ok = np.isfinite(t)
+    stamp = np.where(ok, t, 0).astype("int64").astype("datetime64[s]")
+    unit = ANCHORS[anchor]
+    if unit == "week":  # weeks start on Monday; 1970-01-01 was a Thursday
+        key = (stamp.astype("datetime64[D]").astype("int64") + 3) // 7
+    else:
+        key = stamp.astype({"day": "datetime64[D]", "month": "datetime64[M]", "year": "datetime64[Y]"}[unit])
+        key = key.astype("int64")
+    prev = np.concatenate([np.full(key.shape[:-1] + (1,), -1), key[..., :-1]], axis=-1)
+    start = (key != prev) & ok
+    start[..., 0] = True
+    return ops.asarray(start, like) > 0
+
+
+class VWAP(BaseIndicator):
+    name = "vwap"
+    description = "Volume-weighted average price, restarting every day, week, month or year (UTC)"
+    params = {"anchor": IntParam(0, 0, 3, "a new average starts each 0: day, 1: week, 2: month, 3: year")}
+    outputs = ("value", "cross_up", "cross_down")
+    uses_volume = True
+    alerts = {"cross_up": "Close crosses above the VWAP", "cross_down": "Close crosses below the VWAP"}
+
+    @classmethod
+    def compute(cls, o, anchor):
+        v = o.volume
+        if o.time is None:  # no timestamps: one average from the first candle
+            start = ops.asarray(np.zeros(o.close.shape[-1]), o.close) > 0
+        else:
+            start = _period_starts(o.time, int(anchor), o.close)
+        weighted = ops.cumsum_since(ops.nan_to_num(o.typical * v), start)
+        total = ops.cumsum_since(ops.nan_to_num(v), start)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            vwap = ops.where(total > 0, weighted / total, ops.NAN)
+        return {"value": vwap, "cross_up": _cross(o.close, vwap, True), "cross_down": _cross(o.close, vwap, False)}
+
+
+class MFI(BaseIndicator):
+    name = "mfi"
+    description = "Money Flow Index: a volume-weighted RSI of the typical price"
+    params = {"period": IntParam(14, 2, 100)}
+    outputs = ("value", "cross_up", "cross_down")
+    overlay = False
+    uses_volume = True
+    levels = (20.0, 80.0)
+    alerts = {"cross_up": "MFI crosses above 80", "cross_down": "MFI crosses below 20"}
+
+    @classmethod
+    def compute(cls, o, period):
+        tp = o.typical
+        prev = ops.shift(tp, 1)
+        flow = tp * o.volume
+        first = ops.isnan(prev)  # the first candle has no direction: NaN, so the average waits for `period` flows
+        up = ops.where(first, ops.NAN, ops.where(tp > prev, flow, 0.0))
+        down = ops.where(first, ops.NAN, ops.where(tp < prev, flow, 0.0))
+        pos, neg = ops.sma(up, period), ops.sma(down, period)  # the ratio of the averages is that of the sums
+        with np.errstate(divide="ignore", invalid="ignore"):
+            mfi = 100 - 100 / (1 + pos / neg)
+        mfi = ops.where((neg == 0) & ~ops.isnan(pos), 100.0, mfi)
+        return {"value": mfi, "cross_up": _cross(mfi, 80.0, True), "cross_down": _cross(mfi, 20.0, False)}
+
+
+class VolumeRatio(BaseIndicator):
+    name = "volume_ratio"
+    description = "Volume relative to its moving average (2 = twice the usual volume)"
+    params = {"period": IntParam(20, 2, 200, "candles of the average"),
+              "spike": Param(2.0, 1.1, 10.0, "a spike is a ratio above this")}
+    outputs = ("value", "spike")
+    overlay = False
+    uses_volume = True
+    levels = (1.0,)
+    units = {"value": "ratio"}
+    alerts = {"spike": "Volume above N× its average"}
+
+    @classmethod
+    def compute(cls, o, period, spike):
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = o.volume / ops.sma(o.volume, period)
+        return {"value": ratio, "spike": ops.flag(ratio > spike, ratio)}

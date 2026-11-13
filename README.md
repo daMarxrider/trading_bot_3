@@ -586,6 +586,11 @@ number of symbols, and `--permutations N` repeats the whole search N times.
   half-life, an Engle-Granger cointegration test and a warning when a pair seems to have stopped working.
   The hedge ratio comes from a rolling regression or a Kalman filter.
   `A:B` (e.g. `KO:PEP`) is also a symbol everywhere: candles of the ratio, converted into one currency.
+* **Volume** (#116): candles carry volume next to open/high/low/close (`o.volume` in indicators, scripts and
+  algorithms; NaN when the symbol has none), with a volume pane in the chart (`vol` button, `--volume/--no-volume`
+  in the CLI chart) and the Volume, OBV, VWAP, MFI and volume-ratio indicators. Prices are the same whichever venue
+  delivered the candles, **volume is not**: one exchange's BTC volume isn't another's, so results that use volume
+  can differ between data providers.
 * **Screener**: filter any universe by technicals, volume and market cap using
   expressions or presets. Double-click a row to open it in the chart.
 * **Backtest lab**: parameter forms generated from each algorithm, equity vs.

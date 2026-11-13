@@ -11,6 +11,7 @@ import pandas as pd
 import plotext as plt
 
 from tradebot.algorithms.base import BaseAlgorithm
+from tradebot.core.series import volume_of
 from tradebot.indicators.base import BaseIndicator
 
 THEME = "dark"
@@ -26,13 +27,15 @@ def render_chart(
     width: int | None = None,
     height: int | None = None,
     window: int | None = None,
+    volume: bool | None = None,
 ) -> str:
     """Build the chart and return it as an ANSI string.
 
     Indicators and signals are computed on the full ``df`` (so they are warmed
     up) and only the last ``window`` candles are drawn. Overlay indicators and
     buy/sell markers share the price pane; other indicators and the equity
-    curve get panes of their own.
+    curve get panes of their own. ``volume`` adds a volume bar pane under the
+    candles (default: when the data has volume).
     """
     computed = {id(i): i(df) for i in indicators}
     positions = algorithm.run(df) if algorithm is not None else None
@@ -42,7 +45,10 @@ def render_chart(
         positions = positions.loc[df.index] if positions is not None else None
         equity = equity.loc[df.index] if equity is not None else None
     panes = [i for i in indicators if not i.overlay]
-    rows = 1 + len(panes) + (equity is not None)
+    vol = volume_of(df)
+    has_volume = bool(np.isfinite(vol).any())
+    volume = has_volume if volume is None else volume and has_volume
+    rows = 1 + volume + len(panes) + (equity is not None)
 
     term = shutil.get_terminal_size((120, 40))
     fig = plt.figure
@@ -72,7 +78,19 @@ def render_chart(
                 main.draw(sig.label(label))
     main.title(title)
 
-    for n, ind in enumerate(panes, start=2):
+    if volume:
+        pane = _pane(fig, 2, rows)
+        ok = np.isfinite(vol)
+        rising = (df["close"] >= df["open"]).to_numpy()
+        colors = [plt.marker("full", pixel="green" if r else "red") for r in rising[ok]]
+        # bar() takes numbers, not dates: candle numbers, labelled with their dates like the price pane
+        idx = np.flatnonzero(ok)
+        pane.draw(pane.bar(idx.tolist(), vol[ok].tolist(), marker=colors, lines=False))
+        ticks = np.unique(np.linspace(0, len(dates) - 1, 6).round().astype(int))
+        pane.ruler("x").ticks(ticks.tolist(), [f"{dates[i]:%d/%m/%Y}" for i in ticks])
+        pane.ruler("x").lim(-0.5, len(dates) - 0.5)
+        pane.title("volume")
+    for n, ind in enumerate(panes, start=2 + volume):
         pane = _pane(fig, n, rows)
         _draw_frame(pane, dates, computed[id(ind)], ind)
         for level in ind.levels:

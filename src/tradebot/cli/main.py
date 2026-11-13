@@ -153,8 +153,9 @@ def chart(
     param: Params = [],
     members: Members = None,
     line: Annotated[bool, typer.Option(help="Line chart instead of candles")] = False,
+    volume: Annotated[bool, typer.Option(help="Volume bars under the candles (when the data has volume)")] = True,
 ):
-    """Terminal OHLC chart with indicator overlays and algorithm signals."""
+    """Terminal OHLC chart with indicator overlays, volume and algorithm signals."""
     from tradebot.cli.charts import render_chart
 
     algorithm = make_algo(algo, param, members) if algo else None
@@ -162,7 +163,7 @@ def chart(
     if algorithm and not inds:
         inds = algorithm.chart_indicators()
     df = load_data(symbol, tf, None, None, bars + 250)  # extra history warms up indicators
-    print(render_chart(df, f"{symbol} {tf}", inds, algorithm, line, window=bars))
+    print(render_chart(df, f"{symbol} {tf}", inds, algorithm, line, window=bars, volume=volume))
 
 
 @app.command()

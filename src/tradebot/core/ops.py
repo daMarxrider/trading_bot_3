@@ -90,6 +90,21 @@ def concat(parts):
     return torch.cat(parts, dim=-1) if is_torch(parts[0]) else np.concatenate(parts, axis=-1)
 
 
+def cumsum_since(x, start):
+    """Running sum of ``x`` that restarts wherever the boolean ``start`` is true (e.g. a new session for VWAP);
+    before the first start it runs from the first bar."""
+    T = x.shape[-1]
+    cs = cumsum(x)
+    before = cs - x
+    if is_torch(x):
+        idx = torch.where(start, torch.arange(T, device=x.device), 0)
+        last = torch.cummax(idx.expand(cs.shape), dim=-1).values
+        return cs - torch.where(last > 0, torch.gather(before, -1, last), 0.0)
+    idx = np.where(start, np.arange(T), 0)
+    last = np.maximum.accumulate(np.broadcast_to(idx, cs.shape), axis=-1)
+    return cs - np.where(last > 0, np.take_along_axis(before, last, -1), 0.0)
+
+
 def full(shape, value, like):
     if is_torch(like):
         return torch.full(shape, value, dtype=like.dtype, device=like.device)
