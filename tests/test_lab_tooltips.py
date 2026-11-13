@@ -56,6 +56,7 @@ def test_every_form_row_explains_itself(lab):
         assert label.widget().toolTip(), label.widget().text()
         assert field.widget().toolTip(), label.widget().text()
     assert "0.1%" in lab.fee.toolTip()
+    assert "basis points" in lab.slippage.toolTip()
 
 
 def test_every_choice_explains_itself(lab):
@@ -127,3 +128,18 @@ def test_tooltip_at_finds_table_cells_headers_and_labels(lab):
     title = next(w for w in lab.findChildren(QLabel) if w.text() == "Parameters")
     assert tooltip_at(title, title.mapToGlobal(QPoint(1, 1))) == title.toolTip()
     assert TERMS["parameters"].split(".")[0] in title.toolTip()
+
+
+def test_report_card_shows_and_exports(lab, tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QFileDialog
+
+    df = make_ohlc(400)
+    lab._show((df, {"backtest": backtest(df, build_algorithm("sma_cross"))}))
+    QApplication.processEvents()
+    assert not lab.report_card.isHidden() and "expectancy" in lab.report_stats.text()
+    for w in (lab.report_title, lab.report_stats, lab.underwater, lab.heatmap, lab.export_csv, lab.export_html):
+        assert w.toolTip()
+    target = tmp_path / "t.csv"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(target), ""))
+    lab.export_csv.click()
+    assert target.exists()

@@ -36,7 +36,9 @@ from PyQt6.QtWidgets import (
 
 from tradebot.algorithms import ALGORITHMS
 from tradebot.backtest.baselines import BUY_HOLD, MONTHLY, buy_and_hold, monthly_investing
+from tradebot.backtest.engine import bps
 from tradebot.backtest.metrics import fmt
+from tradebot.backtest.slippage import configured_bps
 from tradebot.config import Settings, watchlists
 from tradebot.evolve.search import LIMITS, SCRATCH_GUARDS, SCRATCH_ISLANDS, SCRATCH_LIMITS
 from tradebot.core.timeframes import TIMEFRAMES
@@ -130,6 +132,8 @@ class EvolveView(QWidget):
         self.bars = self._spin(200, 50000, 3000)
         self.dates = DateRange()
         self.fee = self._double(4, 0.05, 0.001)
+        self.slippage = self._double(1, 500, configured_bps())  # basis points per side (#146)
+        self.slippage.setSuffix(" bp")
         self.dca_amount = self._double(2, 1e9, 0.0)
         self.dca_amount.setSpecialValueText("auto")
 
@@ -197,7 +201,8 @@ class EvolveView(QWidget):
         for form, rows in (
             (data_form, (("Symbols", symbol_row, "symbol"), ("Timeframe", self.tf, "timeframe"),
                          ("Candles", self.bars, "candles"), ("Dates", self.dates, "dates"),
-                         ("Fee / side", self.fee, "fee"), ("Monthly amount", self.dca_amount, "dca_amount"))),
+                         ("Fee / side", self.fee, "fee"), ("Slippage / side", self.slippage, "slippage"),
+                         ("Monthly amount", self.dca_amount, "dca_amount"))),
             (search_form, (("Population", self.population, "evo_population"),
                            ("Generations", self.generations, "evo_generations"),
                            ("From scratch", self.from_scratch, "from_scratch"),
@@ -390,7 +395,7 @@ class EvolveView(QWidget):
 
         picked = self.indicators.selected()
         scratch = self.from_scratch.isChecked()
-        fixed = dict(fee=self.fee.value(), align=self.align.isChecked(), state=self.state.isChecked(),
+        fixed = dict(fee=self.fee.value(), slippage=bps(self.slippage.value()), align=self.align.isChecked(), state=self.state.isChecked(),
                      dca_amount=self.dca_amount.value() or None)
         if not scratch and len(picked) != len(self.indicators.boxes):
             fixed["indicators"] = picked
@@ -504,7 +509,8 @@ class EvolveView(QWidget):
                     segments=self.segments.value(), min_trades=self.min_trades.value(),
                     parsimony=self.parsimony.value(), state=self.state.isChecked(),
                     indicators=None if scratch or len(picked) == len(self.indicators.boxes) else picked,
-                    fee=self.fee.value(), dca_amount=self.dca_amount.value() or None, seed=self.seed.value() or None)
+                    fee=self.fee.value(), slippage=bps(self.slippage.value()),
+                    dca_amount=self.dca_amount.value() or None, seed=self.seed.value() or None)
 
     # -- running ----------------------------------------------------------------------------------
     def run(self):
@@ -535,8 +541,9 @@ class EvolveView(QWidget):
             data = frames if len(frames) > 1 else next(iter(frames.values()))
             res = evolve(data, permutations=permutations, folds=folds, progress=report, on_phase=phase, **kwargs)
             names = [r.symbol for r in res.symbols] if res.multi else [next(iter(frames))]
-            bases = {name: {BUY_HOLD: buy_and_hold(frames[name], kwargs["fee"]),
-                            MONTHLY: monthly_investing(frames[name], kwargs["fee"], amount=kwargs["dca_amount"])}
+            bases = {name: {BUY_HOLD: buy_and_hold(frames[name], kwargs["fee"], slippage=kwargs["slippage"]),
+                            MONTHLY: monthly_investing(frames[name], kwargs["fee"], amount=kwargs["dca_amount"],
+                                                      slippage=kwargs["slippage"])}
                      for name in names}  # over all candles, for the plot
             return res, {name: frames[name] for name in names}, bases
 

@@ -180,8 +180,8 @@ def test_batched_parameters_match_one_by_one():
         one_pos, one = combo.execute(o, {**combo.values, "stop_pct.pct": float(stop[i, 0])})
         np.testing.assert_array_equal(pos[i], one_pos)
         np.testing.assert_allclose(fills.adjust[i], one.adjust)
-        np.testing.assert_allclose(simulate(o.close, pos[i], 0.001, Fills(fills.adjust[i], fills.turnover[i])),
-                                   simulate(o.close, one_pos, 0.001, one))
+        np.testing.assert_allclose(simulate(o.close, pos[i], 0.001, fills=Fills(fills.adjust[i], fills.turnover[i])),
+                                   simulate(o.close, one_pos, 0.001, fills=one))
 
 
 @pytest.mark.skipif(ops.torch is None, reason="torch not installed")
@@ -254,3 +254,11 @@ def test_cli_fills(monkeypatch, tmp_path):
     saved = run("combo", "save", "cli_ib", "--entry", ALWAYS, "--exit", "stop_pct(5)", "--fills", "intrabar")
     assert saved.exit_code == 0, saved.output
     assert "intrabar" in run("combo", "list").output
+
+
+def test_slippage_charged_on_intrabar_fills():
+    close = np.array([100.0, 101.0, 102.0, 103.0])
+    pos = np.zeros(4)
+    fills = Fills(np.array([0.0, 0.01, 0.0, 0.0]), np.array([0.0, 2.0, 0.0, 0.0]))
+    np.testing.assert_allclose(simulate(close, pos, 0.001, 0.0005, fills), simulate(close, pos, 0.0015, fills=fills))
+    assert simulate(close, pos, 0.001, 0.0005, fills)[1] == pytest.approx(0.01 - 2 * 0.0015)

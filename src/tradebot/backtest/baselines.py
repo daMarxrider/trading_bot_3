@@ -58,10 +58,10 @@ def lump_sum_xirr(result: BacktestResult, initial_capital: float) -> float:
 
 
 def buy_and_hold(df: pd.DataFrame, fee: float = 0.001, initial_capital: float = 10_000.0,
-                 periods_per_year: float | None = None) -> BacktestResult:
+                 periods_per_year: float | None = None, slippage: float = 0.0) -> BacktestResult:
     """Everything invested at the close of the first candle and held to the end."""
     res = from_positions(df, pd.Series(1.0, index=df.index, name="position"), BUY_HOLD, fee=fee,
-                         initial_capital=initial_capital, periods_per_year=periods_per_year)
+                         initial_capital=initial_capital, periods_per_year=periods_per_year, slippage=slippage)
     res.metrics["xirr"] = lump_sum_xirr(res, initial_capital)
     return res
 
@@ -73,7 +73,8 @@ def month_starts(index: pd.DatetimeIndex) -> np.ndarray:
 
 
 def monthly_investing(df: pd.DataFrame, fee: float = 0.001, initial_capital: float = 10_000.0,
-                      amount: float | None = None, periods_per_year: float | None = None) -> BacktestResult:
+                      amount: float | None = None, periods_per_year: float | None = None,
+                      slippage: float = 0.0) -> BacktestResult:
     """Invest ``amount`` at the close of the first candle of each month (default: capital / months).
 
     ``returns`` are time-weighted: each bar's price move on the units already held, times the fee paid on
@@ -81,6 +82,7 @@ def monthly_investing(df: pd.DataFrame, fee: float = 0.001, initial_capital: flo
     as cash (it goes negative if the payments add up to more than the capital). ``metrics["xirr"]`` is the
     money-weighted return of the payments.
     """
+    fee = fee + slippage  # a purchase pays the fee and the slippage alike
     close = df["close"].to_numpy(dtype=float)
     buy = month_starts(df.index)
     amount = float(amount or initial_capital / buy.sum())
@@ -127,8 +129,9 @@ class Baselines:
 
 
 def baselines(df: pd.DataFrame, strategy: BacktestResult, fee: float = 0.001, initial_capital: float = 10_000.0,
-              amount: float | None = None, periods_per_year: float | None = None) -> Baselines:
-    """Buy & hold and monthly investing on the strategy's candles ``df``, with its fee and capital."""
-    kw = dict(fee=fee, initial_capital=initial_capital, periods_per_year=periods_per_year)
+              amount: float | None = None, periods_per_year: float | None = None,
+              slippage: float = 0.0) -> Baselines:
+    """Buy & hold and monthly investing on the strategy's candles ``df``, with its fee, slippage and capital."""
+    kw = dict(fee=fee, initial_capital=initial_capital, periods_per_year=periods_per_year, slippage=slippage)
     return Baselines({BUY_HOLD: buy_and_hold(df, **kw), MONTHLY: monthly_investing(df, amount=amount, **kw)},
                      lump_sum_xirr(strategy, initial_capital))

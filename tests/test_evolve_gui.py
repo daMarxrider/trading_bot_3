@@ -211,3 +211,10 @@ def test_good_preset_is_lighter_than_best(app):
     good = (view.population.value(), view.permutations.value())
     view.best_btn.click()
     assert good[0] < view.population.value() and good[1] < view.permutations.value()
+
+
+def test_slippage_field_goes_into_the_settings(view):
+    assert view.settings_kwargs()["slippage"] == 0.0
+    view.slippage.setValue(5)
+    assert view.settings_kwargs()["slippage"] == pytest.approx(0.0005)
+    assert "basis points" in view.slippage.toolTip()

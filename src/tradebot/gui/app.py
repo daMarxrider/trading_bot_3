@@ -35,6 +35,7 @@ from tradebot.gui.common import run_async
 from tradebot.gui.evolve import EvolveView
 from tradebot.gui.pairs import PairView
 from tradebot.gui.settings import SettingsDialog
+from tradebot.live.risk import kill_active, set_kill
 from tradebot.legal import NOT_AFFILIATED, NO_WARRANTY
 from tradebot.gui.theme import GlassBackdrop, ThemeManager
 from tradebot.gui.touch import has_touchscreen
@@ -97,6 +98,11 @@ class MainWindow(QMainWindow):
             if i == 0:
                 btn.setChecked(True)
         side.addStretch()
+        self.kill_btn = QPushButton("⛔  Kill switch", objectName="Nav", checkable=True,
+                                    toolTip="Stops every running live bot at its next check (same as `tradebot bot kill`)")
+        self.kill_btn.setChecked(kill_active())
+        self.kill_btn.toggled.connect(self.toggle_kill)  # #154
+        side.addWidget(self.kill_btn)
         about = QPushButton("ⓘ  About", objectName="Nav")  # disclaimers and licence (#58)
         about.clicked.connect(self.show_about)
         side.addWidget(about)
@@ -159,6 +165,10 @@ class MainWindow(QMainWindow):
                           "<p>Licensed under the GNU GPL v3.0 or later. Licences of the bundled libraries: "
                           "THIRD_PARTY_NOTICES.txt next to the program. Source code: "
                           "<a href='https://github.com/daMarxrider/trading_bot_3'>github.com/daMarxrider/trading_bot_3</a></p>")
+
+    def toggle_kill(self, on: bool):
+        set_kill(on, "gui")
+        self.statusBar().showMessage("kill switch ON: live bots stop trading" if on else "kill switch off", 8000)
 
     def show_settings(self):
         dialog = SettingsDialog(self.themes, self.theme_key, self)

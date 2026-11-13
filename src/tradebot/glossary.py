@@ -131,6 +131,9 @@ TERMS = {
     "dates": "Optionally a fixed period to test, instead of the latest candles.",
     "fee": "The cost of each buy and each sell, as a fraction: 0.001 is 0.1%. A full trade (in and out) pays it "
            "twice.",
+    "slippage": "How much worse than the close a trade fills (spread, price moving while the order runs), in "
+                "basis points per side: 5 bp is 0.05%. Charged on top of the fee; 0 ignores it. Rough values: "
+                "crypto 5, stocks 2. Use more for thin symbols and short timeframes.",
     "algorithm": "The trading strategy: the rules that decide when to buy and when to sell.",
     "members": "The strategies that vote. Each one says buy or sell, and the vote acts when enough of them "
                "agree (the threshold). All checks every known strategy.",
@@ -224,6 +227,9 @@ TERMS = {
     "fast_preset": "Back to the quick defaults, which finish in minutes but search less and check less.",
     "evo_folds": "Walk-forward: run the whole search again on this many rolling windows of the data, and score "
                  "each result on the stretch right after its window. Rules that only fit one period lose there.",
+    "monte_carlo": "Re-draws the backtest's trades (or candles) many times in a different order. The 5 % to 95 % "
+                   "band shows how much of the final return and the worst drawdown is luck in the order; the "
+                   "fan of curves is the same in the plot. Shuffling keeps the final return, only the drawdown moves.",
     "deflated_sharpe": "The Sharpe ratio corrected for how many different strategies were tried: the chance that it "
                        "beats the best one luck alone would produce. 0.95 or more is significant.",
     "permutations": "Also run the same search this many times on shuffled prices, where no pattern is left. If "
@@ -233,6 +239,26 @@ TERMS = {
     "rules": "The evolved strategy: buy when the entry rule becomes true, sell when the exit rule does.",
     "hall_of_fame": "The best strategies in training. The one with the best validation score was picked, which "
                     "is not always the best in training.",
+    "expectancy": "What an average trade earned (or lost), as a share of the money. Positive means the strategy "
+                  "makes money per trade on average.",
+    "avg_win": "The average gain of the trades that made money.",
+    "avg_loss": "The average loss of the trades that lost money (or broke even).",
+    "longest_losing_streak": "The most trades in a row that lost money. Shows how long a bad patch can last, "
+                             "and whether you could stick with the strategy through it.",
+    "time_under_water": "The share of the time the money was below its previous high. 90% means it was a new "
+                        "high only 10% of the time.",
+    "longest_under_water_days": "The longest time, in days, until the money got back to a previous high.",
+    "avg_holding_days": "How long a trade lasted on average, in days.",
+    "report": "Details of the shown strategy: per-trade averages, streaks, the monthly returns and how far below "
+              "its high the money was over time (underwater plot).",
+    "monthly_heatmap": "Return per calendar month (rows are years, last column the whole year). Green gained, "
+                       "red lost; the stronger the colour, the bigger the move.",
+    "underwater": "How far below its previous high the money was at each moment, in percent. The deepest dip is "
+                  "the maximum drawdown.",
+    "export_trades": "Saves the list of trades (entry, exit, side, return, days held) as a CSV file for a "
+                     "spreadsheet.",
+    "export_report": "Saves one HTML page with the metrics, equity curve, underwater plot, monthly returns and "
+                     "trades. It needs no other files; print it to PDF from a browser.",
     "evo_history": "The best training score per generation, and how that strategy did on validation. Training "
                    "rising while validation stays flat means overfitting.",
     "fills": "How a combo's stops, take-profits and limit entries are filled. At the close: each is checked "

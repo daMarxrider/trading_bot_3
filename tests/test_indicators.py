@@ -177,8 +177,9 @@ def test_alerts_are_hidden_zero_one_and_nan_in_warmup(ohlc):
             a = cls()(ohlc)[f"{cls.name}_{alert}"]
             assert set(a.dropna().unique()) <= {0.0, 1.0} and a.iloc[0] != a.iloc[0]
     assert [c.name for c in INDICATORS if c.alerts] == [
-        "bbands", "donchian", "ema", "ichimoku", "ma_cross", "macd", "mfi", "obv", "rsi", "sma", "stoch", "volume",
-        "volume_ratio", "vwap"]
+        "adx", "avwap", "bbands", "cci", "donchian", "ema", "ichimoku", "keltner", "ma_cross", "macd", "mfi",
+        "momentum", "obv", "pivots", "psar", "roc", "rsi", "sma", "stoch", "supertrend", "volume", "volume_profile",
+        "volume_ratio", "vwap", "williams_r"]
 
 
 def test_screenable_rules():

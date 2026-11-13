@@ -14,6 +14,7 @@ from PyQt6.QtCore import QEvent, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QFileDialog,
     QAbstractSpinBox,
     QCheckBox,
     QComboBox,
@@ -43,7 +44,10 @@ from tradebot.algorithms.builtin import VotingEnsemble
 from tradebot.algorithms.combo import FILLS, LIMITS, LOGIC, RISK, Combo, check, combine, save_combo, terms
 from tradebot.algorithms.pool import RULES, PoolEnsemble, default_pool
 from tradebot.backtest.baselines import BUY_HOLD, MONTHLY, baselines, buy_and_hold, monthly_investing
+from tradebot.backtest import report as rep
+from tradebot.backtest.engine import bps
 from tradebot.backtest.metrics import fmt
+from tradebot.backtest.slippage import configured_bps
 from tradebot.config import Settings, watchlists
 from tradebot.brokers import BROKERS, create_broker
 from tradebot.core.timeframes import TIMEFRAMES
@@ -622,6 +626,11 @@ class BacktestView(QWidget):
         self.fee.setDecimals(4)
         self.fee.setRange(0, 0.05)
         self.fee.setValue(0.001)
+        self.slippage = QDoubleSpinBox()  # basis points per side, charged on top of the fee (#146)
+        self.slippage.setDecimals(1)
+        self.slippage.setRange(0, 500)
+        self.slippage.setSuffix(" bp")
+        self.slippage.setValue(configured_bps())
         self.dca_amount = QDoubleSpinBox()  # the monthly-investing baseline (#19)
         self.dca_amount.setRange(0, 1e9)
         self.dca_amount.setDecimals(2)
@@ -702,6 +711,25 @@ class BacktestView(QWidget):
         opt.clicked.connect(self.run_optimizer)
         chart = QPushButton("Show on chart")
         chart.clicked.connect(lambda: self.show_on_chart.emit(self._chart_symbol(), self._algorithm()))
+        self.mc_runs = QSpinBox()  # Monte Carlo robustness test (#151)
+        self.mc_runs.setRange(100, 20000)
+        self.mc_runs.setSingleStep(100)
+        self.mc_runs.setValue(1000)
+        self.mc_runs.setSuffix(" runs")
+        self.mc_method = QComboBox()
+        for label, key in (("Bootstrap trades", "bootstrap"), ("Shuffle trades", "shuffle"),
+                           ("Block bootstrap of candles", "block")):
+            self.mc_method.addItem(label, key)
+        self.mc_dd = QSpinBox()
+        self.mc_dd.setRange(1, 99)
+        self.mc_dd.setValue(20)
+        self.mc_dd.setSuffix(" %")
+        mc_btn = QPushButton("Run Monte Carlo")
+        mc_btn.clicked.connect(self.run_monte_carlo)
+        mc_btn.setToolTip(tooltip(explain("monte_carlo")))
+        mc_form = QFormLayout()
+        for label, w in (("Runs", self.mc_runs), ("Method", self.mc_method), ("Drawdown above", self.mc_dd)):
+            _explained_row(mc_form, label, w, "monte_carlo")
         self.stop_btn = QPushButton("Stop")  # meta-search only: no new combinations, the holdout is still scored
         self.stop_btn.clicked.connect(self._stop_meta)
         self.stop_btn.hide()
@@ -715,8 +743,8 @@ class BacktestView(QWidget):
         form = QFormLayout()
         for label, w, term in (("Symbols", symbol_row, "symbol"), ("Timeframe", self.tf, "timeframe"),
                                ("Candles", self.bars, "candles"), ("Dates", self.dates, "dates"),
-                               ("Fee / side", self.fee, "fee"), ("Monthly amount", self.dca_amount, "dca_amount"),
-                               ("Algorithm", self.algo, "algorithm")):
+                               ("Fee / side", self.fee, "fee"), ("Slippage / side", self.slippage, "slippage"),
+                               ("Monthly amount", self.dca_amount, "dca_amount"), ("Algorithm", self.algo, "algorithm")):
             _explained_row(form, label, w, term)
         opt_form = QFormLayout()
         for label, w, term in (("Method", self.method, "method"), ("Population / swarm", self.population, "population"),
@@ -765,6 +793,12 @@ class BacktestView(QWidget):
         opt_card.layout().addLayout(opt_form)
         opt_card.layout().addWidget(backend)
         left.addWidget(opt_card)
+        mc_title = QLabel("Monte Carlo")
+        mc_title.setToolTip(tooltip(explain("monte_carlo")))
+        mc_card = card(mc_title)
+        mc_card.layout().addLayout(mc_form)
+        mc_card.layout().addWidget(mc_btn)
+        left.addWidget(mc_card)
         buttons = QHBoxLayout()
         for b in (run, opt, chart, self.stop_btn):
             b.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)  # Windows' wider text must not widen the panel
@@ -820,6 +854,35 @@ class BacktestView(QWidget):
         results_lay.addWidget(self.baseline_note)
         results_lay.addWidget(metrics_view)
         right.add(results, 2)
+        self._report_res = None  # the result the report card shows (#152)
+        self.report_title = QLabel("Report")
+        self.report_title.setToolTip(tooltip(explain("report")))
+        self.report_stats = QLabel(wordWrap=True)
+        self.report_stats.setTextFormat(Qt.TextFormat.RichText)
+        self.report_stats.setToolTip("<qt>" + "<br>".join(f"<b>{k.replace('_', ' ')}</b>: {explain(k)}" for k in (
+            "expectancy", "avg_win", "avg_loss", "longest_losing_streak", "time_under_water",
+            "longest_under_water_days", "avg_holding_days")) + "</qt>")
+        self.underwater = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem()})
+        self.underwater.setMinimumHeight(110)
+        self.underwater.showGrid(x=True, y=True, alpha=0.15)
+        self.underwater.setToolTip(tooltip(explain("underwater")))
+        self.heatmap = pg.PlotWidget()
+        self.heatmap.setMinimumHeight(110)
+        self.heatmap.setMouseEnabled(False, False)
+        self.heatmap.setToolTip(tooltip(explain("monthly_heatmap")))
+        self.export_csv = QPushButton("Export trades (CSV)")
+        self.export_csv.setToolTip(tooltip(explain("export_trades")))
+        self.export_csv.clicked.connect(lambda: self._export("csv"))
+        self.export_html = QPushButton("Export report (HTML)")
+        self.export_html.setToolTip(tooltip(explain("export_report")))
+        self.export_html.clicked.connect(lambda: self._export("html"))
+        export_row = QHBoxLayout()
+        export_row.addWidget(self.export_csv)
+        export_row.addWidget(self.export_html)
+        self.report_card = card(self.report_title, self.report_stats, self.underwater, self.heatmap)
+        self.report_card.layout().addLayout(export_row)
+        self.report_card.hide()
+        right.add(self.report_card, 3, scroll=True)
         self.per_symbol = DataFrameModel(header_tips=lambda col: tooltip(explain(col) or explain("per_symbol")),
                                          colors=_signed_color(themes, {"vs buy & hold", "vs monthly investing"}))
         self.per_symbol_view = _table(self.per_symbol)
@@ -989,20 +1052,22 @@ class BacktestView(QWidget):
     def _amount(self) -> float | None:
         return self.dca_amount.value() or None  # 0 shows as "auto": capital / months
 
-    def _plot_baselines(self, df, fee, amount) -> dict:
+    def _plot_baselines(self, df, fee, amount, slippage: float = 0.0) -> dict:
         """Runs in the worker thread: both baselines over all candles, for the equity chart."""
-        return {BUY_HOLD: buy_and_hold(df, fee), MONTHLY: monthly_investing(df, fee, amount=amount)}
+        return {BUY_HOLD: buy_and_hold(df, fee, slippage=slippage),
+                MONTHLY: monthly_investing(df, fee, amount=amount, slippage=slippage)}
 
     def run_backtest(self):
         from tradebot.backtest import backtest
 
         algo, fee, amount = self._algorithm(), self.fee.value(), self._amount
+        slip = bps(self.slippage.value())
         self._busy(True)
 
         def one(df):
-            res = backtest(df, algo, fee=fee)
-            return df, {"backtest": res, "_baselines": {"backtest": baselines(df, res, fee, amount=amount)},
-                        "_plot_baselines": self._plot_baselines(df, fee, amount)}
+            res = backtest(df, algo, fee=fee, slippage=slip)
+            return df, {"backtest": res, "_baselines": {"backtest": baselines(df, res, fee, amount=amount, slippage=slip)},
+                        "_plot_baselines": self._plot_baselines(df, fee, amount, slip)}
 
         def work():
             data = self._data()
@@ -1021,13 +1086,65 @@ class BacktestView(QWidget):
 
         run_async(work, self._show, self._fail)
 
+    def run_monte_carlo(self):
+        """Backtest the first symbol, then re-draw its trades (or candles): the fan of equity curves (#151)."""
+        from tradebot.analysis.montecarlo import from_backtest
+        from tradebot.backtest import backtest
+
+        algo, fee = self._algorithm(), self.fee.value()
+        runs, key, dd = self.mc_runs.value(), self.mc_method.currentData(), self.mc_dd.value() / 100
+        self._busy(True)
+
+        def work():
+            data = self._data()
+            df = data if isinstance(data, pd.DataFrame) else next(iter(data.values()))
+            res = backtest(df, algo, fee=fee)
+            if key == "block":
+                mc = from_backtest(res, runs, source="returns", method="block", dd_threshold=dd)
+            else:
+                mc = from_backtest(res, runs, source="trades", method=key, dd_threshold=dd)
+            return df, mc
+
+        run_async(work, self._show_monte_carlo, self._fail)
+
+    def _show_monte_carlo(self, payload):
+        df, mc = payload
+        self._busy(False)
+        self._wf = None
+        self.folds_card.hide()
+        self.meta_card.hide()
+        self.per_symbol_card.hide()
+        self._stretches = []
+        self._show_not_beaten({})
+        t = self.themes.current
+        n = mc.curves.shape[1]
+        self._x = x = np.linspace(*epoch_seconds(df.index[[0, -1]]), n)  # the items spread evenly over the period
+        fan = mc.fan()
+        faint = QColor(qcolor(t.muted))
+        faint.setAlpha(60)
+        self._curves = [("", x, c, pg.mkPen(faint, width=1)) for c in mc.curves[:60]]
+        self._curves += [(f"{lbl} band", x, fan[k], pg.mkPen(qcolor(t.series[0]), width=2, style=style))
+                         for lbl, k, style in (("5%", "low", Qt.PenStyle.DashLine), ("median", "median", Qt.PenStyle.SolidLine),
+                                               ("95%", "high", Qt.PenStyle.DashLine))]
+        self._curves.append(("backtest", x, mc.actual_curve, pg.mkPen(qcolor(t.series[1 % len(t.series)]), width=3)))
+        self._fit_series = [c[2] for c in self._curves]
+        pct = lambda v: f"{v:.1%}"  # noqa: E731
+        rows = [{"metric": label, "backtest": "–" if a is None else pct(a),
+                 **dict(zip(("5%", "median", "95%"), ["–"] * 3 if b is None else map(pct, b))),
+                 "probability": "–" if p is None else pct(p)} for label, a, b, p in mc.rows()]
+        self.metrics.set_frame(pd.DataFrame(rows))
+        self._draw()
+        self._lock_view()
+        self.reset_view()
+        self.status.emit(f"Monte Carlo: {mc.runs} {mc.method} runs over {mc.items} {mc.source}")
+
     def run_optimizer(self):
         from tradebot.optimize import OPTIMIZERS, run_comparison
 
         algo, fee = self._algorithm(), self.fee.value()
         method = self.method.currentData()
         kwargs = dict(population=self.population.value(), generations=self.generations.value(),
-                      objective=self.objective.currentText(), fee=fee, min_trades=4, dca_amount=self._amount,
+                      objective=self.objective.currentText(), fee=fee, slippage=bps(self.slippage.value()), min_trades=4, dca_amount=self._amount,
                       aggregate=self.aggregate.currentText(), align=self.align.isChecked(),
                       min_symbols_beating=self.min_beating.value(), samples=self.samples.value(),
                       sample_length=self.sample_length.value())
@@ -1050,7 +1167,7 @@ class BacktestView(QWidget):
 
         def one(df, single, results):
             """The (df, results) payload of one symbol; ``single``(result) -> that symbol's part of a result."""
-            plot = self._plot_baselines(df, fee, kwargs["dca_amount"])
+            plot = self._plot_baselines(df, fee, kwargs["dca_amount"], kwargs["slippage"])
             if method == "both":
                 cmp, (ga, pso) = results, (single(results.ga), single(results.pso))
                 return df, {"GA in-sample": ga.train, "GA out-of-sample": ga.test,
@@ -1246,7 +1363,7 @@ class BacktestView(QWidget):
         stretches = [(str(f.index + 1), part.test.equity.index[0], part.test.equity.index[-1]) for f in wf.folds
                      if (part := self._fold_part(f, symbol)) is not None and part.test is not None]
         latest = wf.holdout or wf.folds[-1]
-        return df, {**results, "_baselines": bases, "_plot_baselines": self._plot_baselines(df, wf.fee, wf.dca_amount),
+        return df, {**results, "_baselines": bases, "_plot_baselines": self._plot_baselines(df, wf.fee, wf.dca_amount, wf.slippage),
                     "_chain": {"holdout": "walk-forward"}, "_stretches": stretches, "_params": latest.params,
                     "_selection": (algo, {"newest": latest.params})}
 
@@ -1342,7 +1459,7 @@ class BacktestView(QWidget):
         window = df[(df.index >= fold.start) & ((df.index < fold.end) if fold.end is not None else True)]
         self._render(window, {"in-sample": part.train, "out-of-sample": part.test, "_params": fold.params,
                               "_baselines": {"in-sample": part.train_baselines, "out-of-sample": part.test_baselines},
-                              "_plot_baselines": self._plot_baselines(window, wf.fee, wf.dca_amount),
+                              "_plot_baselines": self._plot_baselines(window, wf.fee, wf.dca_amount, wf.slippage),
                               "_selection": (algo, {f"fold {label}": fold.params}), "_comparison": fold.comparison})
 
     def _progress(self, step, best):
@@ -1405,7 +1522,7 @@ class BacktestView(QWidget):
         selection_algo, selection = results.pop("_selection", (None, {}))
         self._show_selection(selection_algo, selection)
         bases = results.pop("_baselines", {})
-        plot_bases = results.pop("_plot_baselines", None) or self._plot_baselines(df, self.fee.value(), self._amount)
+        plot_bases = results.pop("_plot_baselines", None) or self._plot_baselines(df, self.fee.value(), self._amount, bps(self.slippage.value()))
         self._show_comparison(comparison)
         self._show_not_beaten(bases)
         if params:
@@ -1436,6 +1553,8 @@ class BacktestView(QWidget):
             self._curves.append((name, epoch_seconds(eq.index), eq.to_numpy(dtype=float), pg.mkPen(color, width=2)))
             rows.setdefault(name, res.metrics)
             self._fit_series.append(eq.reindex(df.index).to_numpy(dtype=float))
+        first = next((r for r in results.values() if r is not None), None)
+        self._show_report(first)
         columns = {name: {k: fmt(k, v) for k, v in metrics.items()} for name, metrics in {**rows, **base_rows}.items()}
         self.metrics.set_frame(pd.DataFrame(columns).fillna("–").rename_axis("metric").reset_index())
         self._draw()
@@ -1444,6 +1563,58 @@ class BacktestView(QWidget):
         if params and isinstance(selection_algo, PoolEnsemble):
             params = selection_algo.reuse_params(params)  # the selected members' parameters
         self.status.emit("done" + (f" · best params {params}" if params else ""))
+
+    def _show_report(self, res):
+        """Fill the report card (#152) from the first result: extra statistics, underwater plot, monthly heatmap."""
+        self._report_res = res
+        self.report_card.setVisible(res is not None)
+        if res is None:
+            return
+        t = self.themes.current
+        stats = rep.report_stats(res.equity, res.trades)
+        self.report_stats.setText("  ·  ".join(
+            f'{k.replace("_", " ")} <b>{rep.fmt_stat(k, v)}</b>'
+            for k, v in stats.items()))
+        dd = rep.drawdown_series(res.equity)
+        self.underwater.clear()
+        x = epoch_seconds(dd.index)
+        y = dd.to_numpy(dtype=float) * 100
+        self.underwater.plot(x, y, pen=pg.mkPen(qcolor(t.series[0]), width=1), fillLevel=0,
+                             brush=pg.mkBrush(QColor(214, 69, 65, 110)))
+        self.underwater.setLabel("left", "drawdown %")
+        table = rep.monthly_returns(res.returns)
+        values = table.to_numpy(dtype=float)
+        scale = float(np.nanpercentile(np.abs(values[:, :12]), 90)) if np.isfinite(values[:, :12]).any() else 1.0
+        scale = scale or 1.0
+        img = np.zeros(values.shape + (4,), dtype=np.ubyte)
+        for (i, j), v in np.ndenumerate(values):
+            c = QColor(rep._heat_color(v, scale))
+            img[i, j] = (c.red(), c.green(), c.blue(), 255 if np.isfinite(v) else 60)
+        self.heatmap.clear()
+        item = pg.ImageItem(img, axisOrder="row-major")
+        self.heatmap.addItem(item)
+        for (i, j), v in np.ndenumerate(values):
+            if np.isfinite(v):
+                label = pg.TextItem(f"{v * 100:.1f}", color="w", anchor=(0.5, 0.5))
+                label.setPos(j + 0.5, i + 0.5)
+                self.heatmap.addItem(label)
+        plot = self.heatmap.getPlotItem()
+        plot.invertY(True)
+        plot.getAxis("bottom").setTicks([[(j + 0.5, c) for j, c in enumerate(table.columns)]])
+        plot.getAxis("left").setTicks([[(i + 0.5, str(y)) for i, y in enumerate(table.index)]])
+        plot.setRange(xRange=(0, values.shape[1]), yRange=(0, values.shape[0]), padding=0.02)
+        self.heatmap.setMinimumHeight(max(110, 30 + 24 * len(table)))
+
+    def _export(self, kind: str):
+        res = self._report_res
+        if res is None:
+            return
+        name = f"{res.algorithm}-{'trades.csv' if kind == 'csv' else 'report.html'}"
+        path, _ = QFileDialog.getSaveFileName(self, "Export", name, "CSV (*.csv)" if kind == "csv" else "HTML (*.html)")
+        if not path:
+            return
+        out = rep.export_trades_csv(res, path) if kind == "csv" else rep.export_html(res, path, res.algorithm)
+        self.status.emit(f"saved {out}")
 
     def _draw(self):
         """Plot the curves of the last run: log10 of the values while the log scale is on and all are above 0."""
