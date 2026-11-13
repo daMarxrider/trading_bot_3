@@ -992,28 +992,68 @@ def bot_run(
     live: Annotated[bool, typer.Option(help="Actually place orders (default: dry run)")] = False,
     sandbox: Annotated[bool, typer.Option(help="Use the exchange testnet (ccxt brokers)")] = False,
     once: Annotated[bool, typer.Option(help="Evaluate a single candle and exit")] = False,
+    paper: Annotated[bool, typer.Option(help="Trade a simulated account that survives restarts (see `tradebot paper`)")] = False,
 ):
-    """Run an algorithm live against a broker (dry run unless --live)."""
+    """Run an algorithm live against a broker (dry run unless --live or --paper)."""
     from tradebot.live import TradingBot
 
+    if paper:
+        broker = "paper"
     confirm_live_risk(live)
 
     kwargs = {"sandbox": True} if sandbox else {}
     b = create_broker(broker, **kwargs)
     if live and not b.can_trade:
         raise typer.BadParameter(f"{broker} is read-only")
-    bot = TradingBot(b, make_algo(algo, param, members, entry, exit), symbol, tf, stake, dry_run=not live,
+    bot = TradingBot(b, make_algo(algo, param, members, entry, exit), symbol, tf, stake, dry_run=not (live or broker == "paper"),
                      on_event=lambda e: console.print(
                          f"[dim]{e.time:%Y-%m-%d %H:%M}[/] {symbol} target={e.target:.2f} "
                          f"price={e.price:.6g} → [bold]{e.action}[/] {e.amount:.6g}"
                          + (" [yellow](dry run)[/]" if e.dry_run else "")
                          + (f" order {e.order.id} {e.order.status.value}" if e.order else "")))
-    mode = "[red]LIVE[/]" if live else "[yellow]dry run[/]"
+    mode = "[red]LIVE[/]" if live else "[cyan]paper[/]" if broker == "paper" else "[yellow]dry run[/]"
     console.print(f"bot {algo} on {broker}:{symbol} {tf}, stake {stake} · {mode} · {b.execution_mode.value}")
     try:
         bot.run(max_steps=1 if once else None)
     except KeyboardInterrupt:
         console.print("stopped")
+
+
+paper_app = typer.Typer(help="The simulated paper trading account.", no_args_is_help=True)
+app.add_typer(paper_app, name="paper")
+
+
+@paper_app.command("show")
+def paper_show(orders: Annotated[int, typer.Option(help="How many recent orders to list")] = 10):
+    """Cash, positions, P&L and the latest orders of the paper account."""
+    from tradebot.brokers.paper import PaperBroker
+
+    b = PaperBroker()
+    s = b.summary()
+    cur = s["currency"]
+    console.print(f"[bold]paper account[/] ({b.path}) · fee {b.fee:.2%}")
+    console.print(f"cash {s['cash']:,.2f} {cur} · positions {s['positions_value']:,.2f} · equity {s['equity']:,.2f} "
+                  f"(start {s['starting_balance']:,.2f})")
+    console.print(f"P&L {s['pnl']:+,.2f} {cur} ({s['pnl_pct']:+.2%}) · realised {s['realised_pnl']:+,.2f} · "
+                  f"fees {s['fees']:,.2f} · {s['orders']} orders")
+    for a, p in b.positions.items():
+        console.print(f"  {a}: {p['quantity']:.8g} @ avg {p['avg_cost']:.6g}")
+    for o in b.orders[-orders:] if orders > 0 else []:
+        console.print(f"[dim]{o['time'][:16]}[/] {o['side']} {o['amount']:.6g} {o['symbol']} @ {o['price']:.6g}"
+                      + (f" P&L {o['profit']:+.2f}" if o["profit"] is not None else ""))
+
+
+@paper_app.command("reset")
+def paper_reset(balance: Annotated[float, typer.Option(help="New starting balance (default: keep the current one)")] = 0.0,
+                yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask")] = False):
+    """Throw away positions and order history and start again with a fresh balance."""
+    from tradebot.brokers.paper import PaperBroker
+
+    b = PaperBroker()
+    if not yes:
+        typer.confirm(f"Reset the paper account ({len(b.orders)} orders, equity {b.summary()['equity']:,.2f})?", abort=True)
+    b.reset(balance or None)
+    console.print(f"paper account reset to {b.cash:,.2f} {b.currency}")
 
 
 @bot_app.command("pair-run")
