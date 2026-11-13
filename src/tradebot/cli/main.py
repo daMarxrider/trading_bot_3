@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Annotated, Optional
 
 import numpy as np
@@ -204,6 +205,9 @@ def backtest(
     capital: float = 10_000.0,
     dca_amount: DcaAmount = None,
     plot: Annotated[bool, typer.Option(help="Show chart with signals and equity")] = True,
+    trades_csv: Annotated[Optional[Path], typer.Option("--trades-csv", help="Write the trade list to this CSV file")] = None,
+    report: Annotated[Optional[Path], typer.Option(help="Write a self-contained HTML report (metrics, equity, "
+                                                        "underwater plot, monthly returns, trades)")] = None,
 ):
     """Backtest an algorithm on historical OHLC data, next to buy & hold and monthly investing.
 
@@ -226,6 +230,14 @@ def backtest(
     console.print(f"[bold]{algorithm!r}[/] on {symbol} {tf} ({df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d})")
     console.print(results_table("backtest", bl.columns("strategy", res)))
     console.print(f"final equity [bold]{res.equity.iloc[-1]:,.2f}[/]")
+    from tradebot.backtest import report as rep
+
+    stats = rep.report_stats(res.equity, res.trades)
+    console.print("  ".join(f"{k.replace('_', ' ')} [bold]{rep.fmt_stat(k, v)}[/]" for k, v in stats.items()))
+    if trades_csv:
+        console.print(f"trades written to {rep.export_trades_csv(res, trades_csv)}")
+    if report:
+        console.print(f"report written to {rep.export_html(res, report, f'{algorithm!r} on {symbol} {tf}')}")
     warn_not_beaten(bl, "Over this period")
 
 
