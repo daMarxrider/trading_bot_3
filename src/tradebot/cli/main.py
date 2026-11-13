@@ -46,6 +46,11 @@ Entry = Annotated[Optional[str], typer.Option(
          "\"weighted(rsi_threshold:0.5, macd_cross:0.5) >= 0.6\"")]
 Exit = Annotated[Optional[str], typer.Option(
     help="Combo exit rule, e.g. \"macd_cross | stop_atr(2)\" (default: when the entry rule stops holding)")]
+Fills = Annotated[Optional[str], typer.Option(
+    help="Combo fills: close (stops, take-profits and limit entries checked on the close) or intrabar (filled "
+         "inside the candle against its high/low, at the open on a gap; stop first when both are hit)",
+    autocompletion=complete.choices(("close", "fill at the close"), ("intrabar", "fill against high/low"))
+)]
 TF = Annotated[str, typer.Option("--tf", help="Timeframe: 1m 5m 15m 30m 1h 4h 1d 1w", autocompletion=complete.timeframes)]
 Symbol = Annotated[str, typer.Argument(help="e.g. AAPL, SAP.DE, BTC/USDT", autocompletion=complete.symbols)]
 Algo = Annotated[str, typer.Argument(help="Algorithm name (tradebot list)", autocompletion=complete.algorithms)]
@@ -108,9 +113,10 @@ def load_data(symbol: str, tf: str, start: str | None, end: str | None, bars: in
     return df
 
 
-def make_algo(name: str, params: list[str], members: str | None, entry: str | None = None, exit: str | None = None):
+def make_algo(name: str, params: list[str], members: str | None, entry: str | None = None, exit: str | None = None,
+              fills: str | None = None):
     try:
-        return build_algorithm(name, parse_kv(params), members.split(",") if members else None, entry, exit)
+        return build_algorithm(name, parse_kv(params), members.split(",") if members else None, entry, exit, fills)
     except ValueError as e:
         raise typer.BadParameter(str(e)) from None
 
@@ -169,13 +175,14 @@ def chart(
     members: Members = None,
     entry: Entry = None,
     exit: Exit = None,
+    fills: Fills = None,
     line: Annotated[bool, typer.Option(help="Line chart instead of candles")] = False,
     volume: Annotated[bool, typer.Option(help="Volume bars under the candles (when the data has volume)")] = True,
 ):
     """Terminal OHLC chart with indicator overlays, volume and algorithm signals."""
     from tradebot.cli.charts import render_chart
 
-    algorithm = make_algo(algo, param, members, entry, exit) if algo else None
+    algorithm = make_algo(algo, param, members, entry, exit, fills) if algo else None
     inds = [parse_indicator(s) for s in indicator]
     if algorithm and not inds:
         inds = algorithm.chart_indicators()
@@ -196,6 +203,7 @@ def backtest(
     members: Members = None,
     entry: Entry = None,
     exit: Exit = None,
+    fills: Fills = None,
     fee: Annotated[float, typer.Option(help="Fee per side, fraction")] = 0.001,
     capital: float = 10_000.0,
     dca_amount: DcaAmount = None,
@@ -208,7 +216,7 @@ def backtest(
     from tradebot.backtest import backtest as run_backtest, baselines
     from tradebot.cli.charts import render_chart
 
-    algorithm = make_algo(algo, param, members, entry, exit)
+    algorithm = make_algo(algo, param, members, entry, exit, fills)
     symbols = _symbols(symbol, [])
     if len(symbols) > 1:
         _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount)
@@ -261,6 +269,7 @@ def optimize(
     members: Members = None,
     entry: Entry = None,
     exit: Exit = None,
+    fills: Fills = None,
     pool: Annotated[Optional[str], typer.Option(
         help="Comma-separated strategies and indicators the optimizer picks from (default: all)",
         autocompletion=complete.pool_members)] = None,
@@ -346,7 +355,7 @@ def optimize(
     elif pool or min_members != 1 or max_members is not None:
         raise typer.BadParameter("--pool, --min-members and --max-members need the pool: leave out the algorithm")
     else:
-        algorithm = make_algo(algo, [], members, entry, exit)
+        algorithm = make_algo(algo, [], members, entry, exit, fills)
     if len(symbols) == 1:
         df = load_data(symbols[0], tf, start, end, bars)
         size = f"{len(df)} candles"
@@ -903,6 +912,8 @@ def _reuse_command(symbol: str, algorithm, params: dict) -> str:
 
         members = f" --entry {shlex.quote(algorithm.entry)}" + (f" --exit {shlex.quote(algorithm.exit)}"
                                                                  if algorithm.exit else "")
+    if getattr(algorithm, "fills", "close") != "close":
+        members += f" --fills {algorithm.fills}"
     return f"tradebot backtest {symbol} {algorithm.name}{members} {flags}"
 
 
@@ -989,6 +1000,7 @@ def bot_run(
     members: Members = None,
     entry: Entry = None,
     exit: Exit = None,
+    fills: Fills = None,
     live: Annotated[bool, typer.Option(help="Actually place orders (default: dry run)")] = False,
     sandbox: Annotated[bool, typer.Option(help="Use the exchange testnet (ccxt brokers)")] = False,
     once: Annotated[bool, typer.Option(help="Evaluate a single candle and exit")] = False,
@@ -1002,7 +1014,7 @@ def bot_run(
     b = create_broker(broker, **kwargs)
     if live and not b.can_trade:
         raise typer.BadParameter(f"{broker} is read-only")
-    bot = TradingBot(b, make_algo(algo, param, members, entry, exit), symbol, tf, stake, dry_run=not live,
+    bot = TradingBot(b, make_algo(algo, param, members, entry, exit, fills), symbol, tf, stake, dry_run=not live,
                      on_event=lambda e: console.print(
                          f"[dim]{e.time:%Y-%m-%d %H:%M}[/] {symbol} target={e.target:.2f} "
                          f"price={e.price:.6g} → [bold]{e.action}[/] {e.amount:.6g}"
@@ -1443,17 +1455,21 @@ def combo_save(
     exit: Annotated[Optional[str], typer.Option(help="Exit rule, e.g. \"macd_cross | stop_atr(2)\"")] = None,
     description: Annotated[str, typer.Option(help="Shown in tradebot list and the GUI")] = "",
     param: Params = [],
+    fills: Fills = "close",
 ):
     """Save a combo by name; it then works like any strategy: list, backtest, optimize, bot, chart, GUI.
 
     Rules: strategy names (in the exit rule: their exit), indicator conditions (close>sma(200), rsi(14)<30,
     elliott.state==3), & | ! and brackets, vote(a, b, c) >= 0.6, weighted(a:0.5, b:0.3) >= 0.6, and in the
     exit rule the risk exits stop_pct(5) stop_atr(2) take_profit(10) take_profit_atr(3) trail_pct(5)
-    trail_atr(3) max_hold(20). ``-p`` sets saved parameter values (e.g. tuned ones from ``optimize``)."""
+    trail_atr(3) max_hold(20); take-profits in steps scale out: take_profit(5, 0.5) | take_profit(10). In the
+    entry rule a limit entry: & limit_pct(1) or & limit_atr(0.5) buys below the close on the next candle.
+    ``--fills intrabar`` fills stops, take-profits and limit entries inside the candle against its high/low.
+    ``-p`` sets saved parameter values (e.g. tuned ones from ``optimize``)."""
     from tradebot.algorithms.combo import combos_path, save_combo
 
     try:
-        save_combo(name, entry, exit or "", description, parse_kv(param))
+        save_combo(name, entry, exit or "", description, parse_kv(param), fills=fills or "close")
     except ValueError as e:
         raise typer.BadParameter(str(e)) from None
     console.print(f"saved combo [bold]{name}[/] in {combos_path()}")
@@ -1469,11 +1485,12 @@ def combo_list():
         console.print(f"no saved combos yet ({combos_path()}); save one with: tradebot combo save NAME --entry ...")
         return
     t = Table(title=f"combos · {combos_path()}")
-    for col in ("name", "entry", "exit", "parameters"):
+    for col in ("name", "entry", "exit", "fills", "parameters"):
         t.add_column(col, style="bold cyan" if col == "name" else None)
     for name, c in saved.items():
         params = ", ".join(f"{k}={v:g}" for k, v in (c.get("params") or {}).items())
-        t.add_row(name, c["entry"], c.get("exit") or "[dim]when the entry stops holding[/]", params)
+        t.add_row(name, c["entry"], c.get("exit") or "[dim]when the entry stops holding[/]", c.get("fills", "close"),
+                  params)
     console.print(t)
 
 

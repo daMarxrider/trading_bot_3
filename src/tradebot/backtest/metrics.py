@@ -22,12 +22,14 @@ def infer_periods_per_year(index: pd.DatetimeIndex) -> float:
     return (len(index) - 1) / span * SECONDS_PER_YEAR if span > 0 else 252.0
 
 
-def extract_trades(positions: pd.Series, returns: pd.Series) -> pd.DataFrame:
+def extract_trades(positions: pd.Series, returns: pd.Series, round_trips=None) -> pd.DataFrame:
     """One row per contiguous holding period with the same direction.
 
     A trade's return compounds the strategy returns from the entry bar (entry
     fee) through the exit bar (last price move + exit fee). A trade still open
-    at the end is closed on the last bar.
+    at the end is closed on the last bar. ``round_trips``: a mask of candles
+    with a long trade opened and closed inside the candle (intrabar fills),
+    each one more trade.
     """
     pos = positions.to_numpy()
     ret = returns.to_numpy()
@@ -41,6 +43,9 @@ def extract_trades(positions: pd.Series, returns: pd.Series) -> pd.DataFrame:
                 r = np.prod(1 + ret[start : exit_t + 1]) - 1
                 rows.append((positions.index[start], positions.index[exit_t], "long" if side > 0 else "short", r))
             start, side = t, cur
+    if round_trips is not None and np.any(round_trips):
+        rows += [(positions.index[t], positions.index[t], "long", float(ret[t])) for t in np.flatnonzero(round_trips)]
+        rows.sort(key=lambda r: r[0])
     return pd.DataFrame(rows, columns=["entry", "exit", "side", "return"])
 
 

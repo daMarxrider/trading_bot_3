@@ -40,7 +40,7 @@ from PyQt6.QtWidgets import (
 
 from tradebot.algorithms import ALGORITHMS, algorithm_names, build_algorithm
 from tradebot.algorithms.builtin import VotingEnsemble
-from tradebot.algorithms.combo import LOGIC, RISK, Combo, check, combine, save_combo, terms
+from tradebot.algorithms.combo import FILLS, LIMITS, LOGIC, RISK, Combo, check, combine, save_combo, terms
 from tradebot.algorithms.pool import RULES, PoolEnsemble, default_pool
 from tradebot.backtest.baselines import BUY_HOLD, MONTHLY, baselines, buy_and_hold, monthly_investing
 from tradebot.backtest.metrics import fmt
@@ -196,15 +196,21 @@ class ComboBuilder(QWidget):
     def __init__(self):
         super().__init__()
         self.entry, self.exit = QLineEdit(Combo.entry_rule), QLineEdit(Combo.exit_rule)
-        self.entry.setToolTip(tooltip("When to buy, e.g. elliott_wave & close>sma(200)"))
+        self.entry.setToolTip(tooltip("When to buy, e.g. elliott_wave & close>sma(200). " + explain("limit_entry")))
         self.exit.setToolTip(tooltip("When to sell, e.g. macd_cross | stop_atr(2); empty: when the entry stops "
-                                     "holding. Risk exits: " + ", ".join(RISK)))
+                                     "holding. Risk exits: " + ", ".join(RISK) + ". " + explain("scale_out")))
         self.block = QComboBox()
         self.block.setEditable(True)  # any block or condition, e.g. rsi(14) < 30
         self.block.addItems([n for n in ALGORITHMS.names() if not issubclass(ALGORITHMS.get(n), VotingEnsemble)
                              and n != "combo"] + [f"{r}({RISK[r][0][1].default:g})" for r in RISK]
+                            + ["take_profit(5, 0.5)"] + [f"{r}({LIMITS[r][0][1].default:g})" for r in LIMITS]
                             + ["close > sma(200)", "rsi(14) < 30"])
-        self.block.setToolTip(tooltip("A strategy, a risk exit or an indicator condition to add to a rule."))
+        self.block.setToolTip(tooltip("A strategy, a risk exit, a limit entry (entry rule) or an indicator "
+                                      "condition to add to a rule."))
+        self.fills = QCheckBox("Intrabar (against high/low)")
+        self.fills.setToolTip(tooltip(f"{explain('fills')} Off: {explain('fills_close')} On: "
+                                      f"{explain('fills_intrabar')}"))
+        self.fills.toggled.connect(self.changed)
         self.logic = QComboBox()
         self.logic.addItems(LOGIC)
         self.logic.setToolTip(tooltip("How the blocks of a rule combine: and (all), or (any), vote (share of "
@@ -232,7 +238,8 @@ class ComboBuilder(QWidget):
         form.addRow("Block", self.block)
         form.addRow("Logic", self.logic)
         form.addRow("Threshold", self.threshold)
-        for w in (self.entry, self.exit, self.block, self.logic, self.threshold):
+        form.addRow("Fills", self.fills)
+        for w in (self.entry, self.exit, self.block, self.logic, self.threshold, self.fills):
             form.labelForField(w).setToolTip(w.toolTip())
         row = QHBoxLayout()
         save_row = QHBoxLayout()
@@ -255,7 +262,12 @@ class ComboBuilder(QWidget):
         items, risk = terms(edit.text())
         if extra:
             (risk if extra.split("(")[0].strip() in RISK else items).append(extra)
-        edit.setText(combine(items, self.logic.currentText(), risk, self.threshold.value()))
+        limit = [i for i in items if i.split("(")[0].strip() in LIMITS]  # a limit entry is always joined with &
+        items = [i for i in items if i not in limit]
+        text = combine(items, self.logic.currentText(), risk, self.threshold.value())
+        if limit and text:
+            text = (f"({text})" if len(items) > 1 and self.logic.currentText() != "and" else text) + f" & {limit[-1]}"
+        edit.setText(text or (limit[-1] if limit else ""))
 
     def add(self, edit: QLineEdit):
         block = self.block.currentText().strip()
@@ -268,10 +280,14 @@ class ComboBuilder(QWidget):
         self._rewrite(self.exit)
         self.changed.emit()
 
+    def fill_mode(self) -> str:
+        """``"intrabar"`` or ``"close"`` (:data:`tradebot.algorithms.combo.FILLS`)."""
+        return FILLS[1] if self.fills.isChecked() else FILLS[0]
+
     def algorithm(self) -> Combo:
         """The combo of the current rules; falls back to the defaults, with the problem in the status line."""
         try:
-            algo = check(self.entry.text(), self.exit.text())
+            algo = check(self.entry.text(), self.exit.text(), self.fill_mode())
             self.status.setText("")
             return algo
         except ValueError as e:
@@ -280,7 +296,7 @@ class ComboBuilder(QWidget):
 
     def _save(self):
         try:
-            save_combo(self.name.text().strip(), self.entry.text(), self.exit.text())
+            save_combo(self.name.text().strip(), self.entry.text(), self.exit.text(), fills=self.fill_mode())
         except ValueError as e:
             self.status.setText(f"Can't save: {e}")
             return

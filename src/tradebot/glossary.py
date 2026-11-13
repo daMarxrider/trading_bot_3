@@ -74,8 +74,8 @@ STRATEGIES = {
              "moving sideways in a known range.",
     "vote": "Combines several strategies: buys when most of them say buy and sells when most say sell.",
     "combo": "Builds a strategy from rules without code: an entry rule and an exit rule made of strategies, indicator "
-             "conditions and risk exits (stop-loss, take-profit, trailing stop, max holding time), joined with "
-             "and, or, not, vote or weighted.",
+             "conditions and risk exits (stop-loss, take-profit, in steps too, trailing stop, max holding time) and "
+             "an optional limit buy, joined with and, or, not, vote or weighted.",
     "pool": "Like vote, but the optimizer picks which strategies vote and which indicators must agree before "
             "buying. Not every candidate ends up being used.",
     "elliott_wave": "Looks for the wave pattern of Elliott wave theory and trades the breakout of its strongest "
@@ -235,6 +235,19 @@ TERMS = {
                     "is not always the best in training.",
     "evo_history": "The best training score per generation, and how that strategy did on validation. Training "
                    "rising while validation stays flat means overfitting.",
+    "fills": "How a combo's stops, take-profits and limit entries are filled. At the close: each is checked "
+             "against the candle's close and filled there. Intrabar: filled inside the candle when its high or "
+             "low reaches the level, closer to how real orders fill.",
+    "fills_close": "Every level is checked against the close and filled at the close, as in earlier versions. A "
+                   "stop hit during the candle is filled late, at the close.",
+    "fills_intrabar": "Stops, take-profits and limit buys fill inside the candle at their level, or at the open "
+                      "when it gaps past it. A stop and a take-profit in one candle: the stop counts, the worse "
+                      "case, since the order inside the candle is unknown.",
+    "limit_entry": "limit_pct(1) or limit_atr(0.5) in the entry rule, joined with &: when the rest holds, place "
+                   "a buy order 1% (0.5 ATRs) below the close for the next candle. Not filled if the price "
+                   "doesn't come down to it.",
+    "scale_out": "Sell in steps: take_profit(5, 0.5) | take_profit(10) sells half at +5% and the rest at +10%. "
+                 "The second number is the share of the position.",
     "save_plugin": "Keeps the result as a strategy file, usable in backtests, the chart, the Backtest lab and "
                    "the bot. The optimizer can fine-tune its numbers.",
 }

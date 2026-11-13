@@ -78,6 +78,11 @@ class BaseAlgorithm(ABC):
     def signals(self, o: OHLC, p: dict):
         """Return target positions shaped like ``o.close`` (or broadcast against batched params)."""
 
+    def execute(self, o: OHLC, p: dict):
+        """``(positions, fills)``: the target positions and, for strategies that fill inside a candle (a combo
+        with ``fills="intrabar"``), :class:`tradebot.backtest.engine.Fills`; None = every fill at the close."""
+        return self.signals(o, p), None
+
     def chart_indicators(self) -> list:
         """Indicator instances the GUI should overlay when this algorithm is shown."""
         return []
@@ -90,10 +95,16 @@ class BaseAlgorithm(ABC):
 
     def run(self, df: pd.DataFrame) -> pd.Series:
         """Target positions for a pandas OHLC frame (NaN warm-up -> flat)."""
-        pos = np.asarray(self.signals(OHLC.from_frame(df), self.values), dtype=float)
-        pos = np.nan_to_num(np.broadcast_to(pos, (len(df),)), nan=0.0)
+        return self.run_fills(df)[0]
+
+    def run_fills(self, df: pd.DataFrame) -> tuple[pd.Series, pd.DataFrame | None]:
+        """``(positions, fills)`` for a pandas OHLC frame: :meth:`run` and the intrabar fills as a frame
+        (columns ``adjust`` and ``turnover``, see :class:`tradebot.backtest.engine.Fills`), or None."""
+        pos, fills = self.execute(OHLC.from_frame(df), self.values)
+        pos = np.nan_to_num(np.broadcast_to(np.asarray(pos, dtype=float), (len(df),)), nan=0.0)
         lo = -1.0 if self.allow_short else 0.0
-        return pd.Series(np.clip(pos, lo, 1.0), index=df.index, name=self.name)
+        return (pd.Series(np.clip(pos, lo, 1.0), index=df.index, name=self.name),
+                None if fills is None else fills.frame(df.index))
 
     def __repr__(self) -> str:
         args = ", ".join(f"{k}={v}" for k, v in self.values.items())

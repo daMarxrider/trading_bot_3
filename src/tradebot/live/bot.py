@@ -7,6 +7,12 @@ algorithm's target position is evaluated and the bot buys/sells to match it.
 ``stake`` caps the quote-currency value of a single entry (the legacy
 ``max_trading_value``). Dry-run is the default; nothing is sent unless
 ``dry_run=False``.
+
+A target above 0.5 buys; once in, a lower target sells that share of the holding (a combo's take-profits in
+steps scale out, #150) and a target of 0 sells everything. The bot follows the same rules as the backtest
+(the algorithm decides on the closed candles), but acts at the close: a combo's intrabar stop that the
+backtest fills inside a candle is sold here at that candle's close (acting inside the candle needs streaming
+data, #158).
 """
 
 from __future__ import annotations
@@ -52,6 +58,7 @@ class TradingBot:
     dry_run: bool = True
     on_event: Callable[[BotEvent], None] | None = None
     holding: float = 0.0  #: base-asset amount this bot currently manages
+    fraction: float = 0.0  #: the target the holding stands for (1 after a full entry, less after scaling out)
     events: list[BotEvent] = field(default_factory=list)
 
     @property
@@ -70,16 +77,25 @@ class TradingBot:
         target = float(self.algorithm.run(df).iloc[-1])
         price = float(df["close"].iloc[-1])
         event = BotEvent(datetime.now(timezone.utc), self.symbol, target, "hold", price, dry_run=self.dry_run)
+        fraction = self.fraction if self.fraction > 0 else 1.0
         if target > 0.5 and self.holding <= 0:
             event.action, event.amount = "buy", self.stake / price
-        elif target <= 0.5 and self.holding > 0:
+        elif self.holding > 0 and target < fraction - 1e-9:
             available = self.broker.get_balance().get(self.base_asset) if not self.dry_run else None
             event.action = "sell"
-            event.amount = min(self.holding, available.free) if available else self.holding
+            share = self.holding if target <= 1e-9 else self.holding * (1 - target / fraction)
+            event.amount = min(share, available.free) if available else share
+            if target > 1e-9:
+                event.note = f"scale out to {target:.0%} of the position"
         if event.action != "hold":
             if not self.dry_run:
                 event.order = self.broker.place_order(self.symbol, Side(event.action), event.amount)
-            self.holding = event.amount if event.action == "buy" else 0.0
+            if event.action == "buy":
+                self.holding, self.fraction = event.amount, target
+            elif target <= 1e-9:
+                self.holding, self.fraction = 0.0, 0.0
+            else:
+                self.holding, self.fraction = self.holding - event.amount, target
         self.events.append(event)
         log.info("%s %s target=%.2f price=%.6g amount=%.6g%s", self.symbol, event.action, target, price,
                  event.amount, " (dry run)" if self.dry_run else "")

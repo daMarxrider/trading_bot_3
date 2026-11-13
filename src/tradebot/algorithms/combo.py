@@ -24,14 +24,22 @@ Building blocks:
   members that hold) and ``weighted(a:0.5, b:0.3) >= 0.6`` (their weighted share, weights normalised to sum 1).
 * risk exits (exit rule only, joined with ``|``): ``stop_pct(5)``, ``stop_atr(2)`` (2 ATRs below the entry),
   ``take_profit(10)`` (%), ``take_profit_atr(3)``, ``trail_pct(5)``, ``trail_atr(3)`` (below the highest close
-  since the entry), ``max_hold(20)`` (candles).
+  since the entry), ``max_hold(20)`` (candles). Take-profits can scale out in steps: ``take_profit(5, 0.5) |
+  take_profit(10)`` sells half at +5% and the rest at +10% (the second number: the share of the position).
+* a limit entry (entry rule only, joined with ``&``): ``limit_pct(1)`` / ``limit_atr(0.5)``: when the rest of
+  the entry rule holds on a candle, buy with a limit order 1% / 0.5 ATRs below its close, for the next candle.
 * ``entry`` in the exit rule is the entry rule: ``!entry | stop_pct(5)``. Without an exit rule, a combo exits
   when the entry rule stops holding (``!entry``).
 
 Semantics, the same as every strategy here: everything is evaluated on closed candles; the entry and exit
 are **latched** (once in, only the exit rule or a risk exit gets out); an entry and an exit on the same
-candle: the exit wins. Risk exits compare the close with the entry close (fills are at the close). A
-condition whose indicator is still warming up is neither true nor false: ``!`` doesn't turn it into true.
+candle: the exit wins. A condition whose indicator is still warming up is neither true nor false: ``!``
+doesn't turn it into true.
+
+Fills (#150), ``fills=`` of a combo: ``"close"`` (the default) compares the stops, take-profits and limit
+entries with the close and fills them at the close. ``"intrabar"`` fills them inside the candle against its
+high and low, at the level, or at the open when the candle opens beyond it (a gap); a stop and a take-profit
+both inside one candle: the stop counts (the worse case). See :meth:`Combo._with_risk`.
 
 Every number in a call is a tunable parameter, namespaced like the vote's: ``rsi_threshold.lower``,
 ``sma.period`` (a second, different ``sma(...)`` is ``sma_2.period``), ``stop_atr.mult``; weights are
@@ -65,25 +73,41 @@ log = logging.getLogger(__name__)
 
 PRICES = ("open", "high", "low", "close", "typical")
 
+_SIZE = ("Share of the position (as bought) this take-profit sells; less than 1 scales out in steps, e.g. "
+         "take_profit(5, 0.5) | take_profit(10).")
 #: Risk exits: name -> ((parameter, spec), ...); the first parameter is the one a single argument sets.
 RISK: dict[str, tuple[tuple[str, Param], ...]] = {
-    "stop_pct": (("pct", Param(5.0, 0.5, 50.0, "Stop-loss: sell when the close is this many percent below the "
+    "stop_pct": (("pct", Param(5.0, 0.5, 50.0, "Stop-loss: sell when the price is this many percent below the "
                                                 "entry price.")),),
-    "stop_atr": (("mult", Param(2.0, 0.5, 10.0, "Stop-loss: sell when the close is this many ATRs below the "
+    "stop_atr": (("mult", Param(2.0, 0.5, 10.0, "Stop-loss: sell when the price is this many ATRs below the "
                                                  "entry price (ATR at the entry).")),
                  ("period", IntParam(14, 2, 100, "Candles the ATR (average true range) is measured over."))),
-    "take_profit": (("pct", Param(10.0, 0.5, 200.0, "Take-profit: sell when the close is this many percent above "
-                                                     "the entry price.")),),
-    "take_profit_atr": (("mult", Param(3.0, 0.5, 20.0, "Take-profit: sell when the close is this many ATRs above "
+    "take_profit": (("pct", Param(10.0, 0.5, 200.0, "Take-profit: sell when the price is this many percent above "
+                                                     "the entry price.")),
+                    ("size", Param(1.0, 0.05, 1.0, _SIZE))),
+    "take_profit_atr": (("mult", Param(3.0, 0.5, 20.0, "Take-profit: sell when the price is this many ATRs above "
                                                         "the entry price (ATR at the entry).")),
-                        ("period", IntParam(14, 2, 100, "Candles the ATR (average true range) is measured over."))),
-    "trail_pct": (("pct", Param(5.0, 0.5, 50.0, "Trailing stop: sell when the close is this many percent below "
+                        ("period", IntParam(14, 2, 100, "Candles the ATR (average true range) is measured over.")),
+                        ("size", Param(1.0, 0.05, 1.0, _SIZE))),
+    "trail_pct": (("pct", Param(5.0, 0.5, 50.0, "Trailing stop: sell when the price is this many percent below "
                                                  "the highest close since the entry.")),),
-    "trail_atr": (("mult", Param(3.0, 0.5, 10.0, "Trailing stop: sell when the close is this many ATRs below "
+    "trail_atr": (("mult", Param(3.0, 0.5, 10.0, "Trailing stop: sell when the price is this many ATRs below "
                                                   "the highest close since the entry.")),
                   ("period", IntParam(14, 2, 100, "Candles the ATR (average true range) is measured over."))),
     "max_hold": (("bars", IntParam(20, 1, 1000, "Sell after holding this many candles.")),),
 }
+STOPS = ("stop_pct", "stop_atr", "trail_pct", "trail_atr")
+TAKE_PROFITS = ("take_profit", "take_profit_atr")
+#: Limit entries (entry rule only, joined with ``&``): buy below the close of the candle the rule holds on.
+LIMITS: dict[str, tuple[tuple[str, Param], ...]] = {
+    "limit_pct": (("pct", Param(1.0, 0.0, 20.0, "Limit entry: when the entry rule holds, place a buy order this "
+                                                 "many percent below the close, for the next candle.")),),
+    "limit_atr": (("mult", Param(0.5, 0.0, 5.0, "Limit entry: when the entry rule holds, place a buy order this "
+                                                 "many ATRs below the close, for the next candle.")),
+                  ("period", IntParam(14, 2, 100, "Candles the ATR (average true range) is measured over."))),
+}
+#: How orders are filled: at the close only, or inside the candle against its high and low.
+FILLS = ("close", "intrabar")
 GROUPS = ("vote", "weighted")
 WORDS = {"and": "&", "or": "|", "not": "!"}
 CMP = {">": operator.gt, "<": operator.lt, ">=": operator.ge, "<=": operator.le, "==": operator.eq,
@@ -489,6 +513,7 @@ class EntryRef(Node):
 class Risk:
     key: str
     kind: str
+    params: tuple = ()  #: its parameter names (a take-profit without a size has none)
 
 
 # -- the strategy -------------------------------------------------------------------------------------
@@ -506,11 +531,16 @@ class Combo(BaseAlgorithm):
     exit_rule: str = "rsi_threshold | stop_pct(10)"
     saved_params: dict = {}
     saved: bool = False  #: True for combos from ``combos.toml``
+    fills_rule: str = "close"  #: a saved combo's fill model (:data:`FILLS`)
 
-    def __init__(self, entry: str | None = None, exit: str | None = None, **params):
+    def __init__(self, entry: str | None = None, exit: str | None = None, fills: str | None = None, **params):
         self.entry = (entry or self.entry_rule).strip()
         exit = self.exit_rule if exit is None and entry is None else exit
         self.exit = (exit or "").strip()
+        self.fills = (fills or self.fills_rule or "close").strip().lower()
+        if self.fills not in FILLS:
+            raise ValueError(f"fills must be one of {', '.join(FILLS)}, not {fills!r}")
+        self.limit: Risk | None = None
         self._space: dict[str, Param] = {}
         self._keys: dict[tuple, str] = {}
         self._groups = 0
@@ -523,7 +553,7 @@ class Combo(BaseAlgorithm):
             raise ValueError(f"combo {type(self).name!r} contains itself: {' -> '.join([*stack, type(self).name])}")
         stack.append(type(self).name)
         try:
-            self._entry = self._compile(parse(self.entry), exit_rule=False)
+            self._entry = self._compile_entry(parse(self.entry))
             self.risks: list[Risk] = []
             self._exit = Not(EntryRef())
             if self.exit:
@@ -537,6 +567,21 @@ class Combo(BaseAlgorithm):
             self.signals(_sample(), self.values)
 
     # -- building
+    def _compile_entry(self, ast: Ast):
+        terms = ast.args if ast.kind == "op" and ast.value == "&" else [ast]
+        rest = []
+        for term in terms:
+            if term.kind in ("call", "name") and term.value in LIMITS:
+                if self.limit is not None:
+                    raise ValueError("only one limit entry (limit_pct, limit_atr) per entry rule")
+                key, _ = self._member("risk", dict(LIMITS[term.value]), term, "limit entry")
+                self.limit = Risk(key, term.value, tuple(k for k, _ in LIMITS[term.value]))
+            else:
+                rest.append(term)
+        if not rest:
+            raise ValueError("a limit entry needs a condition to buy on, e.g. rsi(14) < 30 & limit_pct(1)")
+        return self._compile(rest[0] if len(rest) == 1 else Ast("op", "&", rest), exit_rule=False)
+
     def _compile_exit(self, ast: Ast):
         terms = ast.args if ast.kind == "op" and ast.value == "|" else [ast]
         rest = []
@@ -552,10 +597,17 @@ class Combo(BaseAlgorithm):
 
     def _risk(self, ast: Ast) -> Risk:
         kind = ast.value
-        if any(r.kind == kind for r in self.risks):
+        space = dict(RISK[kind])
+        if kind in TAKE_PROFITS:  # several take-profits scale out; the size is a parameter only when given
+            given = ast.kind == "call" and (len(ast.args) > list(space).index("size") or "size" in ast.kwargs)
+            if not given:
+                space.pop("size")
+        elif any(r.kind == kind for r in self.risks):
             raise ValueError(f"{kind} appears twice in the exit rule")
-        key, _ = self._member("risk", dict(RISK[kind]), ast, "risk exit")
-        return Risk(key, kind)
+        key, space = self._member("risk", space, ast, "risk exit")
+        if any(r.key == key for r in self.risks):
+            raise ValueError(f"{key} appears twice in the exit rule")
+        return Risk(key, kind, tuple(space))
 
     def _key(self, identity: tuple, name: str) -> str:
         if identity in self._keys:
@@ -629,6 +681,8 @@ class Combo(BaseAlgorithm):
             return self._group(ast, exit_rule, None, False)
         if name in RISK:
             raise ValueError(f"{name} is a risk exit: use it in the exit rule, joined with |")
+        if name in LIMITS:
+            raise ValueError(f"{name} is a limit entry: use it in the entry rule, joined with &")
         if name == "entry":
             if not exit_rule or ast.kind == "call":
                 raise ValueError("'entry' can only be used in the exit rule, for the entry rule")
@@ -731,72 +785,194 @@ class Combo(BaseAlgorithm):
         return ev.cache["_entry"]
 
     def signals(self, o, p):
+        return self.execute(o, p)[0]
+
+    def execute(self, o, p):
         ev = _Eval(self, o, p)
         enter = self._entry_truth(ev)[0]
         leave = self._exit.truth(ev)[0] if self._exit is not None else ops.full(o.close.shape, 0.0, o.close) > 0.5
-        if not self.risks:
-            return ops.latch(enter, leave)
+        if not self.risks and self.limit is None:
+            return ops.latch(enter, leave), None  # every fill at the close, whatever the fill model
         return self._with_risk(o, p, enter, leave)
 
     def _with_risk(self, o, p, enter, leave):
-        """The latch with risk exits: they depend on the entry price, so this walks the candles (batched over
-        parameter sets; NumPy either way, converted back to the input's backend)."""
+        """The latch with risk exits and limit entries: they depend on the entry price, so this walks the candles
+        (batched over parameter sets; NumPy either way, converted back to the input's backend).
+
+        ``fills="close"``: every level is compared with the close and filled at the close. ``fills="intrabar"``
+        (#150): stops, take-profits and limit entries fill inside the candle against its high and low, at the
+        level, or at the open when the candle opens beyond it (a gap). The levels for a candle come from the
+        candles before it only (no look-ahead). When a stop and a take-profit are both inside one candle, the
+        stop is taken to have come first (the worse outcome), unless the candle opens beyond the take-profit
+        (then that is sold at the open first); on the candle a limit entry fills on, a
+        take-profit counts only if the close is beyond it (the high may have come before the fill), a stop if the
+        low is below it (after a fill at the limit or the open, the price must have gone on down to the low). The
+        exit rule and max_hold still exit at the close. Returns ``(positions, Fills | None)``."""
+        from tradebot.backtest.engine import Fills
+
         np_ = lambda x: x.detach().cpu().numpy() if ops.is_torch(x) else np.asarray(x)  # noqa: E731
+        intrabar = self.fills == "intrabar"
         close = np_(o.close).astype(float)
-        risk = []
-        for r in self.risks:
-            vals = {k: p[f"{r.key}.{k}"] for k, _ in RISK[r.kind]}
-            atr = None
-            if "period" in vals:
-                atr = np_(ATR.compute(OHLC(*(None if a is None else np_(a) for a in o.fields())),
-                                      period=vals["period"])["value"])
-            first = RISK[r.kind][0][0]
-            risk.append((r.kind, np_(vals[first]) if not isinstance(vals[first], (int, float)) else vals[first], atr))
+        ohlc_np = None
+
+        def atr_of(period):
+            nonlocal ohlc_np
+            if ohlc_np is None:
+                ohlc_np = OHLC(*(None if a is None else np_(a) for a in o.fields()))
+            return np_(ATR.compute(ohlc_np, period=period)["value"])
+
+        terms = []  # (kind, {param: value}, atr or None)
+        for r in self.risks + ([self.limit] if self.limit is not None else []):
+            vals = {k: p[f"{r.key}.{k}"] for k in r.params}
+            vals = {k: v if isinstance(v, (int, float)) else np_(v) for k, v in vals.items()}
+            terms.append((r.kind, vals, atr_of(vals["period"]) if "period" in vals else None))
         enter, leave = np_(enter).astype(bool), np_(leave).astype(bool)
-        shapes = [enter.shape, leave.shape, close.shape] + [np.shape(v) for _, v, _ in risk]
+        shapes = [enter.shape, leave.shape, close.shape] + [np.shape(v) for _, vals, _ in terms for v in vals.values()]
         shape = np.broadcast_shapes(*shapes)
-        b = lambda x: np.broadcast_to(x, shape)  # noqa: E731
-        enter, leave, close = b(enter), b(leave), b(close)
-        risk = [(kind, b(np.asarray(v, dtype=float)), None if atr is None else b(atr)) for kind, v, atr in risk]
+        b = lambda x: np.broadcast_to(np.asarray(x, dtype=float), shape)  # noqa: E731
+        enter, leave, close = np.broadcast_to(enter, shape), np.broadcast_to(leave, shape), b(close)
+        if intrabar:
+            price = lambda x: close if x is None else b(np_(x))  # noqa: E731  (no high/low: the close)
+            open_, high, low = price(o.open), price(o.high), price(o.low)
+        terms = [(kind, {k: b(v) for k, v in vals.items()}, None if atr is None else b(atr))
+                 for kind, vals, atr in terms]
+        stops = [t for t in terms if t[0] in STOPS]
+        tps = [t for t in terms if t[0] in TAKE_PROFITS]
+        max_holds = [t for t in terms if t[0] == "max_hold"]
+        limit = terms[-1] if self.limit is not None else None
         lead = shape[:-1]
-        pos = np.zeros(lead, dtype=bool)
+        pos = np.zeros(lead)
         entry_px, peak, held = np.zeros(lead), np.zeros(lead), np.zeros(lead)
-        entry_atr = [np.full(lead, np.nan) for _ in risk]
+        entry_atr = {id(t): np.full(lead, np.nan) for t in terms}
+        tp_done = [np.zeros(lead, dtype=bool) for _ in tps]
+        order = np.zeros(lead, dtype=bool)  # a limit buy for this candle, placed at the previous close
+        order_px = np.full(lead, np.nan)
         out = np.zeros(shape)
+        adjust, extra = (np.zeros(shape), np.zeros(shape)) if intrabar else (None, None)
+        prev_c = close[..., 0]
+
+        def stop_level(t, px, top):
+            """The highest stop below ``px`` (the entry price) / ``top`` (the highest close), from candle ``t``."""
+            lvl = np.full(lead, -np.inf)
+            for term in stops:
+                kind, vals, atr = term
+                v = vals[next(iter(vals))][..., t]
+                lvl = np.fmax(lvl, px * (1 - v / 100) if kind == "stop_pct" else
+                                 px - v * entry_atr[id(term)] if kind == "stop_atr" else
+                                 top * (1 - v / 100) if kind == "trail_pct" else
+                                 top - v * atr[..., t])
+            return np.nan_to_num(lvl, nan=-np.inf)
+
+        def tp_level(term, t):
+            kind, vals, _ = term
+            v = vals[next(iter(vals))][..., t]
+            return entry_px * (1 + v / 100) if kind == "take_profit" else entry_px + v * entry_atr[id(term)]
+
+        def tp_size(term, t):
+            return term[1]["size"][..., t] if "size" in term[1] else 1.0
+
         for t in range(shape[-1]):
             c = close[..., t]
-            stop = leave[..., t].copy()
-            if pos.any():
-                held = held + pos
-                peak = np.where(pos, np.maximum(peak, c), peak)
-                for (kind, v, atr), at_entry in zip(risk, entry_atr):
-                    v = v[..., t]
-                    if kind == "stop_pct":
-                        hit = c <= entry_px * (1 - v / 100)
-                    elif kind == "take_profit":
-                        hit = c >= entry_px * (1 + v / 100)
-                    elif kind == "trail_pct":
-                        hit = c <= peak * (1 - v / 100)
-                    elif kind == "stop_atr":
-                        hit = c <= entry_px - v * at_entry
-                    elif kind == "take_profit_atr":
-                        hit = c >= entry_px + v * at_entry
-                    elif kind == "trail_atr":
-                        hit = c <= peak - v * atr[..., t]
-                    else:  # max_hold
-                        hit = held >= v
-                    stop |= pos & hit
-            new = np.where(pos, ~stop, enter[..., t] & ~leave[..., t])
-            started = new & ~pos
+            was = pos > 0  # in at the previous close
+            cur = pos.copy()
+            if intrabar:  # the legs of this candle: hold ``cur`` from ``cur_px`` on, compounded into ``g``
+                g, cur_px, turn = np.ones(lead), prev_c.copy(), np.zeros(lead)
+
+                def leg(mask, px, new):
+                    nonlocal g, cur_px, cur, turn
+                    px = np.where(mask, px, cur_px)
+                    g = np.where(mask, g * (1 + cur * (px / cur_px - 1)), g)
+                    turn = np.where(mask, turn + np.abs(new - cur), turn)
+                    cur = np.where(mask, new, cur)
+                    cur_px = px
+
+            if was.any():
+                held = held + was
+                if intrabar:  # the levels are known at the previous close
+                    o_, h, lo = open_[..., t], high[..., t], low[..., t]
+                    lvl = stop_level(t - 1, entry_px, peak)
+                    levels = [tp_level(term, t - 1) for term in tps]
+                    ranks = np.argsort(np.stack(levels), axis=0) if tps else []  # lowest take-profit first
+
+                    def take_profits(when, at_open: bool):
+                        for i in ranks:
+                            for k, term in enumerate(tps):
+                                pick = when & (i == k) & ~tp_done[k] & (cur > 0) & (
+                                    o_ >= levels[k] if at_open else h >= levels[k])
+                                leg(pick, np.maximum(o_, levels[k]), np.maximum(cur - tp_size(term, t - 1), 0.0))
+                                tp_done[k] |= pick
+
+                    take_profits(was & (o_ > lvl), at_open=True)  # opens above a take-profit: sold at the open
+                    hit = was & (cur > 0) & (lo <= lvl)  # a stop inside the candle comes before any take-profit
+                    leg(hit, np.minimum(o_, lvl), 0.0)  # opens below the stop: sold at the open
+                    take_profits(was & ~hit, at_open=False)
+                peak = np.where(was, np.maximum(peak, c), peak)
+                full = was & leave[..., t]
+                for term in max_holds:
+                    full |= was & (held >= term[1]["bars"][..., t])
+                if not intrabar:  # every level against the close (the levels as of this close)
+                    full |= was & (c <= stop_level(t, entry_px, peak))
+                    for k, term in enumerate(tps):
+                        pick = was & ~full & ~tp_done[k] & (c >= tp_level(term, t))
+                        cur = np.where(pick, np.maximum(cur - tp_size(term, t), 0.0), cur)
+                        tp_done[k] |= pick
+                        full |= pick & (cur <= 0)
+                    cur = np.where(full, 0.0, cur)
+                else:
+                    leg(full & (cur > 0), c, 0.0)
+            # entries: only from flat at the previous close (no re-entry on a candle with an exit)
+            flat = ~was
+            if limit is None:
+                started = flat & enter[..., t] & ~leave[..., t]
+                fill_px = c
+                if intrabar:
+                    leg(started, c, 1.0)
+            elif intrabar:
+                started = flat & order & (low[..., t] <= order_px)
+                fill_px = np.minimum(open_[..., t], order_px)  # opens below the limit: filled at the open
+                leg(started, fill_px, 1.0)
+            else:
+                started = flat & order & ~leave[..., t] & (c <= order_px)
+                fill_px = c
             if started.any():
-                entry_px = np.where(started, c, entry_px)
-                peak = np.where(started, c, peak)
+                entry_px = np.where(started, fill_px, entry_px)
+                peak = np.where(started, np.maximum(fill_px, c) if limit is not None else c, peak)
                 held = np.where(started, 0.0, held)
-                entry_atr = [np.where(started, atr[..., t], e) if atr is not None else e
-                             for (_, _, atr), e in zip(risk, entry_atr)]
-            pos = new
+                at = t if limit is None else max(t - 1, 0)  # a limit order's ATR: at the candle it was placed on
+                for term in terms:
+                    if term[2] is not None:
+                        entry_atr[id(term)] = np.where(started, term[2][..., at], entry_atr[id(term)])
+                tp_done = [d & ~started for d in tp_done]
+                if limit is None:
+                    cur = np.where(started, 1.0, cur)
+                elif intrabar:  # the rest of the candle the limit filled on (see the docstring)
+                    lvl = stop_level(at, entry_px, entry_px)  # as of the order (a trailing ATR too)
+                    hit = started & (low[..., t] <= lvl)
+                    leg(hit, lvl, 0.0)
+                    for k, term in enumerate(tps):
+                        tp = tp_level(term, at)
+                        pick = started & ~hit & ~tp_done[k] & (cur > 0) & (c >= tp)
+                        leg(pick, tp, np.maximum(cur - tp_size(term, at), 0.0))
+                        tp_done[k] |= pick
+                    leg(started & (cur > 0) & leave[..., t], c, 0.0)
+                else:
+                    cur = np.where(started, 1.0, cur)
+            if intrabar:
+                g = g * (1 + cur * (c / cur_px - 1))
+                adjust[..., t] = (g - 1) - pos * (c / prev_c - 1)
+                extra[..., t] = turn - np.abs(cur - pos)
+            if limit is not None:  # the limit buy for the next candle
+                kind, vals, atr = limit
+                v = vals[next(iter(vals))][..., t]
+                order = (cur <= 0) & enter[..., t] & ~leave[..., t]
+                order_px = c * (1 - v / 100) if kind == "limit_pct" else c - v * atr[..., t]
+                order &= ~np.isnan(order_px)
+            pos = cur
+            prev_c = c
             out[..., t] = pos
-        return ops.asarray(out, o.close) if ops.is_torch(o.close) else out
+        wrap = (lambda x: ops.asarray(x, o.close)) if ops.is_torch(o.close) else (lambda x: x)
+        fills = Fills(wrap(adjust), wrap(extra)) if intrabar else None
+        return wrap(out), fills
 
     def chart_indicators(self):
         out, seen = [], set()
@@ -813,11 +989,12 @@ class Combo(BaseAlgorithm):
         return out
 
     def spec(self) -> dict:
-        """The rules as saved: ``{"entry": ..., "exit": ...}``."""
-        return {"entry": self.entry, "exit": self.exit}
+        """The rules as saved: ``{"entry": ..., "exit": ..., "fills": ...}``."""
+        return {"entry": self.entry, "exit": self.exit, "fills": self.fills}
 
     def __repr__(self) -> str:
-        return f"{self.name}(entry: {self.entry}" + (f" · exit: {self.exit})" if self.exit else ")")
+        return (f"{self.name}(entry: {self.entry}" + (f" · exit: {self.exit}" if self.exit else "")
+                + (f" · fills: {self.fills})" if self.fills != "close" else ")"))
 
 
 def _sample(n: int = 300) -> OHLC:
@@ -829,10 +1006,10 @@ def _sample(n: int = 300) -> OHLC:
                 1.42e9 + 86_400.0 * np.arange(n))
 
 
-def check(entry: str, exit: str | None = None) -> Combo:
+def check(entry: str, exit: str | None = None, fills: str | None = None) -> Combo:
     """A combo from the rules, or ``ValueError`` explaining what's wrong."""
     try:
-        return Combo(entry=entry, exit=exit or "")
+        return Combo(entry=entry, exit=exit or "", fills=fills)
     except KeyError as e:
         raise ValueError(str(e).strip("'\"")) from None
 
@@ -908,7 +1085,7 @@ def combine(items: list[str], logic: str, risk: list[str] = (), threshold: float
 
 # -- saved combos -------------------------------------------------------------------------------------
 NAME = re.compile(r"[a-z_][a-z0-9_]*")
-RESERVED = {*PRICES, *RISK, *GROUPS, *WORDS, "entry", "combo"}
+RESERVED = {*PRICES, *RISK, *LIMITS, *GROUPS, *WORDS, "entry", "combo"}
 
 
 def combos_path() -> Path:
@@ -933,8 +1110,8 @@ def _write(saved: dict[str, dict], path: Path) -> None:
     lines = ["# Saved strategy combos (tradebot combo save / the Backtest lab's combo builder).", ""]
     for name, c in saved.items():
         lines.append(f"[{name}]")
-        for k in ("entry", "exit", "description"):
-            if c.get(k):
+        for k in ("entry", "exit", "description", "fills"):
+            if c.get(k) and not (k == "fills" and c[k] == "close"):
                 lines.append(f"{k} = {json.dumps(c[k], ensure_ascii=False)}")
         if c.get("params"):
             lines.append(f"[{name}.params]")
@@ -945,10 +1122,10 @@ def _write(saved: dict[str, dict], path: Path) -> None:
 
 
 def register_combo(name: str, entry: str, exit: str = "", description: str = "",
-                   params: dict | None = None) -> type[Combo]:
+                   params: dict | None = None, fills: str = "close") -> type[Combo]:
     """Register a saved combo as the strategy ``name`` (a :class:`Combo` subclass); replaces an earlier one."""
     attrs = {"name": name, "entry_rule": entry, "exit_rule": exit or "", "saved_params": dict(params or {}),
-             "poolable": True, "saved": True,
+             "poolable": True, "saved": True, "fills_rule": fills or "close",
              "description": description or f"Combo: enter on {entry}" + (f", exit on {exit}" if exit else ""),
              "__module__": __name__}
     with ALGORITHMS.reloading():
@@ -972,7 +1149,8 @@ def load_combos(path: Path | None = None) -> list[str]:
         if not NAME.fullmatch(name) or name in RESERVED or (name in ALGORITHMS and name not in saved_combos()):
             log.warning("combo %r skipped: the name is taken or not allowed", name)
             continue
-        register_combo(name, c["entry"], c.get("exit", ""), c.get("description", ""), c.get("params"))
+        register_combo(name, c["entry"], c.get("exit", ""), c.get("description", ""), c.get("params"),
+                       c.get("fills", "close"))
         names.append(name)
     for name in names:  # every name is known now, so combos may use each other
         try:
@@ -984,16 +1162,16 @@ def load_combos(path: Path | None = None) -> list[str]:
 
 
 def save_combo(name: str, entry: str, exit: str = "", description: str = "", params: dict | None = None,
-               path: Path | None = None) -> type[Combo]:
+               path: Path | None = None, fills: str = "close") -> type[Combo]:
     """Check, save to ``combos.toml`` and register a combo; ``ValueError`` if the rules or the name are bad."""
     if not NAME.fullmatch(name):
         raise ValueError(f"{name!r} can't be a combo name: use lower-case letters, digits and _")
     if name in RESERVED or name in INDICATORS or (name in ALGORITHMS and name not in saved_combos()):
         raise ValueError(f"{name!r} is already taken by a strategy, indicator or keyword")
-    probe = check(entry, exit)  # the rules on their own
+    probe = check(entry, exit, fills)  # the rules on their own
     params = {k: v for k, v in (params or {}).items() if k in probe.param_space()}
     old = ALGORITHMS.get(name) if name in ALGORITHMS else None
-    cls = register_combo(name, entry, exit, description, params)
+    cls = register_combo(name, entry, exit, description, params, probe.fills)
     try:
         cls()  # catches a combo that would contain itself
     except (ValueError, KeyError) as e:
@@ -1005,7 +1183,8 @@ def save_combo(name: str, entry: str, exit: str = "", description: str = "", par
         raise ValueError(str(e)) from None
     path = path or combos_path()
     saved = load_saved(path)
-    saved[name] = {"entry": entry, "exit": exit or "", "description": description, "params": params}
+    saved[name] = {"entry": entry, "exit": exit or "", "description": description, "params": params,
+                   "fills": probe.fills}
     _write(saved, path)
     return cls
 
