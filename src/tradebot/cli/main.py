@@ -46,6 +46,9 @@ TF = Annotated[str, typer.Option("--tf", help="Timeframe: 1m 5m 15m 30m 1h 4h 1d
 Symbol = Annotated[str, typer.Argument(help="e.g. AAPL, SAP.DE, BTC/USDT", autocompletion=complete.symbols)]
 Algo = Annotated[str, typer.Argument(help="Algorithm name (tradebot list)", autocompletion=complete.algorithms)]
 Broker = Annotated[str, typer.Option(help="Registered broker name", autocompletion=complete.brokers)]
+Slippage = Annotated[Optional[str], typer.Option(
+    help="Slippage per side in basis points (5 = 0.05%), charged on top of the fee; 'auto' = suggested for the "
+    "asset class (crypto 5, stock 2). Default: [backtest] slippage_bps in config.toml, else 0")]
 DcaAmount = Annotated[Optional[float], typer.Option(
     help="Amount the monthly-investing baseline invests each month (default: capital / months)")]
 
@@ -193,6 +196,7 @@ def backtest(
     entry: Entry = None,
     exit: Exit = None,
     fee: Annotated[float, typer.Option(help="Fee per side, fraction")] = 0.001,
+    slippage: Slippage = None,
     capital: float = 10_000.0,
     dca_amount: DcaAmount = None,
     plot: Annotated[bool, typer.Option(help="Show chart with signals and equity")] = True,
@@ -207,20 +211,32 @@ def backtest(
     algorithm = make_algo(algo, param, members, entry, exit)
     symbols = _symbols(symbol, [])
     if len(symbols) > 1:
-        _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount)
+        _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount, slippage)
         return
     df = load_data(symbol, tf, start, end, bars)
-    res = run_backtest(df, algorithm, fee=fee, initial_capital=capital)
+    slip = _slippage(slippage, symbol)
+    res = run_backtest(df, algorithm, fee=fee, initial_capital=capital, slippage=slip)
     if plot:
         print(render_chart(df, f"{symbol} {tf} · {algorithm!r}", algorithm.chart_indicators(), algorithm, equity=res.equity))
-    bl = baselines(df, res, fee=fee, initial_capital=capital, amount=dca_amount)
+    bl = baselines(df, res, fee=fee, initial_capital=capital, amount=dca_amount, slippage=slip)
     console.print(f"[bold]{algorithm!r}[/] on {symbol} {tf} ({df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d})")
     console.print(results_table("backtest", bl.columns("strategy", res)))
     console.print(f"final equity [bold]{res.equity.iloc[-1]:,.2f}[/]")
     warn_not_beaten(bl, "Over this period")
 
 
-def _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount) -> None:
+def _slippage(value: str | None, symbol: str | None) -> float:
+    """``--slippage`` (basis points, 'auto' or unset) as a fraction."""
+    from tradebot.backtest import bps
+    from tradebot.backtest.slippage import resolve_bps
+
+    try:
+        return bps(resolve_bps(value, symbol))
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--slippage") from None
+
+
+def _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount, slippage=None) -> None:
     """One row per symbol: the strategy's return, Sharpe, XIRR and lead over each baseline."""
     from tradebot.backtest import backtest as run_backtest, baselines
     from tradebot.backtest.metrics import fmt
@@ -230,8 +246,9 @@ def _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_a
         t.add_column(col, justify="left" if col == "symbol" else "right")
     beats = {}
     for s, df in _load_many(symbols, tf, start, end, bars).items():
-        res = run_backtest(df, algorithm, fee=fee, initial_capital=capital)
-        bl = baselines(df, res, fee=fee, initial_capital=capital, amount=dca_amount)
+        slip = _slippage(slippage, s)
+        res = run_backtest(df, algorithm, fee=fee, initial_capital=capital, slippage=slip)
+        bl = baselines(df, res, fee=fee, initial_capital=capital, amount=dca_amount, slippage=slip)
         lead = [f"[{'green' if v > 0 else 'red'}]{fmt('vs buy & hold', v)}[/]" for v in bl.excess.values()]
         for name in bl.excess:
             beats[name] = beats.get(name, 0) + (name not in bl.not_beaten)
@@ -274,6 +291,7 @@ def optimize(
     backend: Annotated[str, typer.Option(help="auto | gpu | cuda | rocm | cpu | numpy", autocompletion=complete.choices(
         ("auto", "GPU if available"), ("gpu", "any GPU"), ("cuda", "NVIDIA only"), ("rocm", "AMD only (alias: amd)"), ("cpu", "torch on the CPU"), ("numpy", "")))] = "auto",
     fee: float = 0.001,
+    slippage: Slippage = None,
     min_trades: Annotated[int, typer.Option(help="Reject parameter sets with fewer round trips")] = 4,
     dca_amount: DcaAmount = None,
     seed: Optional[int] = None,
@@ -352,7 +370,7 @@ def optimize(
     if backend == "auto" and not algorithm.vectorized:
         backend = "numpy"  # loop-based algorithms (e.g. elliott_wave) run on the CPU anyway
     kwargs = dict(population=population, generations=generations, objective=objective, train_fraction=train,
-                  backend=select_backend(backend), fee=fee, seed=seed, fixed=parse_kv(fix), min_trades=min_trades,
+                  backend=select_backend(backend), fee=fee, slippage=_slippage(slippage, symbols[0]), seed=seed, fixed=parse_kv(fix), min_trades=min_trades,
                   dca_amount=dca_amount, aggregate=aggregate, align=align, min_symbols_beating=min_symbols_beating,
                   samples=samples, sample_length=sample_length)
     n_genes = len([k for k in algorithm.param_space() if k not in kwargs["fixed"]])
@@ -667,6 +685,7 @@ def evolve(
         help="Walk-forward: also run the search on this many rolling windows, each scored on the stretch after it "
         "(default 0, with --from-scratch 3)")] = None,
     fee: float = 0.001,
+    slippage: Slippage = None,
     dca_amount: DcaAmount = None,
     best_result: Annotated[bool, typer.Option(
         "--best-result", help="Set every setting for the best out-of-sample result, ignoring runtime (much slower "
@@ -728,7 +747,7 @@ def evolve(
             raise typer.BadParameter("good or best", param_hint="--effort")
         candles = min(len(f) for f in df.values()) if isinstance(df, dict) else len(df)
         if auto_settings:
-            fixed = dict(fee=fee, align=align, dca_amount=dca_amount, state=state)
+            fixed = dict(fee=fee, slippage=_slippage(slippage, symbols[0]), align=align, dca_amount=dca_amount, state=state)
             if names:
                 fixed["indicators"] = names
             from rich.progress import Progress as _Progress
@@ -766,7 +785,7 @@ def evolve(
     kwargs = dict(**extra, population=population, generations=generations, max_depth=max_depth, max_size=max_size,
                   objective=objective, aggregate=aggregate, align=align, validation=validation, test=test,
                   segments=segments, min_trades=min_trades, parsimony=parsimony, state=state, indicators=names,
-                  fee=fee, dca_amount=dca_amount, seed=seed, from_scratch=from_scratch, islands=islands)
+                  fee=fee, slippage=_slippage(slippage, symbols[0]), dca_amount=dca_amount, seed=seed, from_scratch=from_scratch, islands=islands)
     with Progress(console=console) as progress:
         task = progress.add_task("evolving", total=generations)
         label = {"name": "evolving"}

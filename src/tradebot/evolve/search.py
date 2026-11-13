@@ -317,6 +317,7 @@ class Evolver:
         objective: str = "sharpe",
         aggregate: str = "mean",
         fee: float = 0.001,
+        slippage: float = 0.0,
         validation: float = 0.2,
         test: float = 0.2,
         segments: int = 3,
@@ -370,7 +371,7 @@ class Evolver:
             raise ValueError("crossover and mutation are probabilities that may add up to at most 1")
         self.population, self.generations = population, generations
         self.max_depth, self.max_size = max_depth, max(max_size, 4)
-        self.objective, self.aggregate, self.fee = objective, aggregate, fee
+        self.objective, self.aggregate, self.fee, self.slippage = objective, aggregate, fee, slippage
         self.min_trades, self.parsimony = min_trades, parsimony
         self.tournament, self.p_crossover, self.p_mutation = max(1, tournament), crossover, mutation
         self.elite = elite
@@ -391,7 +392,7 @@ class Evolver:
         self.islands = max(1, min(islands, population // 4))
         self.migrate_every, self.migrants = max(1, migrate_every), max(0, migrants)
         self.settings = dict(population=population, generations=generations, max_depth=max_depth, max_size=max_size,
-                             objective=objective, aggregate=aggregate, fee=fee, validation=validation, test=test,
+                             objective=objective, aggregate=aggregate, fee=fee, slippage=slippage, validation=validation, test=test,
                              segments=segments, min_trades=min_trades, parsimony=parsimony, tournament=tournament,
                              crossover=crossover, mutation=mutation, elite=elite, hall_of_fame=hall_of_fame,
                              dca_amount=dca_amount, primitives=self.base_ps, from_scratch=from_scratch,
@@ -432,7 +433,7 @@ class Evolver:
 
     # -- scoring --------------------------------------------------------------------------------------
     def _objective(self, d: _Symbol, pos: np.ndarray, a: int, b: int) -> float:
-        value = float(batch_fitness(simulate(d.close[a:b], pos[a:b], self.fee), d.ppy, self.objective))
+        value = float(batch_fitness(simulate(d.close[a:b], pos[a:b], self.fee, self.slippage), d.ppy, self.objective))
         return value if np.isfinite(value) else REJECTED
 
     def _positions(self, d: _Symbol, program: Program) -> np.ndarray | None:
@@ -475,7 +476,7 @@ class Evolver:
 
     def _train_returns(self, program: Program) -> np.ndarray:
         """The training part's returns per candle, all symbols in a row."""
-        return np.concatenate([simulate(d.close[:d.train_end], d.evaluator.positions(program)[:d.train_end], self.fee)
+        return np.concatenate([simulate(d.close[:d.train_end], d.evaluator.positions(program)[:d.train_end], self.fee, self.slippage)
                                for d in self.data])
 
     def deflated(self, program: Program) -> Deflated | None:
@@ -786,8 +787,9 @@ class Evolver:
                 return None, None
             a, b = bounds
             df = d.df.iloc[a:b]
-            res = from_positions(df, pos.iloc[a:b], name, {}, self.fee, periods_per_year=d.ppy)
-            return res, baselines(df, res, self.fee, amount=self.dca_amount, periods_per_year=d.ppy)
+            res = from_positions(df, pos.iloc[a:b], name, {}, self.fee, periods_per_year=d.ppy, slippage=self.slippage)
+            return res, baselines(df, res, self.fee, amount=self.dca_amount, periods_per_year=d.ppy,
+                                    slippage=self.slippage)
 
         train, _ = part((0, d.train_end))
         validation, vb = part(d.validation)
