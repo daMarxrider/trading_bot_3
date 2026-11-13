@@ -113,15 +113,19 @@ class WalkForwardResult:
         """Every fold's out-of-sample stretch on ``symbol`` joined into one backtest (each stretch traded with its
         own fold's parameters, without the holdout), with the baselines over the same candles; None when no fold
         has an out-of-sample stretch on that symbol."""
-        parts = [r.test.positions for f in self.folds for r in (f.result.symbols or [f.result])
+        tests = [r.test for f in self.folds for r in (f.result.symbols or [f.result])
                  if getattr(r, "symbol", "") == symbol and r.test is not None]
-        if not parts:
+        if not tests:
             return None
-        positions = pd.concat(parts)
+        positions = pd.concat([t.positions for t in tests])
+        fills = None
+        if any(t.fills is not None for t in tests):  # intrabar fills (#150), each stretch's own
+            fills = pd.concat([t.fills if t.fills is not None else
+                               pd.DataFrame({"adjust": 0.0, "turnover": 0.0}, index=t.positions.index) for t in tests])
         df = self.frames[symbol].loc[positions.index]
         ppy = infer_periods_per_year(self.frames[symbol].index)
         res = from_positions(df, positions, "walk-forward", {}, self.fee, periods_per_year=ppy,
-                             slippage=self.slippage)
+                             slippage=self.slippage, fills=fills)
         return res, baselines(df, res, self.fee, amount=self.dca_amount, periods_per_year=ppy,
                                     slippage=self.slippage)
 

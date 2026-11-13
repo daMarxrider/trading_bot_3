@@ -192,9 +192,9 @@ class VotingEnsemble(BaseAlgorithm):
 
 
 def build_algorithm(name: str, params: dict | None = None, members: list[str] | None = None,
-                    entry: str | None = None, exit: str | None = None) -> BaseAlgorithm:
+                    entry: str | None = None, exit: str | None = None, fills: str | None = None) -> BaseAlgorithm:
     """Instantiate a registered algorithm by name (``members`` only applies to ``vote`` and ``pool``,
-    ``entry``/``exit`` to combos, #22)."""
+    ``entry``/``exit`` to combos, #22, ``fills`` (close / intrabar, #150) too: a saved combo's own by default)."""
     from tradebot.algorithms.combo import Combo
 
     cls = ALGORITHMS.get(name)
@@ -202,7 +202,10 @@ def build_algorithm(name: str, params: dict | None = None, members: list[str] | 
     if issubclass(cls, VotingEnsemble):
         return cls(members or None, **params)
     if issubclass(cls, Combo):
-        return cls(entry=entry, exit=exit, **params)
+        return cls(entry=entry, exit=exit, fills=fills, **params)
     if entry or exit:
         raise ValueError(f"--entry and --exit need the combo strategy, not {name!r}")
+    if fills and fills != "close":
+        raise ValueError(f"--fills {fills} needs a combo (its stops, take-profits and limit entries fill inside "
+                         f"the candle); {name!r} trades at the close")
     return cls(**params)

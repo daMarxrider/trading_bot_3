@@ -255,3 +255,34 @@ def test_combo_builder(app, tmp_path, monkeypatch):
     b.save.click()
     assert "gui_test_combo" in ALGORITHMS and view.algo.currentText() == "gui_test_combo"
     delete_combo("gui_test_combo")
+
+
+def test_combo_builder_fills_and_limit_entry(app, tmp_path, monkeypatch):
+    """Intrabar fills (#150): the fill model is picked in the builder, saved with the combo, explained on hover."""
+    from tradebot.algorithms import ALGORITHMS
+    from tradebot.algorithms.combo import delete_combo, load_saved
+
+    monkeypatch.setattr("tradebot.algorithms.combo.combos_path", lambda: tmp_path / "combos.toml")
+    view = BacktestView(None, ThemeManager(user_dir=tmp_path), ["TEST"])
+    try:
+        view.algo.setCurrentText("combo")
+        b = view.combo
+        assert not b.fills.isChecked() and b.algorithm().fills == "close"
+        assert "high or low" in b.fills.toolTip()
+        b.fills.setChecked(True)
+        b.entry.setText("rsi(14) < 30")
+        b.block.setCurrentText("limit_pct(1)")
+        b.logic.setCurrentText("and")
+        b.add(b.entry)
+        assert b.entry.text() == "rsi(14) < 30 & limit_pct(1)"
+        b.exit.setText("take_profit(5, 0.5) | take_profit(10) | stop_pct(3)")
+        algo = view._algorithm()
+        assert algo.fills == "intrabar" and "limit_pct.pct" in algo.param_space() and not b.status.text()
+        b.name.setText("gui_fills_combo")
+        b.save.click()
+        assert load_saved(tmp_path / "combos.toml")["gui_fills_combo"]["fills"] == "intrabar"
+        assert ALGORITHMS.get("gui_fills_combo")().fills == "intrabar"
+        delete_combo("gui_fills_combo")
+    finally:
+        view.close()
+        view.deleteLater()

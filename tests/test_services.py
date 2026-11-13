@@ -56,6 +56,21 @@ def test_dry_run_places_nothing():
     assert bot.step().action == "buy" and not ex.created
 
 
+def test_bot_scales_out_like_the_backtest():
+    ex = FakeExchange([[i * 86_400_000, 1, 1, 1, 1, 1] for i in range(5)])
+    algo = Scripted()
+    algo.next = 1.0
+    bot = TradingBot(BinanceBroker(exchange=ex), algo, "BTC/USDT", "1d", stake=10.0)
+    assert bot.step().action == "buy" and bot.holding == pytest.approx(10.0)
+    algo.next = 0.5  # a take-profit step sold half
+    ev = bot.step()
+    assert ev.action == "sell" and ev.amount == pytest.approx(5.0) and bot.holding == pytest.approx(5.0)
+    assert bot.step().action == "hold"
+    algo.next = 0.0
+    ev = bot.step()
+    assert ev.action == "sell" and ev.amount == pytest.approx(5.0) and bot.holding == 0
+
+
 def test_portfolio_dividend_metrics():
     positions = [
         Position("KO", 100, avg_cost=40.0),

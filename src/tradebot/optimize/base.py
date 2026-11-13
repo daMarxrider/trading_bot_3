@@ -57,7 +57,7 @@ import numpy as np
 import pandas as pd
 
 from tradebot.algorithms.base import BaseAlgorithm
-from tradebot.backtest import BacktestResult, Baselines, backtest, baselines, batch_fitness, simulate
+from tradebot.backtest import BacktestResult, Baselines, Fills, backtest, baselines, batch_fitness, simulate
 from tradebot.backtest.metrics import infer_periods_per_year
 from tradebot.core import ops
 from tradebot.core.series import OHLC, unix_seconds, volume_of
@@ -367,22 +367,31 @@ class PopulationOptimizer(ABC):
         return fitness
 
     def _positions(self, d: _Data, group: list[dict]):
-        """Target positions ``[len(group), T]`` on one symbol for a group sharing integer params."""
+        """``(positions, fills)``: target positions ``[len(group), T]`` on one symbol for a group sharing integer
+        params, and their intrabar fills (:class:`Fills`, None = all at the close)."""
         if not self._vectorized(group):
             # loop-based algorithm: one NumPy evaluation per candidate, then back to the backend
             if d.ohlc_np is None:
                 d.ohlc_np = OHLC.from_frame(d.train_df)
-            return ops.asarray(self._loop_signals(d.ohlc_np, group), d.ohlc.close)
+            pos, fills = self._loop_signals(d.ohlc_np, group)
+            back = lambda x: ops.asarray(x, d.ohlc.close)  # noqa: E731
+            return back(pos), None if fills is None else fills.map(back)
         return self._signals(d.ohlc, group)
 
     def _vectorized(self, group: list[dict]) -> bool:
         vectorized_for = getattr(self.algorithm, "vectorized_for", None)
         return vectorized_for(group[0]) if vectorized_for else getattr(self.algorithm, "vectorized", True)
 
-    def _loop_signals(self, o: OHLC, group: list[dict]) -> np.ndarray:
+    def _loop_signals(self, o: OHLC, group: list[dict]) -> tuple[np.ndarray, Fills | None]:
         length = o.close.shape[-1]
-        return np.stack([np.nan_to_num(np.broadcast_to(np.asarray(self.algorithm.signals(o, p), float), (length,)))
-                         for p in group])
+        flat = lambda x: np.nan_to_num(np.broadcast_to(np.asarray(x, float), (length,)))  # noqa: E731
+        runs = [self.algorithm.execute(o, p) for p in group]
+        pos = np.stack([flat(p) for p, _ in runs])
+        if all(f is None for _, f in runs):
+            return pos, None
+        zero = np.zeros(length)
+        return pos, Fills(np.stack([zero if f is None else flat(f.adjust) for _, f in runs]),
+                          np.stack([zero if f is None else flat(f.turnover) for _, f in runs]))
 
     def _signals(self, o: OHLC, group: list[dict]):
         """One call of the algorithm for the whole group: float params become ``[group, 1]`` arrays."""
@@ -394,17 +403,23 @@ class PopulationOptimizer(ABC):
             else:  # float params, and window lengths of a period-batched algorithm
                 arr = np.asarray(values, dtype=np.float64)[:, None]
                 params[key] = ops.asarray(arr, o.close)
-        return self.algorithm.signals(o, params)
+        return self.algorithm.execute(o, params)
 
     def _evaluate_group(self, group: list[dict]) -> np.ndarray:
         """Fitness per candidate: the per-symbol (or per-window) fitness values combined by ``aggregate``,
         minus complexity; rejected if it beats buy & hold on fewer than ``min_symbols_beating`` symbols."""
         if (w := self._windows) is not None:
             if self._vectorized(group):
-                pos = self._signals(w.ohlc, group)  # [K, group, T]: all windows in one call
+                pos, fills = self._signals(w.ohlc, group)  # [K, group, T]: all windows in one call
             else:
-                pos = ops.asarray(np.stack([self._loop_signals(o, group) for o in w.ohlc_np]), w.ohlc.close)
-            fits = self._score(w.ohlc.close, pos, w.ppy, w.warmup, len(group))
+                runs = [self._loop_signals(o, group) for o in w.ohlc_np]
+                back = lambda x: ops.asarray(np.stack(x), w.ohlc.close)  # noqa: E731
+                pos, fills = back([p for p, _ in runs]), None
+                if any(f is not None for _, f in runs):
+                    zero = np.zeros_like(runs[0][0])
+                    fills = Fills(back([zero if f is None else f.adjust for _, f in runs]),
+                                  back([zero if f is None else f.turnover for _, f in runs]))
+            fits = self._score(w.ohlc.close, pos, w.ppy, w.warmup, len(group), fills)
             fits = fits.cpu().numpy() if ops.is_torch(fits) else np.asarray(fits)
             symbol, buy_hold = w.symbol, w.buy_hold
         else:
@@ -418,23 +433,32 @@ class PopulationOptimizer(ABC):
         return fit - np.array([complexity(p) for p in group]) if complexity else fit
 
     def _symbol_fitness(self, d: _Data, group: list[dict]) -> np.ndarray:
-        fit = self._score(d.ohlc.close, self._positions(d, group), d.ppy, 0, len(group))
+        pos, fills = self._positions(d, group)
+        fit = self._score(d.ohlc.close, pos, d.ppy, 0, len(group), fills)
         return fit.cpu().numpy() if ops.is_torch(fit) else np.asarray(fit)
 
-    def _score(self, close, pos, ppy, warmup: int, n: int):
+    def _score(self, close, pos, ppy, warmup: int, n: int, fills: Fills | None = None):
         """Fitness of positions on ``close``: ``[T]`` -> ``[n]``, or stacked windows ``[K, 1, T]`` -> ``[K, n]``.
-        The first ``warmup`` candles only warm up the indicators and are not scored."""
+        The first ``warmup`` candles only warm up the indicators and are not scored. ``fills``: intrabar fills
+        shaped like ``pos``."""
         lo = -1.0 if self.algorithm.allow_short else 0.0
         pos = ops.nan_to_num(pos)
         pos = pos.clamp(lo, 1.0) if ops.is_torch(pos) else np.clip(pos, lo, 1.0)
         shape = (*close.shape[:-2], n, close.shape[-1])
-        if tuple(pos.shape) != shape:
-            pos = pos.expand(shape) if ops.is_torch(pos) else np.broadcast_to(pos, shape)
+        fit_shape = lambda x: x if tuple(x.shape) == shape else (  # noqa: E731
+            x.expand(shape) if ops.is_torch(x) else np.broadcast_to(x, shape))
+        pos = fit_shape(pos)
         close, pos = close[..., warmup:], pos[..., warmup:]
-        returns = simulate(close, pos, self.fee, self.slippage)
+        if fills is not None:  # the first scored candle starts flat (as ``simulate`` does), so no fill corrections
+            fills = fills.map(lambda x: fit_shape(ops.nan_to_num(x))[..., warmup:])
+            first = ops.asarray(np.r_[0.0, np.ones(pos.shape[-1] - 1)], pos)
+            fills = fills.map(lambda x: x * first)
+        returns = simulate(close, pos, self.fee, self.slippage, fills)
         fit = batch_fitness(returns, ppy, self.objective)
         changes = ops.abs_(pos - ops.shift(pos, 1, fill=0.0)) > 0
         n_trades = changes.sum(-1) / 2
+        if fills is not None:  # round trips inside one candle
+            n_trades = n_trades + (fills.turnover > 1.5).sum(-1)
         return ops.where(n_trades < self.min_trades, -1e9, ops.nan_to_num(fit, -1e9))
 
     def _buy_hold(self, close, ppy, warmup: int):
