@@ -153,8 +153,9 @@ def chart(
     param: Params = [],
     members: Members = None,
     line: Annotated[bool, typer.Option(help="Line chart instead of candles")] = False,
+    volume: Annotated[bool, typer.Option(help="Volume bars under the candles (when the data has volume)")] = True,
 ):
-    """Terminal OHLC chart with indicator overlays and algorithm signals."""
+    """Terminal OHLC chart with indicator overlays, volume and algorithm signals."""
     from tradebot.cli.charts import render_chart
 
     algorithm = make_algo(algo, param, members) if algo else None
@@ -162,7 +163,7 @@ def chart(
     if algorithm and not inds:
         inds = algorithm.chart_indicators()
     df = load_data(symbol, tf, None, None, bars + 250)  # extra history warms up indicators
-    print(render_chart(df, f"{symbol} {tf}", inds, algorithm, line, window=bars))
+    print(render_chart(df, f"{symbol} {tf}", inds, algorithm, line, window=bars, volume=volume))
 
 
 @app.command()
@@ -1289,7 +1290,11 @@ def pair_scan(symbols: Annotated[list[str], typer.Argument(help="Symbols to sear
                                                   ("bonferroni", "at most 5 % chance of any false pair"),
                                                   ("none", "no correction (many chance finds in big scans)")))] = "fdr",
               same_sector: Annotated[bool, typer.Option(
-                  help="Pre-filter: only pair stocks Yahoo lists in the same sector (cuts the pairs to test)")] = False):
+                  help="Pre-filter: only pair stocks Yahoo lists in the same sector (cuts the pairs to test)")] = False,
+              backend: Annotated[str, typer.Option(
+                  help="Where the tests run: auto (GPU if available) | gpu | cuda | rocm | cpu | numpy",
+                  autocompletion=complete.choices(("auto", "GPU if available"), ("gpu", "any GPU"), ("cuda", "NVIDIA only"),
+                                                  ("rocm", "AMD only (alias: amd)"), ("cpu", "torch on the CPU"), ("numpy", "")))] = "auto"):
     """Find pairs that move together: picked on the first part of the history, confirmed on the rest."""
     from tradebot.analysis.pairs import find_pairs
 
@@ -1309,12 +1314,13 @@ def pair_scan(symbols: Annotated[list[str], typer.Argument(help="Symbols to sear
             with console.status("looking up sectors ..."):
                 groups = sectors(list(closes))
             console.print(f"sector known for {len(groups)} of {len(closes)} symbols; the others aren't paired")
-        scan = find_pairs(closes, split, min_correlation, correction=correction, groups=groups)
-    except ValueError as e:
+        scan = find_pairs(closes, split, min_correlation, correction=correction, groups=groups, backend=backend)
+    except (ValueError, RuntimeError) as e:  # RuntimeError: a GPU was asked for but there is none
         raise typer.BadParameter(str(e)) from None
     console.print(f"{scan.tested} pairs tested ({scan.skipped} dropped by the correlation filter), "
                   f"{scan.passed_train} passed the test on the first {split:.0%} (correction: {correction}; "
-                  f"without it about {scan.expected_by_chance:.1f} would pass by chance alone). [bold]{len(scan.found)}[/] held up on the rest.")
+                  f"without it about {scan.expected_by_chance:.1f} would pass by chance alone). [bold]{len(scan.found)}[/] held up on the rest."
+                  f" [dim]({scan.backend})[/]")
     if not scan.found:
         return
     t = Table(title="Pairs confirmed on data they weren't picked on")

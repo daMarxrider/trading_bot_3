@@ -9,6 +9,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from tradebot.core import ops
+
 
 @dataclass
 class PairStats:
@@ -151,7 +153,7 @@ def p_value(stat: float) -> float:
     pairs and to correct for how many were tested; not a substitute for the exact MacKinnon tables."""
     pts = sorted(CRITICAL.items(), key=lambda kv: kv[1])  # (level, t) from most to least negative t, i.e. 0.01 first
     (p0, t0), (p1, t1) = pts[0], pts[1]
-    if stat >= pts[-1][1]:
+    if not stat >= -np.inf or stat >= pts[-1][1]:  # NaN: the test couldn't run (a degenerate pair)
         return 1.0
     for (pa, ta), (pb, tb) in zip(pts, pts[1:]):
         if ta <= stat <= tb:
@@ -163,8 +165,7 @@ def p_value(stat: float) -> float:
 def adf_stat(x: np.ndarray, lags: int | None = None) -> float:
     """Augmented Dickey-Fuller t value on ``x`` (no constant: for regression residuals). ``lags`` default
     follows Schwert's rule, capped so short series keep enough rows."""
-    n = len(x)
-    lags = min(int(12 * (n / 100) ** 0.25), max(0, n // 5)) if lags is None else lags
+    lags = _lags(len(x)) if lags is None else lags
     dx = np.diff(x)
     rows = len(dx) - lags
     if rows < 10:
@@ -188,8 +189,7 @@ def cointegration(a: pd.Series, b: pd.Series) -> Cointegration:
         raise ValueError("need at least 30 common candles")
     beta, alpha = np.polyfit(lb.to_numpy(), la.to_numpy(), 1)
     stat = adf_stat(la.to_numpy() - alpha - beta * lb.to_numpy())
-    level = next((lv for lv in sorted(CRITICAL) if stat < CRITICAL[lv]), 1.0)
-    return Cointegration(stat, level, float(beta))
+    return Cointegration(stat, _level(stat), float(beta))
 
 
 # -- has the pair stopped working? --------------------------------------------------------------------------
@@ -249,6 +249,7 @@ class Scan:
     passed_train: int  #: pairs the training test let through (after the correction)
     expected_by_chance: float  #: pairs a 5 % test passes with no real pairs at all: tested × 0.05
     found: list[Candidate]  #: passed the training test AND held up on the test part
+    backend: str = ""  #: where the tests ran, e.g. "CUDA: <card>" or "NumPy, 8 threads"
 
 
 CORRECTIONS = ("fdr", "bonferroni", "none")
@@ -271,9 +272,82 @@ def significant(pvalues: list[float], correction: str, level: float) -> list[boo
     raise ValueError(f"correction must be one of {', '.join(CORRECTIONS)}")
 
 
+def _lags(n: int) -> int:
+    """ADF lag count for a series of ``n`` values: Schwert's rule, capped so short series keep enough rows."""
+    return min(int(12 * (n / 100) ** 0.25), max(0, n // 5))
+
+
+def _coint_chunk(y, x, lags: int):
+    """Engle-Granger on a batch: ``y``, ``x`` shaped (pairs, bars), NumPy arrays or torch tensors.
+    Same maths as :func:`cointegration`, with the least squares solved through the normal equations."""
+    xp = ops.torch if ops.is_torch(y) else np
+    mx, my = x.mean(-1), y.mean(-1)
+    dxm = x - mx[:, None]
+    beta = (dxm * (y - my[:, None])).sum(-1) / (dxm * dxm).sum(-1)
+    alpha = my - beta * mx
+    e = y - alpha[:, None] - beta[:, None] * x  # residual: the gap
+    de = e[:, 1:] - e[:, :-1]
+    m = de.shape[1]
+    cols = [e[:, lags:-1]] + [de[:, lags - i: m - i] for i in range(1, lags + 1)]
+    X = xp.stack(cols, -1)  # (pairs, rows, lags + 1)
+    target = de[:, lags:]
+    xtx = X.swapaxes(-1, -2) @ X
+    xty = X.swapaxes(-1, -2) @ target[..., None]
+    try:
+        inv = xp.linalg.inv(xtx)
+    except (np.linalg.LinAlgError, RuntimeError):  # a degenerate pair (a symbol listed twice) mustn't sink the batch
+        inv = xp.linalg.pinv(xtx)
+    coef = (inv @ xty)[..., 0]
+    resid = target - (X @ coef[..., None])[..., 0]
+    s2 = (resid * resid).sum(-1) / (X.shape[1] - X.shape[2])
+    with np.errstate(all="ignore"):  # degenerate pairs give NaN, handled below
+        stat = coef[:, 0] / xp.sqrt(s2 * inv[:, 0, 0])
+    return xp.where(xp.isfinite(stat), stat, xp.nan), beta
+
+
+def cointegration_many(logs: np.ndarray, pairs: np.ndarray, backend: str = "auto",
+                       budget: int = 2 ** 25) -> tuple[np.ndarray, np.ndarray, str]:
+    """Engle-Granger t values and hedge ratios for many pairs at once (#121).
+
+    ``logs`` holds log prices, one column per symbol (bars, symbols); ``pairs`` the (a, b) column indices,
+    shape (pairs, 2). ``backend`` as in :func:`tradebot.optimize.select_backend`: ``auto`` runs on a
+    CUDA/ROCm GPU when there is one, else vectorised NumPy on the CPU. Pairs go through in chunks of about
+    ``budget`` numbers so memory stays bounded. Returns (t values, betas, backend description); the t value
+    is NaN for a pair the test can't judge (identical legs, constant prices)."""
+    from tradebot.optimize.device import select_backend
+
+    logs = np.asarray(logs, dtype=np.float64)
+    pairs = np.asarray(pairs, dtype=np.int64).reshape(-1, 2)
+    n = logs.shape[0]
+    if n < 30:
+        raise ValueError("need at least 30 common candles")
+    lags = _lags(n)
+    if n - 1 - lags < 10:
+        raise ValueError("series too short for the test")
+    be = select_backend(backend)
+    stat, beta = np.empty(len(pairs)), np.empty(len(pairs))
+    chunk = max(1, budget // (n * (lags + 2)))
+    if be.device is not None:
+        torch = ops.torch
+        cols = torch.as_tensor(logs.T.copy(), dtype=torch.float64, device=be.device)  # (symbols, bars)
+    for lo in range(0, len(pairs), chunk):
+        p = pairs[lo: lo + chunk]
+        if be.device is None:
+            s, b = _coint_chunk(logs[:, p[:, 0]].T, logs[:, p[:, 1]].T, lags)
+        else:
+            idx = torch.as_tensor(p, device=be.device)
+            s, b = (t.cpu().numpy() for t in _coint_chunk(cols[idx[:, 0]], cols[idx[:, 1]], lags))
+        stat[lo: lo + chunk], beta[lo: lo + chunk] = s, b
+    return stat, beta, be.description
+
+
+def _level(stat: float) -> float:
+    return next((lv for lv in sorted(CRITICAL) if stat < CRITICAL[lv]), 1.0)
+
+
 def find_pairs(closes: dict[str, pd.Series], split: float = 0.6, min_correlation: float = 0.7,
                train_level: float = 0.05, test_level: float = 0.10, half_life_range: tuple[float, float] = (2, 60),
-               correction: str = "fdr", groups: dict[str, str] | None = None) -> Scan:
+               correction: str = "fdr", groups: dict[str, str] | None = None, backend: str = "auto") -> Scan:
     """Search ``closes`` (symbol -> close prices) for cointegrated pairs without fooling itself.
 
     The history is split in time. Pairs are picked on the first part only. Pre-filters keep the number of
@@ -282,7 +356,10 @@ def find_pairs(closes: dict[str, pd.Series], split: float = 0.6, min_correlation
     a cointegration test at ``train_level``, **corrected for the number of pairs tested** (``correction``,
     see :func:`significant`): without it, thousands of tests let some pass by chance, shown as
     ``expected_by_chance``. A pair counts as found only if it also holds up on the later part it wasn't
-    picked on: cointegrated there at ``test_level`` and with a half-life in ``half_life_range``."""
+    picked on: cointegrated there at ``test_level`` and with a half-life in ``half_life_range``.
+
+    The tests run batched (:func:`cointegration_many`): on a CUDA/ROCm GPU when ``backend`` allows one,
+    else vectorised on the CPU, which gives the same numbers."""
     if correction not in CORRECTIONS:
         raise ValueError(f"correction must be one of {', '.join(CORRECTIONS)}")
     frame = pd.concat(closes, axis=1, join="inner").dropna()
@@ -290,34 +367,32 @@ def find_pairs(closes: dict[str, pd.Series], split: float = 0.6, min_correlation
     if len(frame) < 120:
         raise ValueError("need at least 120 candles all symbols share")
     cut = int(len(frame) * split)
-    train, test = frame.iloc[:cut], frame.iloc[cut:]
-    rets = np.log(train).diff().dropna().corr()
     names = list(frame.columns)
-    skipped = 0
-    tested: list[tuple[str, str, float, Cointegration]] = []
-    for i, a in enumerate(names):
-        for b in names[i + 1:]:
-            same = groups is None or (groups.get(a) is not None and groups.get(a) == groups.get(b))
-            corr = float(rets.loc[a, b])
-            if not same or corr < min_correlation:
-                skipped += 1
-                continue
-            tested.append((a, b, corr, cointegration(train[a], train[b])))
-    keep = significant([t[3].p for t in tested], correction, train_level)
-    passed = 0
+    logs = np.log(frame.to_numpy(dtype=np.float64))
+    ltrain, ltest = logs[:cut], logs[cut:]
+    rets = np.corrcoef(np.diff(ltrain, axis=0), rowvar=False).reshape(len(names), len(names))
+    i, j = np.triu_indices(len(names), 1)  # every pair once, in the order a loop over names would visit them
+    ok = rets[i, j] >= min_correlation
+    if groups is not None:
+        label = np.array([groups.get(n) for n in names], dtype=object)
+        ok &= np.array([la is not None and la == lb for la, lb in zip(label[i], label[j])], dtype=bool)
+    i, j = i[ok], j[ok]
+    skipped = int((~ok).sum())
+    stat, beta, used = cointegration_many(ltrain, np.column_stack([i, j]), backend)
+    tested = [Cointegration(float(s), _level(float(s)), float(be)) for s, be in zip(stat, beta)]
+    keep = np.flatnonzero(significant([t.p for t in tested], correction, train_level))
+    te_stat, te_beta = (cointegration_many(ltest, np.column_stack([i[keep], j[keep]]), backend)[:2] if len(keep)
+                        else ([], []))
     found: list[Candidate] = []
-    for (a, b, corr, tr), ok in zip(tested, keep):
-        if not ok:
-            continue
-        passed += 1
-        te = cointegration(test[a], test[b])
-        spread_tr = np.log(train[a]) - tr.beta * np.log(train[b])
-        spread_te = (np.log(test[a]) - tr.beta * np.log(test[b])).to_numpy()
-        hl = half_life(spread_te)
+    for k, ts, tb in zip(keep, te_stat, te_beta):
+        a, b, tr = names[i[k]], names[j[k]], tested[k]
+        te = Cointegration(float(ts), _level(float(ts)), float(tb))
+        spread_tr = ltrain[:, i[k]] - tr.beta * ltrain[:, j[k]]
+        hl = half_life(ltest[:, i[k]] - tr.beta * ltest[:, j[k]])
         if te.level > test_level or hl is None or not half_life_range[0] <= hl <= half_life_range[1]:
             continue
-        std = float(spread_tr.std())
-        now = (np.log(frame[a].iloc[-1]) - tr.beta * np.log(frame[b].iloc[-1]) - spread_tr.mean()) / std
-        found.append(Candidate(a, b, corr, tr, te, tr.beta, hl, float(now)))
+        std = float(spread_tr.std(ddof=1))
+        now = (logs[-1, i[k]] - tr.beta * logs[-1, j[k]] - spread_tr.mean()) / std
+        found.append(Candidate(a, b, float(rets[i[k], j[k]]), tr, te, tr.beta, hl, float(now)))
     found.sort(key=lambda c: c.test.stat)
-    return Scan(len(tested), skipped, passed, len(tested) * 0.05, found)
+    return Scan(len(tested), skipped, len(keep), len(tested) * 0.05, found, used)
