@@ -246,6 +246,16 @@ Charts are rendered with plotext, so they work in fish, bash and zsh.
 remaining 30 % out-of-sample. Candidates with fewer than `--min-trades` round
 trips are rejected.
 
+**Slippage.** Fills at the close are optimistic, most of all on short timeframes and thin
+symbols. `--slippage 5` (basis points per side, 0.05%) charges a spread/slippage cost on every
+position change on top of the fee. It is 0 by default, so existing results do not change, and it
+is applied identically in `backtest`, `optimize` (GA/PSO, NumPy and torch), `evolve`, walk-forward
+and the baselines. `--slippage auto` uses a suggestion for the asset class (crypto 5, stocks 2,
+currencies 1 bp). A default goes into `config.toml` (`[backtest] slippage_bps = 3`, or per asset
+class `slippage_bps = { crypto = 5, stock = 2 }`); the Backtest lab and Evolve page have a
+"Slippage / side" field (initialised from the config). Multi-symbol searches use one value, taken
+from the first symbol's asset class for `auto`/the config table.
+
 **Baselines.** `backtest` and `optimize` (in- and out-of-sample) show the strategy
 next to two things it has to beat, on the same candles and with the same fee:
 - *buy & hold*: everything invested on the first candle and held.
@@ -701,6 +711,9 @@ holdings_csv = "~/finance/scalable.csv"   # columns: symbol,quantity,avg_cost
 
 [tools]
 sc = "/opt/scalable/sc"     # optional; default: found on PATH
+
+[backtest]
+slippage_bps = 0            # slippage per side in basis points; a number, or { crypto = 5, stock = 2 }
 ```
 
 The settings dialog writes `theme`, the `[tools]` paths and the broker keys to this file, so the app
@@ -803,7 +816,7 @@ src/tradebot/
 
 **One execution model.** An algorithm returns a target position per bar (1
 long, 0 flat, −1 short when allowed). The position decided at bar *t*'s close
-earns bar *t+1*'s return, and fees are charged on every position change. The
+earns bar *t+1*'s return, and fees (plus the optional slippage) are charged on every position change. The
 backtester, the optimizer and the live bot all use this model, so there is no
 look-ahead and live behaviour matches backtests.
 

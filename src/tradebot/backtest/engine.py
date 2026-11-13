@@ -6,7 +6,9 @@ Execution model (shared with the live bot): the algorithm's position for bar
 ``t`` is computed from candles up to and including ``t`` and filled at the
 close of ``t``; it earns the close-to-close return of bar ``t+1``. A
 proportional ``fee`` is charged on every change of position, so a full
-round trip costs ``2 * fee``. There is no look-ahead by construction.
+round trip costs ``2 * fee``. ``slippage`` (also a fraction per side, 0 by default) models the
+bid/ask spread and the worse fill price, and is charged the same way on top of the fee. There is no
+look-ahead by construction.
 
 :func:`simulate` and :func:`batch_fitness` work on NumPy or torch arrays and
 accept a population axis, which the optimizer uses to score thousands of
@@ -25,13 +27,22 @@ from tradebot.backtest import metrics as m
 from tradebot.core import ops
 
 
-def simulate(close, positions, fee: float = 0.001):
-    """Per-bar strategy returns, shape ``broadcast(positions, close)``."""
+def bps(value: float) -> float:
+    """Basis points as a fraction (``5`` -> ``0.0005``)."""
+    return value / 10_000.0
+
+
+def simulate(close, positions, fee: float = 0.001, slippage: float = 0.0):
+    """Per-bar strategy returns, shape ``broadcast(positions, close)``.
+
+    ``fee`` and ``slippage`` are fractions per side; both are charged on the turnover, so only their sum
+    matters (``slippage`` may also be an array broadcastable against ``positions``, e.g. a per-bar cost).
+    """
     positions = ops.nan_to_num(positions)
     asset_ret = ops.nan_to_num(close / ops.shift(close, 1) - 1)
     held = ops.shift(positions, 1, fill=0.0)
     turnover = ops.abs_(positions - held)
-    return held * asset_ret - fee * turnover
+    return held * asset_ret - (fee + slippage) * turnover
 
 
 def batch_fitness(returns, periods_per_year: float, objective: str = "sharpe"):
@@ -73,12 +84,13 @@ def backtest(
     fee: float = 0.001,
     initial_capital: float = 10_000.0,
     periods_per_year: float | None = None,
+    slippage: float = 0.0,
 ) -> BacktestResult:
     """Run ``algorithm`` over the OHLC frame ``df`` and compute performance metrics."""
     if len(df) < 2:
         raise ValueError("need at least two candles to backtest")
     return from_positions(df, algorithm.run(df), algorithm.name, dict(algorithm.values), fee, initial_capital,
-                          periods_per_year)
+                          periods_per_year, slippage)
 
 
 def from_positions(
@@ -89,10 +101,11 @@ def from_positions(
     fee: float = 0.001,
     initial_capital: float = 10_000.0,
     periods_per_year: float | None = None,
+    slippage: float = 0.0,
 ) -> BacktestResult:
     """Backtest a given series of target positions (one per candle of ``df``)."""
     close = df["close"].to_numpy(dtype=float)
-    returns = pd.Series(simulate(close, positions.to_numpy(), fee), index=df.index, name="returns")
+    returns = pd.Series(simulate(close, positions.to_numpy(), fee, slippage), index=df.index, name="returns")
     equity = initial_capital * (1 + returns).cumprod()
     ppy = periods_per_year or m.infer_periods_per_year(df.index)
     trades = m.extract_trades(positions, returns)
