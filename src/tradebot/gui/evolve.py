@@ -98,6 +98,7 @@ class EvolveView(QWidget):
     status = pyqtSignal(str)
     show_on_chart = pyqtSignal(str, object)
     saved = pyqtSignal(str)  #: an algorithm saved as a plugin (and registered), by name
+    auto_step = pyqtSignal(int, int, str)  # from the worker thread, delivered queued
     generation = pyqtSignal(int, float)  # emitted from the worker thread, delivered queued
 
     def __init__(self, engine, themes: ThemeManager, watchlist: list[str], symbol_search: SymbolSearch | None = None,
@@ -162,6 +163,22 @@ class EvolveView(QWidget):
         self.seed = self._spin(0, 2**31 - 1, 0)
         self.seed.setSpecialValueText("random")
 
+        self._extra: dict = {}  # preset-only Evolver settings without a field (tournament, hall of fame, ...)
+        self.good_btn = QPushButton("Good")
+        self.good_btn.clicked.connect(lambda: self.use_best_result("good"))
+        self.good_btn.setToolTip(tooltip(explain("good_preset")))
+        self.best_btn = QPushButton("Best result")
+        self.best_btn.clicked.connect(lambda: self.use_best_result("best"))
+        self.auto_good_btn = QPushButton("Auto: good")
+        self.auto_good_btn.clicked.connect(lambda: self.auto_configure("good"))
+        self.auto_btn = QPushButton("Auto: best")
+        self.auto_btn.clicked.connect(lambda: self.auto_configure("best"))
+        self.auto_good_btn.setToolTip(tooltip(explain("auto_good")))
+        self.auto_btn.setToolTip(tooltip(explain("auto_configure")))
+        self.fast_btn = QPushButton("Fast (defaults)")
+        self.fast_btn.clicked.connect(self.use_fast)
+        self.best_btn.setToolTip(tooltip(explain("best_result")))
+        self.fast_btn.setToolTip(tooltip(explain("fast_preset")))
         self.run_btn = QPushButton("Evolve", objectName="Primary")
         self.run_btn.clicked.connect(self.run)
         self.stop_btn = QPushButton("Stop", enabled=False)
@@ -204,6 +221,12 @@ class EvolveView(QWidget):
             head = QLabel(title)
             head.setToolTip(tooltip(explain(term)))
             box = card(head)
+            if term == "evolve":
+                for buttons in ((self.fast_btn, self.good_btn, self.best_btn), (self.auto_good_btn, self.auto_btn)):
+                    presets = QHBoxLayout()
+                    for b in buttons:
+                        presets.addWidget(b)
+                    box.layout().addLayout(presets)
             box.layout().addLayout(body)
             left.addWidget(box)
         ind_title = QLabel("Indicators")
@@ -293,6 +316,7 @@ class EvolveView(QWidget):
         lay.setContentsMargins(16, 16, 16, 16)
         lay.addWidget(self.columns)
         self.generation.connect(self._progress)
+        self.auto_step.connect(self._auto_step)
         self._tips = LongPressTooltips(self)
         themes.changed.connect(self._style)
         self._style(themes.current)
@@ -334,6 +358,105 @@ class EvolveView(QWidget):
             if box.value() == a:  # only values still at the other mode's default
                 box.setValue(b)
 
+    def _apply(self, values: dict):
+        """Fill the form from Evolver settings (the fields stay editable)."""
+        boxes = {"population": self.population, "generations": self.generations, "max_depth": self.max_depth,
+                 "max_size": self.max_size, "islands": self.islands, "segments": self.segments,
+                 "min_trades": self.min_trades, "permutations": self.permutations, "folds": self.folds}
+        for key, box in boxes.items():
+            box.setValue(int(values[key]))
+        self.validation.setValue(round(values["validation"] * 100))
+        self.test.setValue(round(values["test"] * 100))
+        self.parsimony.setValue(values["parsimony"])
+        self.aggregate.setCurrentText(values["aggregate"])
+        self.state.setChecked(values["state"])
+        self._extra = {k: values[k] for k in ("tournament", "crossover", "mutation", "elite", "hall_of_fame")
+                       if k in values}
+
+    def use_best_result(self, level: str = "best"):
+        """Every setting for the best out-of-sample result (#101), scaled to the data. "good" keeps the run time
+        somewhat reasonable, "best" ignores it."""
+        from tradebot.evolve import best_result_settings
+
+        n = len(self._symbol_list()) or 1
+        self._apply(best_result_settings(self.bars.value(), n, from_scratch=self.from_scratch.isChecked(),
+                                         level=level))
+        self.status.emit(f"{level} settings filled in: every field can still be changed")
+
+    def auto_configure(self, level: str = "best"):
+        """Let a search pick the settings for this data (#101): runs in the background, fills the form, and
+        reports every candidate. The newest test part is kept out of it; press Evolve afterwards."""
+        from tradebot.evolve import auto_configure
+
+        picked = self.indicators.selected()
+        scratch = self.from_scratch.isChecked()
+        fixed = dict(fee=self.fee.value(), align=self.align.isChecked(), state=self.state.isChecked(),
+                     dca_amount=self.dca_amount.value() or None)
+        if not scratch and len(picked) != len(self.indicators.boxes):
+            fixed["indicators"] = picked
+        objective, seed = self.objective.currentText(), self.seed.value() or None
+        self._stop = False
+        self._phase = {"name": "auto-configuring", "offset": 0, "runs": 0}
+        self.progress.setRange(0, 0)
+        self.progress.show()
+        for b in self._preset_buttons():
+            b.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.status.emit("auto-configuring …")
+
+        def trial(done, total, label):  # worker thread
+            if self._stop:
+                raise Stopped()
+            self.auto_step.emit(done, total, label)
+
+        def generation(*_):
+            if self._stop:
+                raise Stopped()
+
+        def work():
+            frames = self._data()
+            data = frames if len(frames) > 1 else next(iter(frames.values()))
+            return auto_configure(data, from_scratch=scratch, objective=objective, level=level, seed=seed,
+                                  on_trial=trial,
+                                  progress=generation, **fixed)
+
+        run_async(work, self._auto_done, self._auto_fail)
+
+    def _preset_buttons(self):
+        return [self.run_btn, self.fast_btn, self.good_btn, self.best_btn, self.auto_good_btn, self.auto_btn]
+
+    def _auto_step(self, done: int, total: int, label: str):
+        self.progress.setRange(0, total)
+        self.progress.setValue(done)
+        self.status.emit(f"auto-configuring: {label}, candidate run {done + 1} of {total}")
+
+    def _auto_finish(self):
+        self._finish()
+        for b in self._preset_buttons()[1:]:
+            b.setEnabled(True)
+
+    def _auto_fail(self, err):
+        self._auto_finish()
+        self.status.emit("auto-configure stopped" if str(err).startswith("Stopped")
+                         else f"auto-configure failed: {err}")
+
+    def _auto_done(self, cfg):
+        self._auto_finish()
+        self._apply(cfg.settings)
+        self.rules.setText("Settings chosen. Press Evolve to run with them.")
+        self.info.setText("\n".join(cfg.report()))
+        self.status.emit("auto-configured: the fields are filled in and can still be changed")
+
+    def use_fast(self):
+        """Today's quick defaults (those of the current mode)."""
+        scratch = self.from_scratch.isChecked()
+        limits = SCRATCH_LIMITS if scratch else LIMITS
+        self._apply(dict(population=300, generations=40, max_depth=limits[0], max_size=limits[1],
+                         islands=SCRATCH_ISLANDS if scratch else 1, segments=3, min_trades=4, parsimony=0.002,
+                         aggregate="mean", state=True, validation=0.2, test=0.2,
+                         permutations=SCRATCH_GUARDS["permutations"] if scratch else 0,
+                         folds=SCRATCH_GUARDS["folds"] if scratch else 0))
+
     def _fill_lists_menu(self):
         self.lists_menu.clear()
         lists = self.watchlists_fn()
@@ -374,7 +497,7 @@ class EvolveView(QWidget):
         """The Evolver settings from the form."""
         picked = self.indicators.selected()
         scratch = self.from_scratch.isChecked()
-        return dict(from_scratch=scratch, population=self.population.value(), generations=self.generations.value(),
+        return dict(**self._extra, from_scratch=scratch, population=self.population.value(), generations=self.generations.value(),
                     max_depth=self.max_depth.value(), max_size=self.max_size.value(), islands=self.islands.value(),
                     objective=self.objective.currentText(), aggregate=self.aggregate.currentText(),
                     align=self.align.isChecked(), validation=self.validation.value() / 100, test=self.test.value() / 100,

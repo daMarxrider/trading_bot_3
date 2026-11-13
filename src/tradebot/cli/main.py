@@ -598,6 +598,7 @@ def _print_walk_forward(wf, algorithm, symbol: str) -> None:
 
 @app.command()
 def evolve(
+    ctx: typer.Context,
     symbol: Annotated[Optional[str], typer.Argument(
         help="e.g. AAPL, or several separated by commas (can be left out with --watchlist)",
         autocompletion=complete.symbols)] = None,
@@ -647,6 +648,19 @@ def evolve(
         "(default 0, with --from-scratch 3)")] = None,
     fee: float = 0.001,
     dca_amount: DcaAmount = None,
+    best_result: Annotated[bool, typer.Option(
+        "--best-result", help="Set every setting for the best out-of-sample result, ignoring runtime (much slower "
+        "than the defaults): bigger search, shuffled-price runs, walk-forward folds, limits scaled to the data. "
+        "Flags you give yourself still win")] = False,
+    effort: Annotated[str, typer.Option(
+        help="With --best-result or --auto-settings: good (somewhat reasonable run time) | best (ignores the run "
+        "time: more search, more shuffled-price runs and folds, and with --auto-settings every candidate setting "
+        "gets them too)", autocompletion=complete.choices(
+            ("good", "reasonable run time"), ("best", "ignores run time")))] = "best",
+    auto_settings: Annotated[bool, typer.Option(
+        "--auto-settings", help="Let a search pick the settings for this data first (successive halving over many "
+        "settings, ranked by validation score minus the overfitting gap; the newest --test part is kept out of it "
+        "and used once by the final run). Takes much longer than --best-result. Flags you give yourself still win")] = False,
     seed: Annotated[Optional[int], typer.Option(help="Random seed (printed when left out, to repeat a run)")] = None,
     top: Annotated[int, typer.Option(help="Show this many of the best programs with their validation score")] = 5,
     save: Annotated[Optional[str], typer.Option(
@@ -687,7 +701,49 @@ def evolve(
             raise typer.BadParameter(f"unknown indicator {n!r}", param_hint="--indicators")
     symbols = _symbols(symbol, watchlist)
     df = load_data(symbols[0], tf, start, end, bars) if len(symbols) == 1 else _load_many(symbols, tf, start, end, bars)
-    kwargs = dict(population=population, generations=generations, max_depth=max_depth, max_size=max_size,
+    if best_result or auto_settings:
+        from tradebot.evolve import auto_configure, best_result_settings
+
+        if effort not in ("good", "best"):
+            raise typer.BadParameter("good or best", param_hint="--effort")
+        candles = min(len(f) for f in df.values()) if isinstance(df, dict) else len(df)
+        if auto_settings:
+            fixed = dict(fee=fee, align=align, dca_amount=dca_amount, state=state)
+            if names:
+                fixed["indicators"] = names
+            from rich.progress import Progress as _Progress
+
+            with _Progress(console=console) as bar:
+                task = bar.add_task("auto-configuring", total=None)
+                try:
+                    auto = auto_configure(df, from_scratch=from_scratch, objective=objective, level=effort,
+                                          seed=seed, **fixed,
+                                          on_trial=lambda i, n, label: bar.update(
+                                              task, total=n, completed=i, description=f"auto-configuring: {label}"))
+                except ValueError as e:
+                    raise typer.BadParameter(str(e)) from None
+            for line in auto.report():
+                console.print(f"[dim]{line}[/]")
+            preset = auto.settings
+        else:
+            preset = best_result_settings(candles, len(symbols), from_scratch=from_scratch, level=effort)
+        given = {n for n in ctx.params if getattr(ctx.get_parameter_source(n), "name", "") == "COMMANDLINE"}
+        population, generations, max_depth, max_size, islands, validation, test, segments, min_trades, parsimony, \
+            aggregate, permutations, folds = (
+                v if n in given else preset[n] for n, v in (
+                    ("population", population), ("generations", generations), ("max_depth", max_depth),
+                    ("max_size", max_size), ("islands", islands), ("validation", validation), ("test", test),
+                    ("segments", segments), ("min_trades", min_trades), ("parsimony", parsimony),
+                    ("aggregate", aggregate), ("permutations", permutations), ("folds", folds)))
+        extra = {k: preset[k] for k in ("tournament", "crossover", "mutation", "elite", "hall_of_fame")}
+        if "state" not in given:
+            state = preset["state"]
+        console.print(f"[dim]{'auto-configured' if auto_settings else 'best result'} ({effort}): population {population}, {generations} generations, depth {max_depth}, "
+                      f"size {max_size}, {permutations} shuffled runs, {folds} folds, {segments} segments, "
+                      f"min trades {min_trades}; this takes a long time[/]")
+    else:
+        extra = {}
+    kwargs = dict(**extra, population=population, generations=generations, max_depth=max_depth, max_size=max_size,
                   objective=objective, aggregate=aggregate, align=align, validation=validation, test=test,
                   segments=segments, min_trades=min_trades, parsimony=parsimony, state=state, indicators=names,
                   fee=fee, dca_amount=dca_amount, seed=seed, from_scratch=from_scratch, islands=islands)
@@ -1059,6 +1115,9 @@ def scan(
     where: Annotated[list[str], typer.Option("--where", help='e.g. --where "fast > slow" --where "rsi < 30"')] = [],
     alert: Annotated[list[str], typer.Option("--alert", help="Alert that must be on; !NAME: off. e.g. --alert cross_up")] = [],
     watchlist: Annotated[Optional[str], typer.Option("--watchlist", "-w", help=WATCHLIST_HELP)] = None,
+    index: Annotated[Optional[str], typer.Option("--index", help="Scan a market index instead: sp500, nasdaq100, "
+                                                 "dow30, dax40, ftse100, crypto_top100 (weekly cached list)",
+                                                 autocompletion=complete.indices)] = None,
 ):
     """Scan symbols with one indicator, filtered on its values and alerts (the Scanner tab's engine)."""
     from tradebot import scanner
@@ -1072,6 +1131,10 @@ def scan(
             raise typer.BadParameter(f"{item!r}: use name=number", param_hint="--param") from None
     filters = [parse_where(w) for w in where] + [
         {"alert": a.lstrip("!"), "state": not a.startswith("!")} for a in alert]
+    if index:
+        if symbols or watchlist:
+            raise typer.BadParameter("use either symbols, --watchlist or --index", param_hint="--index")
+        symbols = _index_symbols(index)
     symbols = symbols or _watchlist(watchlist)
     try:
         with console.status("scanning ..."):
@@ -1090,6 +1153,16 @@ def scan(
 
 
 WATCHLIST_HELP = "Without symbols: only this watchlist's (default: all watchlists)"
+
+
+def _index_symbols(key: str) -> list[str]:
+    from tradebot import universes
+    from tradebot.data.cache import DiskCache
+
+    if key not in universes.INDICES:
+        raise typer.BadParameter(f"unknown index {key!r}; one of: {', '.join(universes.INDICES)}", param_hint="--index")
+    cache = DiskCache.from_config()
+    return universes.index_symbols(key, cache.symbols_dir if cache else None)
 
 
 def _watchlist(name: str | None) -> list[str]:

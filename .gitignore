@@ -7,3 +7,5 @@ __pycache__/
 dist/
 build/
 .tradebot/
+benchmarks/evolve/data/
+benchmarks/evolve/*.log

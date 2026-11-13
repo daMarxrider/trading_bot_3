@@ -38,7 +38,8 @@ uv run tradebot gui
 ```
 
 Extras: `gui` (PyQt6, pyqtgraph), `gpu` (PyTorch), `traderepublic` (pytr).
-The core (CLI, backtests, CPU optimizer) needs none of them.
+The core (CLI, backtests, CPU optimizer) needs none of them. For the GPU setup per platform see
+[GPU acceleration](#gpu-acceleration).
 
 **Third-party tools are not included.** tradebot works with some external tools but never ships them,
 neither in the package nor in the binaries. To use one, install it yourself; its own licence and terms
@@ -53,7 +54,8 @@ apply:
 
 Every release on the [Releases page](https://github.com/daMarxrider/trading_bot_3/releases)
 has standalone builds for Linux, Windows and macOS that need no Python. One binary is both the CLI and the
-desktop app (`tradebot gui`). The builds are CPU-only (no `gpu` extra) and
+desktop app (`tradebot gui`). The builds are CPU-only (no `gpu` extra; for the GPU optimizer see
+[GPU acceleration](#gpu-acceleration)) and
 **unsigned**. Each archive has a `.sha256` checksum next to it, and contains `LICENSE` plus
 `THIRD_PARTY_NOTICES.txt`, the licences of all bundled libraries.
 
@@ -114,17 +116,61 @@ the bundled libraries. Entry-point plugins from installed packages are not
 found by the binary, because it cannot see your Python's packages; use the
 plugin directory, or install tradebot from source.
 
-**GPU backends.** The optimizer uses PyTorch, which drives NVIDIA (CUDA) and AMD
-(ROCm) GPUs through the same API, so there is no vendor-specific code. For AMD,
-install a ROCm build of torch, for example
-`pip install torch --index-url https://download.pytorch.org/whl/rocm6.2`.
-The `gpu` extra installs the default (CUDA) build on Linux; with it an AMD card goes unnoticed and the optimizer
-quietly falls back to NumPy, so reinstall torch from the ROCm index afterwards. `--backend cuda` / `--backend rocm`
-(alias `amd`) require that vendor and fail with an error instead of falling back; `--backend gpu` takes either.
-Algorithms marked `period_batched` (`macd_cross`, `sma_cross`) evaluate a whole population in one GPU call even when
-their window lengths differ; for the other integer-only algorithms `auto` picks NumPy, which is faster for them.
-Without a GPU it falls back to a multi-threaded NumPy pool. Run
-`tradebot device` to see which backend is selected.
+Without a GPU the optimizer falls back to a multi-threaded NumPy pool. Run `tradebot device` to see which
+backend is selected; for GPU setup see [GPU acceleration](#gpu-acceleration).
+
+## GPU acceleration
+
+The release binaries are CPU-only: they exclude PyTorch and the optimizer falls back to a multi-threaded NumPy
+pool. PyTorch with CUDA/ROCm is several GB and depends on the GPU vendor, driver and platform, so the binaries
+stay small and run everywhere, and the GPU version runs from source.
+
+**When it is worth it.** Large populations (thousands of parameter sets) and long histories. For small runs the
+NumPy pool is as fast or faster. Algorithms marked `period_batched` (`macd_cross`, `sma_cross`) evaluate a whole
+population in one GPU call even when their window lengths differ; for the other integer-only algorithms `auto`
+picks NumPy, which is faster for them.
+
+**What you need.** Python >= 3.11, [`uv`](https://docs.astral.sh/uv/) (or pip), git, disk space for torch, and a
+supported GPU: NVIDIA with a recent driver (CUDA), or AMD with ROCm (Linux only, not verified yet, see #1).
+macOS has neither: Apple GPUs (MPS) are not used (the backend order is CUDA, ROCm, CPU), so use the binary there.
+
+**Steps.**
+
+```sh
+git clone https://github.com/daMarxrider/trading_bot_3 && cd trading_bot_3
+```
+
+- **Linux + NVIDIA:** `uv sync --extra gui --extra gpu` (or `pip install -e '.[gui,gpu]'`). The default PyPI torch
+  wheel for Linux includes CUDA.
+- **Windows + NVIDIA:** the plain `gpu` extra gets a CPU-only torch from PyPI. After the sync, install the CUDA
+  build from the PyTorch index, for example
+  `uv pip install torch --index-url https://download.pytorch.org/whl/cu124` (check pytorch.org for the current
+  CUDA tag). Run later commands with `uv run --no-sync` so uv does not swap it back. Not tested.
+- **Linux + AMD:** the `gpu` extra installs the CUDA build, under which an AMD card goes unnoticed. After the sync,
+  install a ROCm build:
+  `uv pip install torch --index-url https://download.pytorch.org/whl/rocm6.2`, then use `uv run --no-sync`.
+  Not tested.
+
+**Verify.** `uv run tradebot device` must print `CUDA: <GPU name>` or `ROCM: ...`, not
+`NumPy ... (no CUDA/ROCm GPU found)`. The backtest lab shows the same under *Compute backend*. Example on Linux
+with an NVIDIA card:
+
+```
+$ uv run tradebot device
+CUDA: NVIDIA GeForce RTX 3050 Ti Laptop GPU
+```
+
+**Run it.** `uv run tradebot gui` or `uv run tradebot optimize ...`. Optionally `uv tool install '.[gui,gpu]'` puts
+`tradebot` on `PATH` like the binary. Settings, cache and plugins are shared with the binary (same config dir).
+`--backend cuda` / `--backend rocm` (alias `amd`) require that vendor and fail with an error instead of falling
+back; `--backend gpu` takes either; `--backend numpy` forces the CPU pool.
+
+**Troubleshooting.**
+
+- `tradebot device` reports no GPU: check for a CPU-only torch wheel
+  (`uv run python -c "import torch; print(torch.version.cuda, torch.version.hip)"` prints `None None` for one), the
+  driver version (`nvidia-smi`), and `CUDA_VISIBLE_DEVICES`.
+- Out of GPU memory: lower the population.
 
 ## CLI
 

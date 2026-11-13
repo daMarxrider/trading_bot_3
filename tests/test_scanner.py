@@ -177,3 +177,23 @@ def test_cli_scan(monkeypatch):
     assert "UP" in res.output and "DOWN" not in res.output.split("scanned")[0] and "scanned 2 · 1 match" in res.output
     bad = CliRunner().invoke(app, ["scan", "UP", "--where", "nonsense"])
     assert bad.exit_code != 0
+
+
+def test_cli_scan_index(monkeypatch):
+    from typer.testing import CliRunner
+
+    from tradebot import universes
+    from tradebot.cli import complete
+    from tradebot.cli.main import app
+
+    monkeypatch.setattr(scanner, "default_fetch", fetch)
+    asked = []
+    monkeypatch.setattr(universes, "index_symbols", lambda key, cache=None: asked.append(key) or ["UP", "DOWN"])
+    res = CliRunner().invoke(app, ["scan", "--index", "sp500", "-p", "fast=3", "-p", "slow=10", "--where", "fast > slow"])
+    assert res.exit_code == 0, res.output
+    assert asked == ["sp500"] and "scanned 2 · 1 match" in res.output
+    bad = CliRunner().invoke(app, ["scan", "--index", "nope"])
+    assert bad.exit_code != 0 and "unknown index" in bad.output and "sp500" in bad.output
+    assert CliRunner().invoke(app, ["scan", "UP", "--index", "sp500"]).exit_code != 0
+    assert {k for k, _ in complete.indices("")} == set(universes.INDICES)
+    assert [k for k, _ in complete.indices("na")] == ["nasdaq100"]
