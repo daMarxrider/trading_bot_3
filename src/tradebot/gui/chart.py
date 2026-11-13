@@ -13,8 +13,9 @@ import numpy as np
 import pandas as pd
 import pyqtgraph as pg
 from PyQt6.QtCore import QEvent, QObject, QPointF, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QPainter
+from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import (
+    QColorDialog,
     QComboBox,
     QHBoxLayout,
     QInputDialog,
@@ -41,6 +42,7 @@ from tradebot.gui.common import (
     shortfall,
     toolbar_group,
 )
+from tradebot.gui.drawings import FibItem, MeasureItem, NoteItem, color_of, set_color, to_spec
 from tradebot.gui.news import NewsPanel
 from tradebot.gui.params import ParamDialog
 from tradebot.gui.sidebar import ChartSidebar
@@ -521,12 +523,17 @@ class ChartView(QWidget):
         tool_group = []
         for key, label, tip in (("trend", "╱ Trend", "Trendline: click two points"),
                                 ("hline", "― Level", "Support/resistance: click a price"),
-                                ("rect", "▭ Zone", "Rectangle: click two corners")):
+                                ("rect", "▭ Zone", "Rectangle: click two corners"),
+                                ("fib", "𝔽 Fib", "Fibonacci retracement/extension: click the 0 and the 1 point"),
+                                ("vline", "│ Time", "Vertical line: click a point in time"),
+                                ("text", "𝐓 Note", "Text note: click where it goes, then type it"),
+                                ("measure", "↕ Measure", "Price range measure: click two points to read the change "
+                                                         "in price, percent and time")):
             btn = QToolButton(text=label, checkable=True, toolTip=tip)
             btn.toggled.connect(lambda on, k=key: self._tool_toggled(k, on))
             self.tools[key] = btn
             tool_group.append(btn)
-        clear = QToolButton(text="✕ Clear", toolTip="Remove all drawings")
+        clear = QToolButton(text="✕ Clear", toolTip="Remove all drawings of this symbol (right-click a single drawing to recolour, edit or delete it)")
         clear.clicked.connect(self.clear_drawings)
         self.loadouts = LoadoutStore(settings)
         self.loadout_btn = QToolButton(text="Loadouts ▾", toolTip="Saved sets of indicators and a signal")
@@ -666,6 +673,8 @@ class ChartView(QWidget):
         if refresh and (symbol != self._loaded_symbol or self.df is None):
             return  # the user moved on to another symbol meanwhile
         self.df = df
+        if symbol != self._loaded_symbol:
+            self._switch_drawings(symbol)
         self._loaded_symbol = symbol
         note, self._pending_note = note + self._pending_note, ""
         tf = self.tf.currentText()
@@ -1133,6 +1142,16 @@ class ChartView(QWidget):
         if tool == "hline":
             self._add_level(self.price_at(pt.y()))
             return
+        if tool == "vline":
+            self._add_vline(pt.x())
+            return
+        if tool == "text":
+            text = self._ask_text("")
+            if text:
+                self._add_note(pt.x(), self.price_at(pt.y()), text)
+            else:
+                self.tools["text"].setChecked(False)
+            return
         if self._pending_point is None:
             self._pending_point = pt
             self.status.emit("tap/click the second point")
@@ -1141,18 +1160,39 @@ class ChartView(QWidget):
         pen = pg.mkPen(qcolor(self.themes.current.accent), width=2)
         if tool == "trend":
             item = pg.LineSegmentROI([[p1.x(), p1.y()], [pt.x(), pt.y()]], pen=pen)
+        elif tool in ("fib", "measure"):
+            item = self._two_point(tool, [p1.x(), p1.y()], [pt.x(), pt.y()], self._accent_hex())
         else:
             item = pg.RectROI([min(p1.x(), pt.x()), min(p1.y(), pt.y())], [abs(pt.x() - p1.x()), abs(pt.y() - p1.y())],
                               pen=pen)
         self._add_drawing(item, tool)
 
-    def _add_level(self, price: float):
-        t = self.themes.current
-        item = pg.InfiniteLine(self._ty(price), angle=0, movable=True, pen=pg.mkPen(qcolor(t.accent), width=2),
-                               label="{value:.6g}", labelOpts={"position": 0.97, "color": t.accent})
+    def _accent_hex(self) -> str:
+        return qcolor(self.themes.current.accent).name()
+
+    def _add_level(self, price: float, color: str | None = None, save: bool = True):
+        color = color or self._accent_hex()
+        item = pg.InfiniteLine(self._ty(price), angle=0, movable=True, pen=pg.mkPen(qcolor(color), width=2),
+                               label="{value:.6g}", labelOpts={"position": 0.97, "color": qcolor(color)})
         item.label.format = _PriceFormat(self)
         item.label.valueChanged()
-        self._add_drawing(item, "hline")
+        self._add_drawing(item, "hline", save)
+
+    def _add_vline(self, x: float, color: str | None = None, save: bool = True):
+        item = pg.InfiniteLine(x, angle=90, movable=True, pen=pg.mkPen(qcolor(color or self._accent_hex()), width=2))
+        self._add_drawing(item, "vline", save)
+
+    def _add_note(self, x: float, price: float, text: str, color: str | None = None, save: bool = True):
+        item = NoteItem(x, self._ty(price), text, qcolor(color or self._accent_hex()))
+        self._add_drawing(item, "text", save)
+
+    def _two_point(self, kind, p1, p2, color):
+        cls = FibItem if kind == "fib" else MeasureItem
+        return cls(p1, p2, self._ty, self.price_at, qcolor(color))
+
+    def _ask_text(self, current: str) -> str:
+        text, ok = QInputDialog.getText(self, "Note", "Text:", text=current)
+        return text.strip() if ok else ""
 
     def reset_view(self):
         self._adjusting = True
@@ -1245,8 +1285,11 @@ class ChartView(QWidget):
             return np.log10(max(y, 1e-12)) if on else 10.0 ** y
 
         for item in self.drawings:
-            if isinstance(item, pg.InfiniteLine):
-                item.setValue(to_view(item.value()))
+            if isinstance(item, NoteItem):
+                item.setPos(item.pos().x(), to_view(item.pos().y()))
+            elif isinstance(item, pg.InfiniteLine):
+                if item.angle % 180 == 0:  # a vertical line is a time, not a price
+                    item.setValue(to_view(item.value()))
             elif isinstance(item, pg.RectROI):
                 (x0, y0), (w, h) = item.pos(), item.size()
                 y0, y1 = to_view(y0), to_view(y0 + h)
@@ -1287,6 +1330,14 @@ class ChartView(QWidget):
         for key, btn in self.tools.items():
             if key != "hline":
                 menu.addAction(f"Draw {btn.text().split(' ', 1)[-1].lower()}", lambda k=key: self.tools[k].setChecked(True))
+        hit = self.drawing_at(scene_pos)
+        if hit is not None:
+            menu.addSeparator()
+            menu.addAction("Change colour …", lambda: self._pick_color(hit))
+            if isinstance(hit, NoteItem):
+                menu.addAction("Edit text …", lambda: self._edit_note(hit))
+            menu.addAction("Delete drawing", lambda: self.delete_drawing(hit))
+            menu.addSeparator()
         if self.drawings:
             menu.addAction("Clear drawings", self.clear_drawings)
         if self._loaded_symbol:
@@ -1300,11 +1351,104 @@ class ChartView(QWidget):
         menu.popup(global_pos)
         self._menu = menu  # keep a reference while open (and for tests)
 
-    def _add_drawing(self, item, tool):
+    def _add_drawing(self, item, tool, save: bool = True):
+        item._kind = tool
         self.price.addItem(item)
         self.drawings.append(item)
         self.tools[tool].setChecked(False)
-        self.status.emit(f"{tool} added — drag to adjust, ✕ Clear to remove")
+        if isinstance(item, NoteItem):
+            item.on_moved = self._save_drawings
+        elif isinstance(item, pg.InfiniteLine):
+            item.sigPositionChangeFinished.connect(self._save_drawings)
+        else:
+            item.sigRegionChangeFinished.connect(self._save_drawings)
+        if save:
+            self._save_drawings()
+            self.status.emit(f"{tool} added — drag to adjust, right-click to recolour or delete")
+
+    # -- drawings stored per symbol (#160) --------------------------------------------------------
+    DRAWINGS_KEY = "chart.drawings"
+
+    def drawing_at(self, scene_pos):
+        """The topmost drawing under a scene position, or None."""
+        for item in reversed(self.drawings):
+            if item.shape().contains(item.mapFromScene(scene_pos)):
+                return item
+        return None
+
+    def drawing_specs(self) -> list[dict]:
+        return [s for s in (to_spec(i, getattr(i, "_kind", ""), self.price_at) for i in self.drawings) if s]
+
+    def _save_drawings(self, *_):
+        """Remember the drawings of the shown symbol; they come back with it, on any timeframe."""
+        if self.settings is None or not self._loaded_symbol:
+            return
+        stored = dict(self.settings.get(self.DRAWINGS_KEY, {}))
+        specs = self.drawing_specs()
+        if specs:
+            stored[self._loaded_symbol] = specs
+        else:
+            stored.pop(self._loaded_symbol, None)
+        self.settings.set(self.DRAWINGS_KEY, stored)
+
+    def _switch_drawings(self, symbol: str):
+        """Another symbol is shown: swap in its drawings (the old ones were saved as they changed)."""
+        if self._loaded_symbol:
+            self._remove_drawings()
+        for spec in (self.settings.get(self.DRAWINGS_KEY, {}).get(symbol, []) if self.settings else []):
+            try:
+                self._restore(spec)
+            except (KeyError, TypeError, ValueError, IndexError):
+                continue  # a broken entry never stops the others
+
+    def _restore(self, spec: dict):
+        kind, color = spec["kind"], spec.get("color")
+        if kind == "hline":
+            self._add_level(spec["price"], color, save=False)
+        elif kind == "vline":
+            self._add_vline(spec["x"], color, save=False)
+        elif kind == "text":
+            self._add_note(spec["x"], spec["price"], spec["text"], color, save=False)
+        elif kind == "rect":
+            y0, y1 = self._ty(spec["p0"]), self._ty(spec["p1"])
+            item = pg.RectROI([spec["x0"], min(y0, y1)], [spec["x1"] - spec["x0"], abs(y1 - y0)],
+                              pen=pg.mkPen(qcolor(color or self._accent_hex()), width=2))
+            self._add_drawing(item, "rect", save=False)
+        elif kind in ("trend", "fib", "measure"):
+            (x1, p1), (x2, p2) = spec["points"]
+            pts = [[x1, float(self._ty(p1))], [x2, float(self._ty(p2))]]
+            color = color or self._accent_hex()
+            if kind == "trend":
+                item = pg.LineSegmentROI(pts, pen=pg.mkPen(qcolor(color), width=2))
+            else:
+                item = self._two_point(kind, *pts, color)
+            self._add_drawing(item, kind, save=False)
+
+    def set_drawing_color(self, item, color: str):
+        set_color(item, color)
+        self._save_drawings()
+
+    def _pick_color(self, item):
+        color = QColorDialog.getColor(QColor(color_of(item)), self, "Drawing colour")
+        if color.isValid():
+            self.set_drawing_color(item, color.name())
+
+    def _edit_note(self, item):
+        text = self._ask_text(item.toPlainText())
+        if text:
+            item.setText(text)
+            self._save_drawings()
+
+    def delete_drawing(self, item):
+        if item in self.drawings:
+            self.price.removeItem(item)
+            self.drawings.remove(item)
+            self._save_drawings()
+
+    def _remove_drawings(self):
+        for item in self.drawings:
+            self.price.removeItem(item)
+        self.drawings.clear()
 
     # -- loadouts and the remembered session (#54) ------------------------------------------------
     SESSION_KEY = "chart.session"
@@ -1395,9 +1539,8 @@ class ChartView(QWidget):
         self._pending_note = self._apply_setup(session)
 
     def clear_drawings(self):
-        for item in self.drawings:
-            self.price.removeItem(item)
-        self.drawings.clear()
+        self._remove_drawings()
+        self._save_drawings()
 
 
 def _confirm(parent, title: str, question: str) -> bool:
