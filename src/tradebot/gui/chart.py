@@ -57,6 +57,35 @@ DASHES = {"dash": Qt.PenStyle.DashLine, "dot": Qt.PenStyle.DotLine}  #: Style.da
 FIT_PADDING = 0.05  #: auto-fit margin above and below the visible data, as a fraction of its span
 
 
+def opengl_viewport():
+    """An OpenGL viewport for the chart canvas (#71), or None when no OpenGL context can be made here (no
+    driver, a VM, the offscreen platform, a Qt without its OpenGL modules).
+
+    A plain ``QOpenGLWidget`` with 4x multisampling: QPainter draws through Qt's OpenGL paint engine, so pens,
+    dashes, fills and antialiasing look as they do in software. (pyqtgraph's own ``GraphicsViewGLWidget``
+    would switch curves to native GL drawing, which ignores pen width and antialiasing.)"""
+    try:
+        from PyQt6.QtGui import QOffscreenSurface, QOpenGLContext, QSurfaceFormat
+        from PyQt6.QtOpenGLWidgets import QOpenGLWidget
+    except ImportError:
+        return None
+    context, surface = QOpenGLContext(), QOffscreenSurface()
+    try:
+        surface.create()
+        if not (surface.isValid() and context.create() and context.makeCurrent(surface)):
+            return None
+        context.doneCurrent()
+    except Exception:  # a broken driver must never stop the app from starting
+        return None
+    finally:
+        surface.destroy()
+    widget = QOpenGLWidget()
+    fmt = QSurfaceFormat()
+    fmt.setSamples(4)
+    widget.setFormat(fmt)
+    return widget
+
+
 def _fast_curves(plot):
     """Curves drawn only inside the view and at screen resolution (#68); "peak" keeps every spike visible.
     Set on the plot: its addItem() overrides these options of each curve."""
@@ -434,7 +463,7 @@ class ChartView(QWidget):
     status = pyqtSignal(str)
 
     def __init__(self, engine, themes: ThemeManager, watchlist: list[str], settings: Settings | None = None,
-                 symbol_search: SymbolSearch | None = None):
+                 symbol_search: SymbolSearch | None = None, opengl: bool = False):
         super().__init__()
         self.engine, self.themes, self.settings = engine, themes, settings
         self.df: pd.DataFrame | None = None
@@ -514,6 +543,15 @@ class ChartView(QWidget):
 
         # -- plot area ---------------------------------------------------------------------------
         self.canvas = pg.GraphicsLayoutWidget()
+        self.opengl = False  # whether the canvas draws through OpenGL (#71)
+        self.opengl_note = ""  # why the OpenGL viewport couldn't be used, for the status bar
+        if opengl:
+            viewport = opengl_viewport()
+            if viewport is None:
+                self.opengl_note = "GPU rendering unavailable (no OpenGL context): using the normal renderer"
+            else:
+                self.canvas.setViewport(viewport)
+                self.opengl = True
         self.price_axis = PriceAxis("right")
         self.price = self.canvas.addPlot(row=0, col=0, axisItems={"bottom": DateAxis(), "right": self.price_axis})
         self.price.showGrid(x=True, y=True, alpha=0.15)

@@ -2,7 +2,7 @@
 # Copyright (C) 2026 daMarxrider
 """The settings dialog behind the sidebar's gear button (#59).
 
-Categories on the left, one page each: Appearance (theme), Integrations (third-party tools, broker
+Categories on the left, one page each: Appearance (theme, GPU rendering), Integrations (third-party tools, broker
 API keys) and Data & cache (the disk cache, #63). A new category is one more :meth:`SettingsDialog._add_page` call.
 """
 
@@ -117,8 +117,28 @@ class SettingsDialog(QDialog):
         self.theme_box.currentIndexChanged.connect(lambda _: self.theme_chosen.emit(self.theme_box.currentData()))
         form.addRow("Theme", self.theme_box)
         lay.addWidget(box)
+        lay.addWidget(self._rendering_box())
         lay.addStretch()
         return page
+
+    def _rendering_box(self) -> QGroupBox:
+        """GPU rendering of the chart (#71): off by default, read at startup."""
+        box = QGroupBox("Rendering")
+        lay = QVBoxLayout(box)
+        self.gpu_box = QCheckBox("GPU rendering (experimental)")
+        self.gpu_box.setChecked(bool(load_config().get("gpu_rendering", False)))
+        self.gpu_box.toggled.connect(self._save_gpu_rendering)
+        lay.addWidget(self.gpu_box)
+        lay.addWidget(QLabel("Draws the chart through OpenGL, for smoother panning. Applies after a restart. "
+                             "Without OpenGL (no driver, a VM, remote desktop) the chart uses the normal renderer.",
+                             objectName="Muted", wordWrap=True))
+        return box
+
+    def _save_gpu_rendering(self, on: bool):
+        if save_config_value("gpu_rendering", on):
+            self.message.emit(f"GPU rendering {'on' if on else 'off'}: restart tradebot to apply")
+        else:
+            self.message.emit(f"GPU rendering not saved: couldn't write {config_path()}")
 
     # -- Integrations ----------------------------------------------------------------------------
     def _integrations(self) -> QWidget:
