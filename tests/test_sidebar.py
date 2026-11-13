@@ -232,3 +232,22 @@ def test_ago():
     cases = [(timedelta(seconds=20), "just now"), (timedelta(minutes=5), "5 min ago"), (timedelta(hours=3), "3 h ago"),
              (timedelta(days=2), "2 d ago"), (timedelta(days=10), "2026-10-19")]
     assert [ago(now - d, now) for d, _ in cases] == [text for _, text in cases]
+
+
+def test_kill_switch_button_writes_the_shared_kill_file(app, tmp_path, monkeypatch):
+    from tradebot.gui import app as gui
+    from tradebot.live import risk
+
+    monkeypatch.setattr(gui.ChartView, "load", lambda self: None)
+    monkeypatch.setenv("TRADEBOT_CONFIG", str(tmp_path / "config.toml"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    win = gui.MainWindow(ThemeManager(user_dir=tmp_path / "themes"), "dark", Settings(tmp_path / "settings.json"))
+    try:
+        assert not win.kill_btn.isChecked()
+        win.kill_btn.click()
+        assert risk.kill_active()
+        win.kill_btn.click()
+        assert not risk.kill_active()
+    finally:
+        win.close()
+        win.deleteLater()
