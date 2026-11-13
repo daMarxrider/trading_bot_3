@@ -205,13 +205,15 @@ class ComboBuilder(QWidget):
                                      "holding. Risk exits: " + ", ".join(RISK) + ". " + explain("scale_out")))
         self.block = QComboBox()
         self.block.setEditable(True)  # any block or condition, e.g. rsi(14) < 30
+        self.block.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.block.setMinimumContentsLength(12)  # the longest entry must not widen the side panel (Windows' wider text)
         self.block.addItems([n for n in ALGORITHMS.names() if not issubclass(ALGORITHMS.get(n), VotingEnsemble)
                              and n != "combo"] + [f"{r}({RISK[r][0][1].default:g})" for r in RISK]
                             + ["take_profit(5, 0.5)"] + [f"{r}({LIMITS[r][0][1].default:g})" for r in LIMITS]
                             + ["close > sma(200)", "rsi(14) < 30"])
         self.block.setToolTip(tooltip("A strategy, a risk exit, a limit entry (entry rule) or an indicator "
                                       "condition to add to a rule."))
-        self.fills = QCheckBox("Intrabar (against high/low)")
+        self.fills = QCheckBox("Intrabar")
         self.fills.setToolTip(tooltip(f"{explain('fills')} Off: {explain('fills_close')} On: "
                                       f"{explain('fills_intrabar')}"))
         self.fills.toggled.connect(self.changed)
