@@ -233,6 +233,26 @@ TERMS = {
     "rules": "The evolved strategy: buy when the entry rule becomes true, sell when the exit rule does.",
     "hall_of_fame": "The best strategies in training. The one with the best validation score was picked, which "
                     "is not always the best in training.",
+    "expectancy": "What an average trade earned (or lost), as a share of the money. Positive means the strategy "
+                  "makes money per trade on average.",
+    "avg_win": "The average gain of the trades that made money.",
+    "avg_loss": "The average loss of the trades that lost money (or broke even).",
+    "longest_losing_streak": "The most trades in a row that lost money. Shows how long a bad patch can last, "
+                             "and whether you could stick with the strategy through it.",
+    "time_under_water": "The share of the time the money was below its previous high. 90% means it was a new "
+                        "high only 10% of the time.",
+    "longest_under_water_days": "The longest time, in days, until the money got back to a previous high.",
+    "avg_holding_days": "How long a trade lasted on average, in days.",
+    "report": "Details of the shown strategy: per-trade averages, streaks, the monthly returns and how far below "
+              "its high the money was over time (underwater plot).",
+    "monthly_heatmap": "Return per calendar month (rows are years, last column the whole year). Green gained, "
+                       "red lost; the stronger the colour, the bigger the move.",
+    "underwater": "How far below its previous high the money was at each moment, in percent. The deepest dip is "
+                  "the maximum drawdown.",
+    "export_trades": "Saves the list of trades (entry, exit, side, return, days held) as a CSV file for a "
+                     "spreadsheet.",
+    "export_report": "Saves one HTML page with the metrics, equity curve, underwater plot, monthly returns and "
+                     "trades. It needs no other files; print it to PDF from a browser.",
     "evo_history": "The best training score per generation, and how that strategy did on validation. Training "
                    "rising while validation stays flat means overfitting.",
     "save_plugin": "Keeps the result as a strategy file, usable in backtests, the chart, the Backtest lab and "
