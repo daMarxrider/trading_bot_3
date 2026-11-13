@@ -311,6 +311,7 @@ class ScreenerView(QWidget):
         "Momentum leaders (+10% 1M)": "change_1m > 0.10",
         "Large caps (> $100B)": "market_cap > 1e11",
         "High volatility (ATR > 4%)": "atr_pct > 0.04",
+        "Unusual volume (> 2× average)": "volume_ratio > 2",
     }
 
     def __init__(self, engine, themes: ThemeManager, watchlist: list[str]):
@@ -332,10 +333,11 @@ class ScreenerView(QWidget):
         self.model = DataFrameModel(formats={
             "change_1d": pct, "change_1m": pct, "change_1y": pct, "atr_pct": pct,
             "market_cap": lambda v: f"{v / 1e9:,.1f}B", "avg_volume": lambda v: f"{v:,.0f}",
+            "volume_ratio": lambda v: f"{v:.2f}×",
         }, colors=_signed_color(themes, {"change_1d", "change_1m", "change_1y"}))
         table = _table(self.model)
         table.doubleClicked.connect(lambda idx: self.open_symbol.emit(self.model.df.iat[idx.row(), 0]))
-        hint = QLabel("Columns: close, change_1d/1m/1y, rsi, sma50, sma200, atr_pct, avg_volume, market_cap · "
+        hint = QLabel("Columns: close, change_1d/1m/1y, rsi, sma50, sma200, atr_pct, avg_volume, volume_ratio, market_cap · "
                       "double-click a row to chart it")
         hint.setObjectName("Muted")
 

@@ -60,7 +60,7 @@ from tradebot.backtest.metrics import deflated_sharpe, infer_periods_per_year
 from tradebot.core.series import OHLC
 from tradebot.evolve.export import load_plugin, plugin_source
 from tradebot.evolve.modules import Library, rewrite
-from tradebot.evolve.primitives import BOOL, Primitive, PrimitiveSet
+from tradebot.evolve.primitives import BOOL, Primitive, PrimitiveSet, uses_volume
 from tradebot.evolve.program import (Evaluator, Node, Program, constants, log_scale, quantize, random_program,
                                      random_tree, simplify_tree)
 from tradebot.optimize.base import AGGREGATES, carried_by_few, objective_value, select_frames
@@ -174,6 +174,7 @@ class EvolutionResult:
     modules: list[Primitive] = field(default_factory=list)  #: the run's library of evolved building blocks
     deflated: Deflated | None = None
     walk_forward: WalkForward | None = None
+    no_volume: list[str] = field(default_factory=list)  #: symbols without volume data, if the program uses volume
 
     @property
     def multi(self) -> bool:
@@ -255,6 +256,9 @@ class EvolutionResult:
                        "luck alone reaches that high.")
         if self.walk_forward is not None:
             out += self.walk_forward.warnings(self.objective)
+        if self.no_volume:
+            out.append(f"The rules use volume, which {', '.join(s or 'the symbol' for s in self.no_volume)} "
+                       "has no data for: there they never fire (no trades).")
         return out
 
     def notes(self) -> list[str]:
@@ -711,7 +715,13 @@ class Evolver:
                                self.evaluations, time.monotonic() - started, self.seed, best.generation,
                                self.validation_start, self.test_start, self.skipped, from_scratch=self.from_scratch,
                                modules=self.library.modules if self.library is not None else [],
-                               deflated=self.deflated(best.program))
+                               deflated=self.deflated(best.program), no_volume=self._no_volume(best.program))
+
+    def _no_volume(self, program: Program) -> list[str]:
+        """The symbols without volume data, if ``program`` reads the volume (#116)."""
+        if not any(uses_volume(t) for t in (program.entry, program.exit)):
+            return []
+        return [d.symbol for d in self.data if not d.evaluator.ohlc.has_volume]
 
     def _rank(self, pop: list[Program], fit: np.ndarray) -> tuple[list[Program], np.ndarray]:
         """One island sorted best first, after deduplication and the memetic step."""
@@ -791,7 +801,8 @@ def shuffle_candles(df: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
     o, h, lo, c = (df[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close"))
     prev = np.r_[o[0], c[:-1]]
     moves = np.stack([o / prev, h / o, lo / o, c / o], axis=1)[1:]
-    moves = moves[rng.permutation(len(moves))]
+    order = rng.permutation(len(moves))
+    moves = moves[order]
     opens, closes = [o[0]], [c[0]]
     highs, lows = [h[0]], [lo[0]]
     for gap, hi, low, close in moves:
@@ -801,6 +812,9 @@ def shuffle_candles(df: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
         lows.append(start * low)
         closes.append(start * close)
     out = pd.DataFrame({"open": opens, "high": highs, "low": lows, "close": closes}, index=df.index)
+    if "volume" in df.columns:  # each candle keeps its volume (#116)
+        v = df["volume"].to_numpy(dtype=float)
+        out["volume"] = np.r_[v[:1], v[1:][order]]
     return out
 
 

@@ -192,6 +192,7 @@ def test_p_value_and_multiple_testing_correction():
 
     assert p_value(CRITICAL[0.05]) == pytest.approx(0.05) and p_value(CRITICAL[0.01]) == pytest.approx(0.01)
     assert 0.01 < p_value(-3.6) < 0.05 and p_value(-2.0) == 1.0 and p_value(-6.0) < 0.001
+    assert p_value(float("nan")) == 1.0
     p = [0.001, 0.009, 0.02, 0.04, 0.2]
     assert significant(p, "none", 0.05) == [True, True, True, True, False]
     assert significant(p, "bonferroni", 0.05) == [True, True, False, False, False]  # p <= 0.05 / 5
@@ -351,3 +352,82 @@ def test_pair_bot_dry_run_places_nothing_and_a_failed_short_is_undone():
     assert (s1, d1, d2) == ("AAA", "buy", "sell") and s2 == "AAA" and x1 == x2  # bought AAA, short failed: undone
     with pytest.raises(ValueError):
         PairBot(spot, ("AAA", "BBB"), entry=1, exit=2)
+
+
+# -- batched cointegration (#121): CPU (NumPy) and GPU (torch) give the per-pair numbers ---------------------
+def _universe(n_symbols=7, n=400, seed=17):
+    rng = np.random.default_rng(seed)
+    a, b = synthetic_pair(n=n)
+    closes = {"AAA": a, "BBB": b}
+    for k in range(n_symbols - 2):
+        closes[f"L{k}"] = pd.Series(100 * np.exp(np.cumsum(rng.normal(0, 0.01, n))), a.index)
+    return closes
+
+
+def _all_pairs(m):
+    i, j = np.triu_indices(m, 1)
+    return np.column_stack([i, j])
+
+
+def test_cointegration_many_matches_the_per_pair_test():
+    from tradebot.analysis.pairs import cointegration, cointegration_many
+
+    closes = _universe()
+    names = list(closes)
+    logs = np.log(pd.concat(closes, axis=1).to_numpy())
+    pairs = _all_pairs(len(names))
+    stat, beta, used = cointegration_many(logs, pairs, backend="numpy")
+    assert used.startswith("NumPy")
+    for (i, j), s, b in zip(pairs, stat, beta):
+        ref = cointegration(closes[names[i]], closes[names[j]])
+        assert s == pytest.approx(ref.stat, rel=1e-8) and b == pytest.approx(ref.beta, rel=1e-8)
+    small, _, _ = cointegration_many(logs, pairs, backend="numpy", budget=1)  # one pair per chunk
+    np.testing.assert_allclose(small, stat, rtol=1e-12)
+    empty, _, _ = cointegration_many(logs, np.empty((0, 2), int), backend="numpy")
+    assert empty.shape == (0,)
+    with pytest.raises(ValueError):
+        cointegration_many(logs[:20], pairs, backend="numpy")
+    twice = np.column_stack([logs, logs[:, 0]])  # a symbol listed twice: NaN for that pair, the rest unharmed
+    s2, _, _ = cointegration_many(twice, [(0, twice.shape[1] - 1), (0, 1)], backend="numpy")
+    assert np.isnan(s2[0]) and s2[1] == pytest.approx(stat[0], rel=1e-12)
+
+
+@pytest.mark.parametrize("backend", ["cpu", "gpu"])
+def test_cointegration_many_torch_matches_numpy(backend):
+    from tradebot.analysis.pairs import cointegration_many
+    from tradebot.core import ops
+
+    if ops.torch is None:
+        pytest.skip("PyTorch not installed")
+    if backend == "gpu" and not ops.torch.cuda.is_available():
+        pytest.skip("no CUDA/ROCm GPU")
+    closes = _universe()
+    logs = np.log(pd.concat(closes, axis=1).to_numpy())
+    pairs = _all_pairs(len(closes))
+    ref, ref_beta, _ = cointegration_many(logs, pairs, backend="numpy")
+    stat, beta, used = cointegration_many(logs, pairs, backend=backend, budget=5000)
+    assert not used.startswith("NumPy")
+    np.testing.assert_allclose(stat, ref, rtol=1e-9)
+    np.testing.assert_allclose(beta, ref_beta, rtol=1e-9)
+
+
+def test_find_pairs_same_result_on_every_backend():
+    from tradebot.analysis.pairs import cointegration, find_pairs
+    from tradebot.core import ops
+
+    closes = _universe(n=900)
+    base = find_pairs(closes, min_correlation=-1, correction="none", backend="numpy")
+    assert base.backend.startswith("NumPy") and "AAA:BBB" in [c.symbol for c in base.found]
+    top = base.found[0]  # the batched numbers are the per-pair test's
+    cut = int(900 * 0.6)
+    ref = cointegration(closes[top.a].iloc[:cut], closes[top.b].iloc[:cut])
+    assert top.train.stat == pytest.approx(ref.stat, rel=1e-8) and top.beta == pytest.approx(ref.beta, rel=1e-8)
+    others = ["cpu"] if ops.torch is not None else []
+    if ops.torch is not None and ops.torch.cuda.is_available():
+        others.append("gpu")
+    for be in others:
+        scan = find_pairs(closes, min_correlation=-1, correction="none", backend=be)
+        assert (scan.tested, scan.skipped, scan.passed_train) == (base.tested, base.skipped, base.passed_train)
+        assert [c.symbol for c in scan.found] == [c.symbol for c in base.found]
+        for x, y in zip(scan.found, base.found):
+            assert x.train.stat == pytest.approx(y.train.stat, rel=1e-9) and x.zscore == pytest.approx(y.zscore, rel=1e-9)
