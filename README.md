@@ -200,6 +200,9 @@ tradebot bot pair-run BTC/USDT:USDT ETH/USDT:USDT --once       # live pair bot (
 tradebot halving --live                                        # Bitcoin halvings and the forecast of the next
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50          # dry run
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50 --live   # real orders
+tradebot bot run ETH/USDT sma_cross --tf 1h --stake 50 --paper                   # simulated account that survives restarts
+tradebot paper show                 # paper account: cash, positions, P&L, latest orders
+tradebot paper reset --balance 5000 # start over
 tradebot positions --broker kucoin
 tradebot portfolio --broker scalable --broker binance
 tradebot screen -f "rsi < 35" -f "close > sma200"
@@ -835,6 +838,23 @@ mode:
   Orders become `OrderIntent`s for you to execute by hand, and holdings are
   read from a CSV.
 * `read_only`: tracking only.
+
+## Paper trading
+
+`tradebot bot run ... --paper` (or `--broker paper`) trades a simulated account: orders fill at the last price of the
+real data source minus the backtester's proportional fee (0.1 % by default). Cash, positions and the order history are
+saved after every order to `paper_account.json` in the app's config folder (next to `settings.json`), written
+atomically, so a restart resumes with the same holdings. `tradebot paper show` prints equity and P&L,
+`tradebot paper reset` starts over. Optional settings:
+
+```toml
+[brokers.paper]
+starting_balance = 10000
+currency = "USDT"
+fee = 0.001
+```
+
+The fill price goes through `PaperBroker.fill_price`, the place to add a slippage model later. There is no GUI view yet.
 
 ## Elliott waves
 
