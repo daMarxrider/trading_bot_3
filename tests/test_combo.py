@@ -30,6 +30,9 @@ class _Fixed(BaseAlgorithm):
         return np.resize(np.asarray(_Fixed.series[self.key], dtype=float), len(o))  # the dry run uses longer data
 
 
+ALGORITHMS.unregister(_Fixed.name)  # only the per-test subclasses below belong in the registry: the lab lists everything in it
+
+
 def fixed(name: str, values) -> None:
     """Register ``name`` as a strategy whose positions are ``values``."""
     _Fixed.series[name] = values
