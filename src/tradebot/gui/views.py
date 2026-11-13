@@ -226,6 +226,7 @@ class ComboBuilder(QWidget):
         buttons[2].clicked.connect(self.apply_logic)
         self.save.clicked.connect(self._save)
         form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         form.addRow("Entry", self.entry)
         form.addRow("Exit", self.exit)
         form.addRow("Block", self.block)
@@ -234,11 +235,13 @@ class ComboBuilder(QWidget):
         for w in (self.entry, self.exit, self.block, self.logic, self.threshold):
             form.labelForField(w).setToolTip(w.toolTip())
         row = QHBoxLayout()
-        for b in buttons:
-            row.addWidget(b)
         save_row = QHBoxLayout()
-        save_row.addWidget(self.name)
-        save_row.addWidget(self.save)
+        save_row.addWidget(self.name, 1)
+        for b in (*buttons, self.save):  # share the width: a wide font must not widen the side panel
+            b.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        for b in buttons:
+            row.addWidget(b, len(b.text()))
+        save_row.addWidget(self.save, 0)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addLayout(form)
