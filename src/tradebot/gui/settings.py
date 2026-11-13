@@ -3,7 +3,7 @@
 """The settings dialog behind the sidebar's gear button (#59).
 
 Categories on the left, one page each: Appearance (theme, GPU rendering), Integrations (third-party tools, broker
-API keys) and Data & cache (the disk cache, #63). A new category is one more :meth:`SettingsDialog._add_page` call.
+API keys), Notifications (#155) and Data & cache (the disk cache, #63). A new category is one more :meth:`SettingsDialog._add_page` call.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from tradebot import tools
+from tradebot import notify, tools
 from tradebot.brokers import BROKERS
 from tradebot.config import config_path, load_config, os_cache_dir, save_config_value
 from tradebot.data.cache import DEFAULT_MAX_MB, DiskCache, human_size
@@ -45,6 +45,15 @@ from tradebot.gui.theme import ThemeManager
 KEY_LABELS = {"api_key": "API key", "secret": "Secret", "password": "Passphrase", "holdings_csv": "Holdings CSV",
               "phone_no": "Phone number", "pin": "PIN"}
 SECRET_KEYS = {"secret", "password", "pin"}  #: shown as dots
+
+#: The channels the dialog edits: config table (``[notify.<key>]``) -> title
+NOTIFY_CHANNELS = {"telegram": "Telegram bot", "discord": "Discord webhook", "webhook": "Generic webhook (JSON)",
+                   "email": "Email (SMTP)", "desktop": "Desktop notification"}
+NOTIFY_SECRETS = {"token", "password", "url"}  #: shown as dots (a webhook URL is a secret too)
+NOTIFY_LABELS = {"chat_id": "Chat ID", "url": "Webhook URL", "host": "SMTP server", "to": "To", "user": "User",
+                 "from": "From (optional)"}
+NOTIFY_EVENTS = {"trade": "A bot bought or sold", "error": "A bot step failed", "risk": "A risk guard stopped trading",
+                 "scanner": "Matches of a scan sent with tradebot scan --notify"}
 
 
 class SettingsDialog(QDialog):
@@ -66,10 +75,14 @@ class SettingsDialog(QDialog):
         self.paths: dict[str, QLineEdit] = {}
         self.status: dict[str, QLabel] = {}
         self.credentials: dict[tuple[str, str], QLineEdit] = {}  # (broker, key) -> field
+        self.notify_fields: dict[tuple[str, str], QLineEdit] = {}  # (channel type, option) -> field
+        self.notify_events: dict[str, dict[str, QCheckBox]] = {}  # channel type -> event kind -> box
+        self.notify_enabled: dict[str, QCheckBox] = {}
         self.page_names: list[str] = []  # the categories, in the order of the left bar
 
         self._add_page("Appearance", "🎨", self._appearance(theme_key))
         self._add_page("Integrations", "🔌", self._integrations())
+        self._add_page("Notifications", "🔔", self._notifications())
         self._add_page("Data & cache", "💾", self._cache_page())
         self.nav_group.buttons()[0].setChecked(True)
         self.nav.addStretch()
@@ -197,6 +210,87 @@ class SettingsDialog(QDialog):
                 form.addRow(KEY_LABELS.get(key, key.replace("_", " ").capitalize()), field)
         lay.addLayout(form)
         return box
+
+    # -- Notifications ---------------------------------------------------------------------------
+    def _notifications(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(0, 0, 4, 0)
+        lay.addWidget(QLabel("Get bot trades, failed steps, risk-guard stops and scanner hits on your phone or desktop. "
+                             "Saved in plain text in config.toml; to keep a secret out of the file, write "
+                             "$ENV_NAME as the value (e.g. $TELEGRAM_TOKEN) and set that environment variable. "
+                             "More channels or other names: edit the [notify.*] tables by hand.",
+                             objectName="Muted", wordWrap=True))
+        saved = load_config().get("notify", {})
+        for kind, title in NOTIFY_CHANNELS.items():
+            conf = saved.get(kind, {}) if isinstance(saved.get(kind), dict) else {}
+            box = QGroupBox(title)
+            form = QFormLayout(box)
+            enabled = QCheckBox("Enabled")
+            enabled.setChecked(bool(conf.get("enabled", True)) and bool(conf))
+            enabled.setToolTip("Needs the settings below; a channel without any is off.")
+            enabled.toggled.connect(lambda on, k=kind: self._save_notify(k, "enabled", on))
+            self.notify_enabled[kind] = enabled
+            form.addRow(enabled)
+            for key in notify.CHANNEL_OPTIONS[kind]:
+                edit = QLineEdit(str(conf.get(key, "")))
+                if key in NOTIFY_SECRETS:
+                    edit.setEchoMode(QLineEdit.EchoMode.Password)
+                edit.editingFinished.connect(lambda k=kind, o=key: self._save_notify_field(k, o))
+                self.notify_fields[kind, key] = edit
+                form.addRow(NOTIFY_LABELS.get(key, key.capitalize()), edit)
+            events = QHBoxLayout()
+            wanted = conf.get("events", notify.KINDS)
+            self.notify_events[kind] = {}
+            for ev in notify.KINDS[:-1]:  # "test" always goes through
+                cb = QCheckBox(ev)
+                cb.setChecked(ev in wanted)
+                cb.setToolTip(NOTIFY_EVENTS[ev])
+                cb.toggled.connect(lambda _, k=kind: self._save_notify_events(k))
+                self.notify_events[kind][ev] = cb
+                events.addWidget(cb)
+            events.addStretch()
+            form.addRow("Send", events)
+            lay.addWidget(box)
+        row = QHBoxLayout()
+        self.notify_test_btn = QPushButton("Send test message")
+        self.notify_test_btn.setToolTip("Sends a test to every enabled channel (also those in config.toml only), "
+                                        "whatever their event filter.")
+        self.notify_test_btn.clicked.connect(lambda _: self.test_notifications())
+        self.notify_result = QLabel(wordWrap=True)
+        row.addWidget(self.notify_test_btn)
+        row.addWidget(self.notify_result, 1)
+        lay.addLayout(row)
+        lay.addStretch()
+        return page
+
+    def test_notifications(self) -> dict[str, str | None]:
+        """Send the test message and show per channel whether it worked (the send blocks for up to its timeout)."""
+        results = notify.test_all()
+        lines = [f"✗ {name}: {escape(err)}" if err else f"✓ {name}" for name, err in results.items()]
+        self.notify_result.setText("<br>".join(lines) or "No channel is enabled.")
+        return results
+
+    def _save_notify(self, kind: str, key: str, value) -> bool:
+        table = f"notify.{kind}"
+        ok = save_config_value("type", kind, table=table) and save_config_value(key, value, table=table)
+        if not ok:
+            self.message.emit(f"notification setting not saved: couldn't write {config_path()}")
+        return ok
+
+    def _save_notify_field(self, kind: str, key: str):
+        text = self.notify_fields[kind, key].text().strip()
+        current = load_config().get("notify", {}).get(kind, {}).get(key, "")
+        if text == str(current):
+            return
+        value = int(text) if key == "port" and text.isdigit() else text or None
+        if self._save_notify(kind, key, value) and text and not self.notify_enabled[kind].isChecked() \
+                and not load_config()["notify"][kind].get("enabled", False):
+            self.notify_enabled[kind].setChecked(True)  # filling in a channel switches it on
+
+    def _save_notify_events(self, kind: str):
+        chosen = [ev for ev, cb in self.notify_events[kind].items() if cb.isChecked()]
+        self._save_notify(kind, "events", chosen)
 
     # -- Data & cache ----------------------------------------------------------------------------
     def _cache_page(self) -> QWidget:

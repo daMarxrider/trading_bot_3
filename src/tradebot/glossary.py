@@ -131,6 +131,9 @@ TERMS = {
     "dates": "Optionally a fixed period to test, instead of the latest candles.",
     "fee": "The cost of each buy and each sell, as a fraction: 0.001 is 0.1%. A full trade (in and out) pays it "
            "twice.",
+    "slippage": "How much worse than the close a trade fills (spread, price moving while the order runs), in "
+                "basis points per side: 5 bp is 0.05%. Charged on top of the fee; 0 ignores it. Rough values: "
+                "crypto 5, stocks 2. Use more for thin symbols and short timeframes.",
     "algorithm": "The trading strategy: the rules that decide when to buy and when to sell.",
     "members": "The strategies that vote. Each one says buy or sell, and the vote acts when enough of them "
                "agree (the threshold). All checks every known strategy.",
@@ -224,6 +227,9 @@ TERMS = {
     "fast_preset": "Back to the quick defaults, which finish in minutes but search less and check less.",
     "evo_folds": "Walk-forward: run the whole search again on this many rolling windows of the data, and score "
                  "each result on the stretch right after its window. Rules that only fit one period lose there.",
+    "monte_carlo": "Re-draws the backtest's trades (or candles) many times in a different order. The 5 % to 95 % "
+                   "band shows how much of the final return and the worst drawdown is luck in the order; the "
+                   "fan of curves is the same in the plot. Shuffling keeps the final return, only the drawdown moves.",
     "deflated_sharpe": "The Sharpe ratio corrected for how many different strategies were tried: the chance that it "
                        "beats the best one luck alone would produce. 0.95 or more is significant.",
     "permutations": "Also run the same search this many times on shuffled prices, where no pattern is left. If "
