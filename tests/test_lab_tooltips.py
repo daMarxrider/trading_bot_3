@@ -56,6 +56,7 @@ def test_every_form_row_explains_itself(lab):
         assert label.widget().toolTip(), label.widget().text()
         assert field.widget().toolTip(), label.widget().text()
     assert "0.1%" in lab.fee.toolTip()
+    assert "basis points" in lab.slippage.toolTip()
 
 
 def test_every_choice_explains_itself(lab):
