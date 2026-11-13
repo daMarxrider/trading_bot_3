@@ -85,6 +85,10 @@ class Registry(Generic[T]):
         self._items[name] = cls
         return cls
 
+    def unregister(self, name: str) -> None:
+        """Forget ``name`` (e.g. a deleted saved combo); unknown names are ignored."""
+        self._items.pop(name, None)
+
     def get(self, name: str) -> type[T]:
         try:
             return self._items[name]

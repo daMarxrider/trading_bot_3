@@ -27,6 +27,9 @@ bot_app = typer.Typer(help="Automated trading bots.", no_args_is_help=True)
 app.add_typer(bot_app, name="bot")
 cache_app = typer.Typer(help="The disk cache of candles and symbol lists.", no_args_is_help=True)
 app.add_typer(cache_app, name="cache")
+combo_app = typer.Typer(help="Saved strategy combos (combos.toml): entry and exit rules built from strategies and "
+                             "indicator conditions.", no_args_is_help=True)
+app.add_typer(combo_app, name="combo")
 console = Console()
 
 Params = Annotated[list[str], typer.Option("--param", "-p", help="Algorithm parameter, e.g. -p lower=30",
@@ -34,6 +37,11 @@ Params = Annotated[list[str], typer.Option("--param", "-p", help="Algorithm para
 Members = Annotated[Optional[str], typer.Option(
     help="Comma-separated members for the 'vote' ensemble, or for the 'pool' (strategies and indicators)",
     autocompletion=complete.members)]
+Entry = Annotated[Optional[str], typer.Option(
+    help="Combo entry rule (with the 'combo' strategy), e.g. \"elliott_wave & close>sma(200)\" or "
+         "\"weighted(rsi_threshold:0.5, macd_cross:0.5) >= 0.6\"")]
+Exit = Annotated[Optional[str], typer.Option(
+    help="Combo exit rule, e.g. \"macd_cross | stop_atr(2)\" (default: when the entry rule stops holding)")]
 TF = Annotated[str, typer.Option("--tf", help="Timeframe: 1m 5m 15m 30m 1h 4h 1d 1w", autocompletion=complete.timeframes)]
 Symbol = Annotated[str, typer.Argument(help="e.g. AAPL, SAP.DE, BTC/USDT", autocompletion=complete.symbols)]
 Algo = Annotated[str, typer.Argument(help="Algorithm name (tradebot list)", autocompletion=complete.algorithms)]
@@ -60,6 +68,9 @@ def _main(verbose: Annotated[bool, typer.Option("-v", "--verbose")] = False,
     quiet_yfinance()
     logging.basicConfig(level=logging.INFO if verbose else logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     load_plugins()
+    from tradebot.algorithms.combo import load_combos
+
+    load_combos()
 
 
 # -- helpers ------------------------------------------------------------------------------------------
@@ -93,9 +104,9 @@ def load_data(symbol: str, tf: str, start: str | None, end: str | None, bars: in
     return df
 
 
-def make_algo(name: str, params: list[str], members: str | None):
+def make_algo(name: str, params: list[str], members: str | None, entry: str | None = None, exit: str | None = None):
     try:
-        return build_algorithm(name, parse_kv(params), members.split(",") if members else None)
+        return build_algorithm(name, parse_kv(params), members.split(",") if members else None, entry, exit)
     except ValueError as e:
         raise typer.BadParameter(str(e)) from None
 
@@ -152,13 +163,15 @@ def chart(
                                                 autocompletion=complete.algorithms)] = None,
     param: Params = [],
     members: Members = None,
+    entry: Entry = None,
+    exit: Exit = None,
     line: Annotated[bool, typer.Option(help="Line chart instead of candles")] = False,
     volume: Annotated[bool, typer.Option(help="Volume bars under the candles (when the data has volume)")] = True,
 ):
     """Terminal OHLC chart with indicator overlays, volume and algorithm signals."""
     from tradebot.cli.charts import render_chart
 
-    algorithm = make_algo(algo, param, members) if algo else None
+    algorithm = make_algo(algo, param, members, entry, exit) if algo else None
     inds = [parse_indicator(s) for s in indicator]
     if algorithm and not inds:
         inds = algorithm.chart_indicators()
@@ -177,16 +190,21 @@ def backtest(
     bars: Annotated[int, typer.Option(help="Number of candles (ignored with --start)")] = 1000,
     param: Params = [],
     members: Members = None,
+    entry: Entry = None,
+    exit: Exit = None,
     fee: Annotated[float, typer.Option(help="Fee per side, fraction")] = 0.001,
     capital: float = 10_000.0,
     dca_amount: DcaAmount = None,
     plot: Annotated[bool, typer.Option(help="Show chart with signals and equity")] = True,
 ):
-    """Backtest an algorithm on historical OHLC data, next to buy & hold and monthly investing."""
+    """Backtest an algorithm on historical OHLC data, next to buy & hold and monthly investing.
+
+    ``combo`` builds a strategy from rules: ``tradebot backtest AAPL combo --entry "elliott_wave &
+    close>sma(200)" --exit "macd_cross | stop_atr(2)"`` (see ``tradebot combo --help``)."""
     from tradebot.backtest import backtest as run_backtest, baselines
     from tradebot.cli.charts import render_chart
 
-    algorithm = make_algo(algo, param, members)
+    algorithm = make_algo(algo, param, members, entry, exit)
     symbols = _symbols(symbol, [])
     if len(symbols) > 1:
         _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount)
@@ -237,6 +255,8 @@ def optimize(
     end: Optional[str] = None,
     bars: Annotated[int, typer.Option(help="Number of candles (ignored with --start)")] = 2000,
     members: Members = None,
+    entry: Entry = None,
+    exit: Exit = None,
     pool: Annotated[Optional[str], typer.Option(
         help="Comma-separated strategies and indicators the optimizer picks from (default: all)",
         autocompletion=complete.pool_members)] = None,
@@ -322,7 +342,7 @@ def optimize(
     elif pool or min_members != 1 or max_members is not None:
         raise typer.BadParameter("--pool, --min-members and --max-members need the pool: leave out the algorithm")
     else:
-        algorithm = make_algo(algo, [], members)
+        algorithm = make_algo(algo, [], members, entry, exit)
     if len(symbols) == 1:
         df = load_data(symbols[0], tf, start, end, bars)
         size = f"{len(df)} candles"
@@ -874,6 +894,11 @@ def _reused(algorithm, params: dict) -> dict:
 def _reuse_command(symbol: str, algorithm, params: dict) -> str:
     flags = " ".join(f"-p {k}={v:g}" for k, v in _reused(algorithm, params).items())
     members = f" --members {','.join(algorithm.selected(params))}" if hasattr(algorithm, "selected") else ""
+    if type(algorithm).__name__ == "Combo":  # the generic combo: its rules aren't saved anywhere
+        import shlex
+
+        members = f" --entry {shlex.quote(algorithm.entry)}" + (f" --exit {shlex.quote(algorithm.exit)}"
+                                                                 if algorithm.exit else "")
     return f"tradebot backtest {symbol} {algorithm.name}{members} {flags}"
 
 
@@ -958,6 +983,8 @@ def bot_run(
     stake: Annotated[float, typer.Option(help="Max quote-currency value per entry")] = 100.0,
     param: Params = [],
     members: Members = None,
+    entry: Entry = None,
+    exit: Exit = None,
     live: Annotated[bool, typer.Option(help="Actually place orders (default: dry run)")] = False,
     sandbox: Annotated[bool, typer.Option(help="Use the exchange testnet (ccxt brokers)")] = False,
     once: Annotated[bool, typer.Option(help="Evaluate a single candle and exit")] = False,
@@ -971,7 +998,7 @@ def bot_run(
     b = create_broker(broker, **kwargs)
     if live and not b.can_trade:
         raise typer.BadParameter(f"{broker} is read-only")
-    bot = TradingBot(b, make_algo(algo, param, members), symbol, tf, stake, dry_run=not live,
+    bot = TradingBot(b, make_algo(algo, param, members, entry, exit), symbol, tf, stake, dry_run=not live,
                      on_event=lambda e: console.print(
                          f"[dim]{e.time:%Y-%m-%d %H:%M}[/] {symbol} target={e.target:.2f} "
                          f"price={e.price:.6g} → [bold]{e.action}[/] {e.amount:.6g}"
@@ -1396,6 +1423,57 @@ def gui():
 
 if __name__ == "__main__":
     app()
+
+
+@combo_app.command("save")
+def combo_save(
+    name: Annotated[str, typer.Argument(help="Name to save under (lower-case letters, digits and _)")],
+    entry: Annotated[str, typer.Option(help="Entry rule, e.g. \"elliott_wave & close>sma(200)\"")],
+    exit: Annotated[Optional[str], typer.Option(help="Exit rule, e.g. \"macd_cross | stop_atr(2)\"")] = None,
+    description: Annotated[str, typer.Option(help="Shown in tradebot list and the GUI")] = "",
+    param: Params = [],
+):
+    """Save a combo by name; it then works like any strategy: list, backtest, optimize, bot, chart, GUI.
+
+    Rules: strategy names (in the exit rule: their exit), indicator conditions (close>sma(200), rsi(14)<30,
+    elliott.state==3), & | ! and brackets, vote(a, b, c) >= 0.6, weighted(a:0.5, b:0.3) >= 0.6, and in the
+    exit rule the risk exits stop_pct(5) stop_atr(2) take_profit(10) take_profit_atr(3) trail_pct(5)
+    trail_atr(3) max_hold(20). ``-p`` sets saved parameter values (e.g. tuned ones from ``optimize``)."""
+    from tradebot.algorithms.combo import combos_path, save_combo
+
+    try:
+        save_combo(name, entry, exit or "", description, parse_kv(param))
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+    console.print(f"saved combo [bold]{name}[/] in {combos_path()}")
+
+
+@combo_app.command("list")
+def combo_list():
+    """The saved combos and their rules."""
+    from tradebot.algorithms.combo import combos_path, load_saved
+
+    saved = load_saved()
+    if not saved:
+        console.print(f"no saved combos yet ({combos_path()}); save one with: tradebot combo save NAME --entry ...")
+        return
+    t = Table(title=f"combos · {combos_path()}")
+    for col in ("name", "entry", "exit", "parameters"):
+        t.add_column(col, style="bold cyan" if col == "name" else None)
+    for name, c in saved.items():
+        params = ", ".join(f"{k}={v:g}" for k, v in (c.get("params") or {}).items())
+        t.add_row(name, c["entry"], c.get("exit") or "[dim]when the entry stops holding[/]", params)
+    console.print(t)
+
+
+@combo_app.command("delete")
+def combo_delete(name: Annotated[str, typer.Argument(help="The saved combo to delete")]):
+    """Delete a saved combo."""
+    from tradebot.algorithms.combo import delete_combo
+
+    if not delete_combo(name):
+        raise typer.BadParameter(f"no saved combo {name!r}")
+    console.print(f"deleted combo {name}")
 
 
 @cache_app.command("info")

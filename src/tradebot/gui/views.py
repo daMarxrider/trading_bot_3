@@ -40,6 +40,7 @@ from PyQt6.QtWidgets import (
 
 from tradebot.algorithms import ALGORITHMS, algorithm_names, build_algorithm
 from tradebot.algorithms.builtin import VotingEnsemble
+from tradebot.algorithms.combo import LOGIC, RISK, Combo, check, combine, save_combo, terms
 from tradebot.algorithms.pool import RULES, PoolEnsemble, default_pool
 from tradebot.backtest.baselines import BUY_HOLD, MONTHLY, baselines, buy_and_hold, monthly_investing
 from tradebot.backtest.metrics import fmt
@@ -184,6 +185,107 @@ class MemberPicker(QWidget):
 
     def _sync_all(self):
         self.all.setChecked(all(box.isChecked() for box in self.boxes.values()))
+
+
+class ComboBuilder(QWidget):
+    """The combo builder (#22): entry and exit rules as text, filled by picking blocks, a logic and a threshold."""
+
+    changed = pyqtSignal()
+    saved = pyqtSignal(str)  # the name of a newly saved combo
+
+    def __init__(self):
+        super().__init__()
+        self.entry, self.exit = QLineEdit(Combo.entry_rule), QLineEdit(Combo.exit_rule)
+        self.entry.setToolTip(tooltip("When to buy, e.g. elliott_wave & close>sma(200)"))
+        self.exit.setToolTip(tooltip("When to sell, e.g. macd_cross | stop_atr(2); empty: when the entry stops "
+                                     "holding. Risk exits: " + ", ".join(RISK)))
+        self.block = QComboBox()
+        self.block.setEditable(True)  # any block or condition, e.g. rsi(14) < 30
+        self.block.addItems([n for n in ALGORITHMS.names() if not issubclass(ALGORITHMS.get(n), VotingEnsemble)
+                             and n != "combo"] + [f"{r}({RISK[r][0][1].default:g})" for r in RISK]
+                            + ["close > sma(200)", "rsi(14) < 30"])
+        self.block.setToolTip(tooltip("A strategy, a risk exit or an indicator condition to add to a rule."))
+        self.logic = QComboBox()
+        self.logic.addItems(LOGIC)
+        self.logic.setToolTip(tooltip("How the blocks of a rule combine: and (all), or (any), vote (share of "
+                                      "members that hold), weighted (weighted share; weights are tunable)."))
+        self.threshold = QDoubleSpinBox()
+        self.threshold.setRange(0.0, 1.0)
+        self.threshold.setSingleStep(0.05)
+        self.threshold.setValue(0.5)
+        self.threshold.setToolTip(tooltip("Vote / weighted: the share needed to hold."))
+        self.status = QLabel()
+        self.status.setWordWrap(True)
+        self.status.setObjectName("Muted")
+        self.name = QLineEdit()
+        self.name.setPlaceholderText("name to save under")
+        self.save = QPushButton("Save combo")
+        buttons = [QPushButton("Add to entry"), QPushButton("Add to exit"), QPushButton("Apply logic")]
+        buttons[0].clicked.connect(lambda: self.add(self.entry))
+        buttons[1].clicked.connect(lambda: self.add(self.exit))
+        buttons[2].clicked.connect(self.apply_logic)
+        self.save.clicked.connect(self._save)
+        form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.addRow("Entry", self.entry)
+        form.addRow("Exit", self.exit)
+        form.addRow("Block", self.block)
+        form.addRow("Logic", self.logic)
+        form.addRow("Threshold", self.threshold)
+        for w in (self.entry, self.exit, self.block, self.logic, self.threshold):
+            form.labelForField(w).setToolTip(w.toolTip())
+        row = QHBoxLayout()
+        save_row = QHBoxLayout()
+        save_row.addWidget(self.name, 1)
+        for b in (*buttons, self.save):  # share the width: a wide font must not widen the side panel
+            b.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        for b in buttons:
+            row.addWidget(b, len(b.text()))
+        save_row.addWidget(self.save, 0)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addLayout(form)
+        lay.addLayout(row)
+        lay.addLayout(save_row)
+        lay.addWidget(self.status)
+        for edit in (self.entry, self.exit):
+            edit.editingFinished.connect(self.changed)
+
+    def _rewrite(self, edit: QLineEdit, extra: str | None = None):
+        items, risk = terms(edit.text())
+        if extra:
+            (risk if extra.split("(")[0].strip() in RISK else items).append(extra)
+        edit.setText(combine(items, self.logic.currentText(), risk, self.threshold.value()))
+
+    def add(self, edit: QLineEdit):
+        block = self.block.currentText().strip()
+        if block:
+            self._rewrite(edit, block)
+            self.changed.emit()
+
+    def apply_logic(self):
+        self._rewrite(self.entry)
+        self._rewrite(self.exit)
+        self.changed.emit()
+
+    def algorithm(self) -> Combo:
+        """The combo of the current rules; falls back to the defaults, with the problem in the status line."""
+        try:
+            algo = check(self.entry.text(), self.exit.text())
+            self.status.setText("")
+            return algo
+        except ValueError as e:
+            self.status.setText(f"Rule error: {e}")
+            return Combo()
+
+    def _save(self):
+        try:
+            save_combo(self.name.text().strip(), self.entry.text(), self.exit.text())
+        except ValueError as e:
+            self.status.setText(f"Can't save: {e}")
+            return
+        self.status.setText(f"Saved {self.name.text().strip()}.")
+        self.saved.emit(self.name.text().strip())
 
 
 def pool_picker() -> MemberPicker:
@@ -515,6 +617,9 @@ class BacktestView(QWidget):
         self.members = MemberPicker()
         self.members.changed.connect(self._members_changed)
         self.pool = pool_picker()
+        self.combo = ComboBuilder()
+        self.combo.changed.connect(self._members_changed)
+        self.combo.saved.connect(self._combo_saved)
         self.pool.changed.connect(self._members_changed)
         self.min_members, self.max_members = QSpinBox(), QSpinBox()
         self.min_members.setRange(1, len(self.pool.boxes))
@@ -634,6 +739,8 @@ class BacktestView(QWidget):
         self.pool_card = card(pool_title, self.pool)
         self.pool_card.layout().addLayout(pool_form)
         left.addWidget(self.pool_card)
+        self.combo_card = card(QLabel("Combo builder"), self.combo)
+        left.addWidget(self.combo_card)
         params_title = QLabel("Parameters")
         params_title.setToolTip(tooltip(explain("parameters")))
         params_card = card(params_title, self.params)
@@ -776,12 +883,21 @@ class BacktestView(QWidget):
     def _algo_changed(self, name):
         self.members_card.setVisible(ALGORITHMS.get(name) is VotingEnsemble)
         self.pool_card.setVisible(ALGORITHMS.get(name) is PoolEnsemble)
+        self.combo_card.setVisible(ALGORITHMS.get(name) is Combo)
         algo = self._build()
         self.params.set_space(algo.param_space(), algo.values)
 
+    def _combo_saved(self, name: str):
+        """A newly saved combo is a strategy like any other: list it and select it."""
+        if self.algo.findText(name) < 0:
+            self.algo.addItem(name)
+        self.algo.setCurrentText(name)
+
     def _members_changed(self):
         algo = self._build()
-        self.params.set_space(algo.param_space(), {**algo.values, **self.params.values()})  # keep what was set
+        space = algo.param_space()
+        kept = {k: v for k, v in self.params.values().items() if k in space}
+        self.params.set_space(space, {**algo.values, **kept})  # keep what was set
 
     def _walk_forward_changed(self, folds: int):
         for w in (self.wf_train, self.wf_test, self.wf_anchored, self.holdout, self.meta):
@@ -794,10 +910,14 @@ class BacktestView(QWidget):
         if ALGORITHMS.get(name) is PoolEnsemble:
             lo, hi = self.min_members.value(), self.max_members.value()
             return PoolEnsemble(self.pool.selected(), min_members=lo, max_members=max(lo, hi) if hi else None)
+        if ALGORITHMS.get(name) is Combo:
+            return self.combo.algorithm()
         return build_algorithm(name, members=self.members.selected() if ALGORITHMS.get(name) is VotingEnsemble else None)
 
     def _algorithm(self):
-        return self._build().with_params(**self.params.values())
+        algo = self._build()
+        space = algo.param_space()
+        return algo.with_params(**{k: v for k, v in self.params.values().items() if k in space})
 
     def _symbol_list(self) -> list[str]:
         """The symbols in the field (comma- or space-separated), de-duplicated."""
