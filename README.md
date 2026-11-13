@@ -604,7 +604,7 @@ number of symbols, and `--permutations N` repeats the whole search N times.
   `A:B` (e.g. `KO:PEP`) is also a symbol everywhere: candles of the ratio, converted into one currency.
 * **Volume** (#116): candles carry volume next to open/high/low/close (`o.volume` in indicators, scripts and
   algorithms; NaN when the symbol has none), with a volume pane in the chart (`vol` button, `--volume/--no-volume`
-  in the CLI chart) and the Volume, OBV, VWAP, MFI and volume-ratio indicators. Prices are the same whichever venue
+  in the CLI chart) and the Volume, OBV, VWAP, MFI and volume-ratio indicators (plus the volume profile and anchored VWAP). Prices are the same whichever venue
   delivered the candles, **volume is not**: one exchange's BTC volume isn't another's, so results that use volume
   can differ between data providers.
 * **Screener**: filter any universe by technicals, volume and market cap using
@@ -799,7 +799,8 @@ example `TRADEBOT_BINANCE_SECRET`. The optional data providers read
 src/tradebot/
   core/        ops (NumPy/torch time-series primitives), OHLC container, registry + plugin loader, models
   indicators/  BaseIndicator + built-ins (SMA, EMA, RSI, MACD, Bollinger, ATR, Stochastic, Donchian, Ichimoku,
-               Elliott waves, Bitcoin halving cycle)
+               Elliott waves, Bitcoin halving cycle, ADX, Supertrend, Parabolic SAR, Keltner, CCI, Williams %R, ROC,
+               momentum, pivots, volume profile, anchored VWAP)
   algorithms/  BaseAlgorithm + built-ins (rsi_threshold, macd_cross, ichimoku_cloud, sma_cross,
                bollinger_reversion, range, vote ensemble, elliott_wave, halving_cycle)
   analysis/    loop-based pattern detection (Elliott waves), Bitcoin halving schedule and forecast
