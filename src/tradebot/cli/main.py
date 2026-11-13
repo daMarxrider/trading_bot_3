@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from tradebot.algorithms import ALGORITHMS, build_algorithm
@@ -30,6 +31,9 @@ app.add_typer(cache_app, name="cache")
 combo_app = typer.Typer(help="Saved strategy combos (combos.toml): entry and exit rules built from strategies and "
                              "indicator conditions.", no_args_is_help=True)
 app.add_typer(combo_app, name="combo")
+notify_app = typer.Typer(help="Notification channels ([notify.*] in config.toml): Telegram, Discord, webhook, "
+                              "email, desktop.", no_args_is_help=True)
+app.add_typer(notify_app, name="notify")
 console = Console()
 
 Params = Annotated[list[str], typer.Option("--param", "-p", help="Algorithm parameter, e.g. -p lower=30",
@@ -1145,6 +1149,8 @@ def scan(
     index: Annotated[Optional[str], typer.Option("--index", help="Scan a market index instead: sp500, nasdaq100, "
                                                  "dow30, dax40, ftse100, crypto_top100 (weekly cached list)",
                                                  autocompletion=complete.indices)] = None,
+    notify: Annotated[bool, typer.Option("--notify", help="Send the matches to the notification channels "
+                                         "(event kind scanner)")] = False,
 ):
     """Scan symbols with one indicator, filtered on its values and alerts (the Scanner tab's engine)."""
     from tradebot import scanner
@@ -1175,6 +1181,11 @@ def scan(
         t.add_row(*[str(row[c]) if isinstance(row[c], (bool, np.bool_)) else _fmt_cell(c, row[c]) for c in result.table.columns])
     console.print(t)
     console.print(result.summary())
+    if notify:
+        from tradebot.notify import notify as send_notification
+
+        names = ", ".join(result.table["symbol"].astype(str)) if len(result.table) else "no matches"
+        send_notification("scanner", f"Scan {indicator} {timeframe}: {result.matched} match", names, wait=True)
     for sym, why in list(result.skipped.items())[:5]:
         console.print(f"[dim]skipped {sym}: {why}[/]")
 
@@ -1474,6 +1485,23 @@ def combo_delete(name: Annotated[str, typer.Argument(help="The saved combo to de
     if not delete_combo(name):
         raise typer.BadParameter(f"no saved combo {name!r}")
     console.print(f"deleted combo {name}")
+
+
+@notify_app.command("test")
+def notify_test():
+    """Send a test message to every enabled channel and report which worked."""
+    from tradebot import notify as notifications
+
+    chans = notifications.channels()
+    if not chans:
+        console.print("no channels: add [notify.<name>] tables to config.toml (see the README)")
+        raise typer.Exit(1)
+    failed = 0
+    for name, error in notifications.test_all().items():
+        failed += bool(error)
+        console.print(f"[red]✗[/] {name}: {escape(error)}" if error else f"[green]✓[/] {name}")
+    if failed:
+        raise typer.Exit(1)
 
 
 @cache_app.command("info")

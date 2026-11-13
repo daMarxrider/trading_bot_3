@@ -207,6 +207,8 @@ tradebot news AAPL NVDA BTC/USDT
 tradebot news --watchlist Crypto   # without symbols: one watchlist (default: all of them)
 tradebot cache info                 # cache folder, size, number of cached series
 tradebot cache clear [--ohlc|--symbols]
+tradebot notify test                # send a test message to every notification channel
+tradebot scan --alert cross_up --notify   # send the scan's matches to the channels
 ```
 
 `--bars N` returns exactly N candles, also for stocks, whose markets close on
@@ -733,6 +735,37 @@ In `config.toml`:
 enabled = true    # false: keep candles in memory only
 max_mb = 500
 ```
+
+### Notifications
+
+Bot trades (`trade`), failed bot steps (`error`), risk-guard stops (`risk`) and
+scanner hits (`scanner`, with `tradebot scan --notify`) can be pushed to
+Telegram, a Discord webhook, a generic JSON webhook, email or the desktop
+(`notify-send` on Linux, `osascript` on macOS, else the app's tray). Configure
+them under Settings > Notifications or by hand, one table per channel; `events`
+filters the kinds (default: all):
+
+```toml
+[notify.phone]
+type = "telegram"
+token = "$TELEGRAM_TOKEN"   # "$NAME" or "env:NAME" reads the environment, keeping the secret out of the file
+chat_id = "12345678"
+events = ["trade", "error"]
+
+[notify.mail]
+type = "email"              # also: discord (url), webhook (url), desktop
+host = "smtp.example.com"
+port = 587                  # 465: SSL, otherwise STARTTLS
+user = "me@example.com"
+password = "$SMTP_PASSWORD"
+to = "me@example.com"
+```
+
+Sends run in the background with a 10 s timeout; a failure is only logged (never
+with the secrets) and can't stop a bot. `tradebot notify test` or the test button
+sends to every enabled channel. Code raises an event with
+`tradebot.notify.notify("risk", title, text)` and adds a channel type with
+`@notify.channel(...)`.
 
 Settings the app remembers by itself (such as the chart's auto-fit toggle) are
 saved in `settings.json` in the OS config folder, not in `config.toml`:
