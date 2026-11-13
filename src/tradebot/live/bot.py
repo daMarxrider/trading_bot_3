@@ -53,6 +53,11 @@ class TradingBot:
     holding: float = 0.0  #: base-asset amount this bot currently manages
     events: list[BotEvent] = field(default_factory=list)
 
+    def __post_init__(self):
+        if getattr(self.broker, "simulated", False) and not self.dry_run:  # resume a persistent paper account
+            held = self.broker.get_balance().get(self.base_asset)
+            self.holding = held.total if held else 0.0
+
     @property
     def base_asset(self) -> str:
         return self.symbol.split("/")[0]
