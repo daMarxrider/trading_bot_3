@@ -229,6 +229,64 @@ def backtest(
     warn_not_beaten(bl, "Over this period")
 
 
+@app.command()
+def montecarlo(
+    symbol: Symbol,
+    algo: Algo,
+    tf: TF = "1d",
+    start: Annotated[Optional[str], typer.Option(help="ISO date")] = None,
+    end: Annotated[Optional[str], typer.Option(help="ISO date")] = None,
+    bars: Annotated[int, typer.Option(help="Number of candles (ignored with --start)")] = 1000,
+    param: Params = [],
+    members: Members = None,
+    entry: Entry = None,
+    exit: Exit = None,
+    fee: Annotated[float, typer.Option(help="Fee per side, fraction")] = 0.001,
+    runs: Annotated[int, typer.Option(help="Number of simulated re-orderings")] = 1000,
+    method: Annotated[str, typer.Option(help="shuffle (same trades, random order) | bootstrap (draw with "
+                                        "replacement) | block (bootstrap in runs of consecutive items)",
+                                        autocompletion=complete.choices(["shuffle", "bootstrap", "block"]))] = "bootstrap",
+    source: Annotated[str, typer.Option(help="trades (per round trip) | returns (per candle)",
+                                        autocompletion=complete.choices(["trades", "returns"]))] = "trades",
+    block: Annotated[Optional[int], typer.Option(help="Block length (method block); default sqrt(items)")] = None,
+    max_dd: Annotated[float, typer.Option(help="Report the probability of a drawdown above this fraction")] = 0.2,
+    seed: Annotated[Optional[int], typer.Option(help="Random seed, for a repeatable result")] = None,
+):
+    """Monte Carlo robustness test: how much of a backtest is luck in the order of its trades?
+
+    Re-draws the trades (or candle returns) ``--runs`` times and prints 5 / 50 / 95 % bands for the final
+    return and the maximum drawdown, plus the probability of a loss and of a drawdown above ``--max-dd``."""
+    from tradebot.analysis.montecarlo import METHODS, SOURCES, from_backtest
+    from tradebot.backtest import backtest as run_backtest
+
+    if method not in METHODS:
+        raise typer.BadParameter(f"method must be one of {', '.join(METHODS)}", param_hint="--method")
+    if source not in SOURCES:
+        raise typer.BadParameter(f"source must be one of {', '.join(SOURCES)}", param_hint="--source")
+    if runs < 1:
+        raise typer.BadParameter("runs must be at least 1", param_hint="--runs")
+    algorithm = make_algo(algo, param, members, entry, exit)
+    df = load_data(symbol, tf, start, end, bars)
+    res = run_backtest(df, algorithm, fee=fee)
+    try:
+        mc = from_backtest(res, runs, source=source, method=method, block_length=block, dd_threshold=max_dd, seed=seed)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+    console.print(f"[bold]{algorithm!r}[/] on {symbol} {tf}: {mc.runs} {mc.method} runs over {mc.items} {mc.source}"
+                  + (f" in blocks of {mc.block_length}" if mc.block_length else ""))
+    t = Table(title="Monte Carlo")
+    for col, just in (("metric", "left"), ("backtest", "right"), ("5%", "right"), ("median", "right"), ("95%", "right"),
+                      ("probability", "right")):
+        t.add_column(col, justify=just)
+    for label, actual, band, prob in mc.rows():
+        t.add_row(label, *(["–"] * 4 if band is None else [f"{actual:.1%}", *(f"{v:.1%}" for v in band)]),
+                  "–" if prob is None else f"{prob:.1%}")
+    console.print(t)
+    if mc.method == "shuffle":
+        console.print("[dim]Shuffling keeps the final return of every run; only the drawdown depends on the order.[/]")
+
+
+
 def _slippage(value: str | None, symbol: str | None) -> float:
     """``--slippage`` (basis points, 'auto' or unset) as a fraction."""
     from tradebot.backtest import bps
