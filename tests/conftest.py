@@ -21,6 +21,15 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip)
 
 
+def _flush_deferred_deletes(module):
+    """deleteLater() is not honoured by a bare processEvents(): destroy those widgets now, in order, not at exit."""
+    from PyQt6.QtCore import QEvent
+    qapp = module.QApplication.instance()
+    if qapp is not None:
+        qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        qapp.processEvents()
+
+
 @pytest.fixture(autouse=True)
 def _collect_garbage_between_gui_tests(request):
     """Free reference cycles between GUI tests, never in the middle of one.
@@ -37,8 +46,10 @@ def _collect_garbage_between_gui_tests(request):
     try:
         yield
     finally:
+        _flush_deferred_deletes(request.module)
         gc.enable()
         gc.collect()
+        _flush_deferred_deletes(request.module)
 
 
 @pytest.fixture(autouse=True)
