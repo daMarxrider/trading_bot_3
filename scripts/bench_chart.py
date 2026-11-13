@@ -2,11 +2,15 @@
 # Copyright (C) 2026 daMarxrider
 """Chart view benchmark (#68): redraw and pan times for growing candle counts.
 
-    uv run python scripts/bench_chart.py [--sizes 500 5000 50000] [--repeat 3]
+    uv run python scripts/bench_chart.py [--sizes 500 5000 50000] [--repeat 3] [--onscreen] [--opengl]
 
 Offscreen, 1400x800, dark theme. A *redraw* is ``ChartView.redraw()`` plus painting the canvas once; a *pan
 frame* is one scroll step (a tenth of the visible span, auto-fit on) plus painting. The view shows half of the
 candles while panning, like a user scrolled into the history.
+
+``--onscreen`` uses the real display and repaints the visible window instead of grabbing it offscreen;
+``--opengl`` (implies ``--onscreen``: it needs a GL context) gives the canvas the OpenGL viewport of the
+"GPU rendering" setting (#71). Compare ``--onscreen`` with ``--opengl`` for the pan fps with the setting off/on.
 """
 
 from __future__ import annotations
@@ -18,7 +22,8 @@ import tempfile
 import time
 from pathlib import Path
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+if not {"--onscreen", "--opengl"} & set(sys.argv):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 
 from conftest import make_ohlc  # noqa: E402
@@ -43,18 +48,28 @@ def main():
     ap.add_argument("--sizes", type=int, nargs="+", default=[500, 5000, 50000])
     ap.add_argument("--repeat", type=int, default=3)
     ap.add_argument("--pan-steps", type=int, default=20)
+    ap.add_argument("--onscreen", action="store_true", help="paint on the real display, not offscreen")
+    ap.add_argument("--opengl", action="store_true", help="OpenGL viewport for the canvas (needs a display)")
     args = ap.parse_args()
 
     app = QApplication.instance() or QApplication([])
     themes = ThemeManager(user_dir=Path(tempfile.mkdtemp()))
     themes.apply("dark")
-    chart = ChartView(None, themes, ["TEST"])
+    chart = ChartView(None, themes, ["TEST"], opengl=args.opengl)
+    if args.opengl and not chart.opengl:
+        sys.exit(chart.opengl_note)
     chart.resize(1400, 800)
     chart.show()
     app.processEvents()
+    onscreen = args.onscreen or args.opengl
+    print(f"renderer: {'OpenGL' if chart.opengl else 'raster'}, {'onscreen' if onscreen else 'offscreen'}")
 
     def paint():
-        chart.canvas.grab()
+        if onscreen:
+            chart.canvas.viewport().repaint()
+            app.processEvents()
+        else:
+            chart.canvas.grab()
 
     def redraw():
         chart.redraw()
@@ -86,9 +101,10 @@ def main():
         pan_full = pan_frame_ms()
         rows.append((n, candles, full, pan_plain, pan_full))
 
-    print(f"{'candles':>8} | {'redraw':>9} | {'redraw +3 ind':>13} | {'pan frame':>9} | {'pan +3 ind':>10}")
+    print(f"{'candles':>8} | {'redraw':>9} | {'redraw +3 ind':>13} | {'pan frame':>9} | {'pan +3 ind':>10} | {'pan fps +3 ind':>14}")
     for n, candles, full, pan_plain, pan_full in rows:
-        print(f"{n:>8,} | {candles:>6.0f} ms | {full:>10.0f} ms | {pan_plain:>6.0f} ms | {pan_full:>7.0f} ms")
+        print(f"{n:>8,} | {candles:>6.0f} ms | {full:>10.0f} ms | {pan_plain:>6.0f} ms | {pan_full:>7.0f} ms | "
+              f"{1000 / pan_full:>14.0f}")
 
 
 if __name__ == "__main__":
