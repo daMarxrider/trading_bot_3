@@ -19,6 +19,7 @@ from typing import Callable
 
 import pandas as pd
 
+from tradebot import notify
 from tradebot.algorithms.base import BaseAlgorithm
 from tradebot.brokers.base import BaseBroker
 from tradebot.core.models import Order, Side
@@ -52,6 +53,11 @@ class TradingBot:
     on_event: Callable[[BotEvent], None] | None = None
     holding: float = 0.0  #: base-asset amount this bot currently manages
     events: list[BotEvent] = field(default_factory=list)
+
+    def __post_init__(self):
+        if getattr(self.broker, "simulated", False) and not self.dry_run:  # resume a persistent paper account
+            held = self.broker.get_balance().get(self.base_asset)
+            self.holding = held.total if held else 0.0
 
     @property
     def base_asset(self) -> str:
@@ -92,9 +98,10 @@ class TradingBot:
         n = 0
         while max_steps is None or n < max_steps:
             try:
-                self.step()
+                notify.bot_event(self.step())
             except Exception:
                 log.exception("bot step failed for %s; retrying next candle", self.symbol)
+                notify.notify("error", f"Bot step failed: {self.symbol}", "See the log; retrying next candle.")
             n += 1
             if max_steps is not None and n >= max_steps:
                 break

@@ -200,6 +200,7 @@ class PopulationOptimizer(ABC):
         df: pd.DataFrame | Mapping[str, pd.DataFrame],
         *,
         fee: float = 0.001,
+        slippage: float = 0.0,
         objective: str = "sharpe",
         population: int = 256,
         generations: int = 30,
@@ -219,7 +220,7 @@ class PopulationOptimizer(ABC):
     ):
         self.algorithm = algorithm
         self.dca_amount = dca_amount  # monthly investing baseline; None = capital / months
-        self.fee, self.objective = fee, objective
+        self.fee, self.slippage, self.objective = fee, slippage, objective
         self.population, self.generations = population, generations
         self.min_trades = min_trades
         if backend == "auto" and not getattr(algorithm, "vectorized", True):
@@ -430,7 +431,7 @@ class PopulationOptimizer(ABC):
         if tuple(pos.shape) != shape:
             pos = pos.expand(shape) if ops.is_torch(pos) else np.broadcast_to(pos, shape)
         close, pos = close[..., warmup:], pos[..., warmup:]
-        returns = simulate(close, pos, self.fee)
+        returns = simulate(close, pos, self.fee, self.slippage)
         fit = batch_fitness(returns, ppy, self.objective)
         changes = ops.abs_(pos - ops.shift(pos, 1, fill=0.0)) > 0
         n_trades = changes.sum(-1) / 2
@@ -439,7 +440,7 @@ class PopulationOptimizer(ABC):
     def _buy_hold(self, close, ppy, warmup: int):
         """Buy & hold's objective on ``close`` (``[T]`` -> scalar, ``[K, 1, T]`` -> ``[K, 1]``)."""
         close = close[..., warmup:]
-        returns = simulate(close, ops.full(tuple(close.shape), 1.0, close), self.fee)
+        returns = simulate(close, ops.full(tuple(close.shape), 1.0, close), self.fee, self.slippage)
         fit = ops.nan_to_num(batch_fitness(returns, ppy, self.objective), -1e9)
         return fit.cpu() if ops.is_torch(fit) else fit
 
@@ -455,9 +456,9 @@ class PopulationOptimizer(ABC):
                                   skipped=self.skipped, aggregate=self.aggregate, objective=self.objective)
 
     def _symbol_result(self, d: _Data, tuned: BaseAlgorithm) -> SymbolResult:
-        train = backtest(d.train_df, tuned, self.fee, periods_per_year=d.ppy)
-        test = backtest(d.test_df, tuned, self.fee, periods_per_year=d.ppy) if len(d.test_df) > 2 else None
-        kw = dict(fee=self.fee, amount=self.dca_amount, periods_per_year=d.ppy)
+        train = backtest(d.train_df, tuned, self.fee, periods_per_year=d.ppy, slippage=self.slippage)
+        test = backtest(d.test_df, tuned, self.fee, periods_per_year=d.ppy, slippage=self.slippage) if len(d.test_df) > 2 else None
+        kw = dict(fee=self.fee, slippage=self.slippage, amount=self.dca_amount, periods_per_year=d.ppy)
         return SymbolResult(d.symbol, train, test, baselines(d.train_df, train, **kw),
                             baselines(d.test_df, test, **kw) if test is not None else None)
 
