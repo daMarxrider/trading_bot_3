@@ -19,6 +19,7 @@ from typing import Callable
 
 import pandas as pd
 
+from tradebot import notify
 from tradebot.algorithms.base import BaseAlgorithm
 from tradebot.brokers.base import BaseBroker
 from tradebot.core.models import Order, Side
@@ -92,9 +93,10 @@ class TradingBot:
         n = 0
         while max_steps is None or n < max_steps:
             try:
-                self.step()
+                notify.bot_event(self.step())
             except Exception:
                 log.exception("bot step failed for %s; retrying next candle", self.symbol)
+                notify.notify("error", f"Bot step failed: {self.symbol}", "See the log; retrying next candle.")
             n += 1
             if max_steps is not None and n >= max_steps:
                 break
