@@ -17,6 +17,7 @@ class ParamForm(QWidget):
         super().__init__(parent)
         self.form = QFormLayout(self)
         self.form.setContentsMargins(0, 0, 0, 0)
+        self.form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)  # a wide font wraps the field under its label
         self.editors: dict[str, QSpinBox | QDoubleSpinBox] = {}
         self.set_space(space, values)
 
@@ -35,8 +36,10 @@ class ParamForm(QWidget):
                 box.setRange(spec.low, spec.high)
                 box.setSingleStep((spec.high - spec.low) / 100 or 0.1)
             box.setValue(values.get(key, spec.default))
+            box.setMinimumWidth(min(box.minimumSizeHint().width(), 90))  # a wide font must not widen the side panel
             self.editors[key] = box
             self.form.addRow(key.replace("_", " "), box)
+            self.form.labelForField(box).setWordWrap(True)  # a long name wraps instead of widening the side panel
             if spec.description:
                 for widget in (box, self.form.labelForField(box)):
                     widget.setToolTip(tooltip(spec.description))

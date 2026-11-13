@@ -2,7 +2,7 @@
 # Copyright (C) 2026 daMarxrider
 """Market index universes for the Scanner (#110): ``index_symbols("sp500")`` -> provider-ready symbols.
 
-Constituents come from public lists (Wikipedia tables, CoinGecko for crypto), are kept in the cache folder's
+Constituents come from public lists (Wikipedia tables, Nasdaq's API, CoinGecko for crypto; the Dow is bundled), are kept in the cache folder's
 ``symbols/`` for a week, and fall back to the stale cache when offline and to a small bundled list when there's
 no cache, so an index is never empty. At most :data:`MAX_SYMBOLS` symbols per index.
 """
@@ -57,6 +57,12 @@ def yahoo_symbol(ticker: str, suffix: str = "") -> str:
     return ticker if suffix else ticker.replace(".", "-")
 
 
+def nasdaq100() -> list[str]:
+    """The Nasdaq-100 from Nasdaq's own list API (Wikipedia's page no longer has a ticker table)."""
+    rows = json.loads(_get("https://api.nasdaq.com/api/quote/list-type/nasdaq100"))["data"]["data"]["rows"]
+    return [yahoo_symbol(r["symbol"]) for r in rows if r.get("symbol")]
+
+
 def coingecko_top(n: int = 100) -> list[str]:
     rows = json.loads(_get("https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc"
                            f"&per_page={n + 20}&page=1"))
@@ -75,9 +81,10 @@ class Index:
 
 INDICES: dict[str, Index] = {i.key: i for i in (
     Index("sp500", "^GSPC", "S&P 500", "🇺🇸", lambda: wiki_column("List_of_S%26P_500_companies", ("Symbol",))),
-    Index("nasdaq100", "^NDX", "Nasdaq 100", "🇺🇸", lambda: wiki_column("Nasdaq-100", ("Ticker", "Symbol"))),
-    Index("dow30", "^DJI", "Dow Jones Industrial Average", "🇺🇸",
-          lambda: wiki_column("Dow_Jones_Industrial_Average", ("Symbol",))),
+    Index("nasdaq100", "^NDX", "Nasdaq 100", "🇺🇸", nasdaq100),
+    # no public ticker list for the Dow is reachable any more (Wikipedia dropped the table): the bundled
+    # list is complete (30 names) and only changes a few times a decade
+    Index("dow30", "^DJI", "Dow Jones Industrial Average", "🇺🇸", lambda: list(BUNDLED["dow30"])),
     Index("dax40", "^GDAXI", "DAX 40", "🇩🇪", lambda: wiki_column("DAX", ("Ticker",), ".DE")),
     Index("ftse100", "^FTSE", "FTSE 100", "🇬🇧", lambda: wiki_column("FTSE_100_Index", ("Ticker", "EPIC"), ".L")),
     Index("crypto_top100", "—", "Top 100 crypto by market cap", "₿", coingecko_top),
