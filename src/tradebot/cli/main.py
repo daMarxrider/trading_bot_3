@@ -988,9 +988,17 @@ def bot_run(
     live: Annotated[bool, typer.Option(help="Actually place orders (default: dry run)")] = False,
     sandbox: Annotated[bool, typer.Option(help="Use the exchange testnet (ccxt brokers)")] = False,
     once: Annotated[bool, typer.Option(help="Evaluate a single candle and exit")] = False,
+    max_daily_loss: Annotated[float, typer.Option(help="Halt for the day after losing this much (quote currency)")] = 0.0,
+    max_drawdown: Annotated[float, typer.Option(help="Halt when equity falls this many % of the stake below its peak")] = 0.0,
+    max_exposure: Annotated[float, typer.Option(help="Reject entries that would push the position above this value")] = 0.0,
+    max_order: Annotated[float, typer.Option(help="Reject orders above this value")] = 0.0,
+    price_band: Annotated[float, typer.Option(help="Reject entries when the exchange price is this many % off the last close")] = 0.0,
+    cooldown_losses: Annotated[int, typer.Option(help="Pause entries after this many losing trades in a row")] = 0,
+    cooldown_minutes: Annotated[float, typer.Option(help="Length of that pause")] = 60.0,
+    close_on_halt: Annotated[bool, typer.Option(help="Sell the open position when a limit halts the bot")] = False,
 ):
-    """Run an algorithm live against a broker (dry run unless --live)."""
-    from tradebot.live import TradingBot
+    """Run an algorithm live against a broker (dry run unless --live). Limits are off at 0; `bot kill` stops it."""
+    from tradebot.live import RiskLimits, TradingBot
 
     confirm_live_risk(live)
 
@@ -998,7 +1006,10 @@ def bot_run(
     b = create_broker(broker, **kwargs)
     if live and not b.can_trade:
         raise typer.BadParameter(f"{broker} is read-only")
+    limits = RiskLimits(max_daily_loss or None, max_drawdown or None, max_exposure or None, max_order or None,
+                        price_band or None, cooldown_losses, cooldown_minutes, close_on_halt)
     bot = TradingBot(b, make_algo(algo, param, members, entry, exit), symbol, tf, stake, dry_run=not live,
+                     risk=limits, on_risk=lambda e: console.print(f"[red]risk guard {e.kind}:[/] {e.message}"),
                      on_event=lambda e: console.print(
                          f"[dim]{e.time:%Y-%m-%d %H:%M}[/] {symbol} target={e.target:.2f} "
                          f"price={e.price:.6g} → [bold]{e.action}[/] {e.amount:.6g}"
@@ -1010,6 +1021,24 @@ def bot_run(
         bot.run(max_steps=1 if once else None)
     except KeyboardInterrupt:
         console.print("stopped")
+
+
+@bot_app.command("kill")
+def bot_kill():
+    """Kill switch: every running `bot run` stops trading at its next check (#154)."""
+    from tradebot.live.risk import kill_file, set_kill
+
+    set_kill(True)
+    console.print(f"[red]kill switch on[/] ({kill_file()}); `tradebot bot resume` turns it off")
+
+
+@bot_app.command("resume")
+def bot_resume():
+    """Turn the kill switch off. A bot that already halted needs a restart."""
+    from tradebot.live.risk import set_kill
+
+    set_kill(False)
+    console.print("kill switch off")
 
 
 @bot_app.command("pair-run")
