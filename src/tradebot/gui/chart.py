@@ -6,6 +6,7 @@ algorithm buy/sell markers, crosshair, and drawing tools
 
 from __future__ import annotations
 
+from dataclasses import replace
 from html import escape
 
 import numpy as np
@@ -42,6 +43,7 @@ from tradebot.gui.common import (
 from tradebot.gui.news import NewsPanel
 from tradebot.gui.params import ParamDialog
 from tradebot.gui.sidebar import ChartSidebar
+from tradebot.gui.style_dialog import StyleDialog
 from tradebot.gui.theme import Theme, ThemeManager, qcolor, resolve_color
 from tradebot.gui.touch import PlotTouchHandler, TouchController
 from tradebot.gui.watchlists import WatchlistPanel
@@ -621,6 +623,9 @@ class ChartView(QWidget):
         for ind in self.indicators:
             act = self.ind_menu.addAction(f"✓ {ind.label}  (remove)")
             act.triggered.connect(lambda _, i=ind: self._remove_indicator(i))
+            if self._styled_outputs(ind):
+                act = self.ind_menu.addAction(f"    {ind.name}: line colours…")
+                act.triggered.connect(lambda _, i=ind: self._edit_styles(i))
         if self.indicators:
             self.ind_menu.addSeparator()
         for cls in INDICATORS:
@@ -632,6 +637,48 @@ class ChartView(QWidget):
         if values is not None:
             self.indicators.append(cls(**values))
             self.redraw()
+
+    STYLES_KEY = "chart.styles"  #: settings: {indicator name: {output: {"color", "width", "dash"}}} (#52)
+
+    def _styled_outputs(self, ind) -> list[str]:
+        """Outputs of ``ind`` drawn as plain lines, whose look the user may change."""
+        return [o for o in ind.outputs if o not in ind.labels and o not in ind.hidden and o != "hist"
+                and not o.endswith("_hist")]
+
+    def _style_of(self, ind, output: str) -> Style:
+        """The indicator's own style for an output with the user's override on top."""
+        base = ind.styles.get(output, Style())
+        over = (self.settings.get(self.STYLES_KEY, {}) if self.settings else {}).get(ind.name, {}).get(output)
+        return replace(base, **{k: v for k, v in over.items() if k in ("color", "width", "dash")}) if over else base
+
+    def _edit_styles(self, ind):
+        t = self.themes.current
+        slot = self._palette_slot(ind)
+        rows = []
+        for k, out in enumerate(ind.outputs):
+            if out not in self._styled_outputs(ind):
+                continue
+            st = self._style_of(ind, out)
+            color = resolve_color(t, st.color) if st.color else t.series[(slot + k) % len(t.series)]
+            rows.append((out, qcolor(color).name(), st.width or 1.6, st.dash if st.dash in ("dash", "dot") else None))
+        dlg = StyleDialog(f"{ind.label}: line colours", rows, self)
+        if not dlg.exec():
+            return
+        self.set_style_overrides(ind.name, dlg.overrides(), merge=not dlg.reset_requested)
+
+    def set_style_overrides(self, name: str, overrides: dict, merge: bool = True):
+        """Remember ``overrides`` ({output: {color, width, dash}}) for indicator ``name`` and redraw."""
+        if self.settings is not None:
+            data = {k: dict(v) for k, v in self.settings.get(self.STYLES_KEY, {}).items()}
+            mine = data.get(name, {}) if merge else {}
+            for out, fields in overrides.items():
+                mine[out] = {**mine.get(out, {}), **fields}
+            if mine:
+                data[name] = mine
+            else:
+                data.pop(name, None)
+            self.settings.set(self.STYLES_KEY, data)
+        self.redraw()
 
     def _remove_indicator(self, ind):
         self.indicators.remove(ind)
@@ -772,11 +819,15 @@ class ChartView(QWidget):
             if not ind.overlay:
                 target = spare.pop(0) if spare else self._new_pane()
                 for level in ind.levels:
-                    target.addItem(pg.InfiniteLine(level, angle=0, pen=pg.mkPen(qcolor(t.muted), style=Qt.PenStyle.DotLine)))
+                    ls = ind.level_styles.get(level, Style())
+                    pen = pg.mkPen(qcolor(resolve_color(t, ls.color) if ls.color else t.muted), width=ls.width or 1,
+                                   style=DASHES.get(ls.dash, Qt.PenStyle.DotLine))
+                    target.addItem(pg.InfiniteLine(level, angle=0, pen=pen))
                 self.panes.append(target)
             values = []  # this indicator's drawn outputs for the value line
             self._rows.setdefault(target, []).append((_spaced_label(ind.name, ind.values), values))
             slot = self._palette_slot(ind)
+            curves = {}  # output -> (x, y) as drawn, for the fills
             for k, col in enumerate(frame.columns):
                 if not ind.is_line(col):
                     self._draw_labels(target, ind, frame, col, x, c, t)
@@ -785,7 +836,7 @@ class ChartView(QWidget):
                 if target is self.price:
                     y = ty(y)
                 ok = np.isfinite(y)
-                style = ind.styles.get(ind.output_of(col), Style())
+                style = self._style_of(ind, ind.output_of(col))
                 hist = col.endswith("_hist")
                 default = t.muted if hist else t.series[(slot + k) % len(t.series)]
                 color = qcolor(resolve_color(t, style.color) if style.color else default)
@@ -797,9 +848,19 @@ class ChartView(QWidget):
                 else:
                     pen = pg.mkPen(color, width=style.width or 1.6, style=DASHES.get(style.dash, Qt.PenStyle.SolidLine))
                     target.addItem(Curve(x[ok], y[ok], pen=pen, name=col))
+                    curves[ind.output_of(col)] = y
                 color = color.name()  # "#rrggbb" for the value line's rich text
                 self._fit_series.setdefault(target, []).append(y)
                 values.append((raw, color))  # the readout shows prices, also on the log scale
+            for a, b, fill in ind.fills:  # behind the lines; not in _fit_series, so they never change the auto-fit
+                if a in curves and b in curves:
+                    both = np.isfinite(curves[a]) & np.isfinite(curves[b])
+                    if both.any():
+                        item = pg.FillBetweenItem(pg.PlotCurveItem(x[both], curves[a][both]),
+                                                  pg.PlotCurveItem(x[both], curves[b][both]),
+                                                  brush=pg.mkBrush(qcolor(resolve_color(t, fill.color or "muted"))))
+                        item.setZValue(-5)
+                        target.addItem(item)
         self._drop_panes(spare)
         if self.algorithm is not None:
             self._positions = self.algorithm.run(df).to_numpy()

@@ -150,6 +150,13 @@ def watchlists(incomplete: str) -> Completion:
     return _starting(incomplete, [(n, f"{len(s)} symbols") for n, s in lists().items()] + [("all", "every watchlist")])
 
 
+def indices(incomplete: str) -> Completion:
+    """``--index`` for scan: the index keys with their titles."""
+    from tradebot.universes import INDICES
+
+    return _starting(incomplete, [(k, i.title) for k, i in INDICES.items()])
+
+
 def choices(*items: tuple[str, str]):
     """Completion for a fixed set of values, e.g. ``--method``."""
     return lambda incomplete: _starting(incomplete, list(items))

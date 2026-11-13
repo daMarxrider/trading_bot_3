@@ -36,7 +36,10 @@ def lab(app, tmp_path):
     view.show()
     view.algo.setCurrentText("sma_cross")
     QApplication.processEvents()
-    return view
+    yield view
+    view.close()  # a shown view freed by Python's refcount segfaults in sip (#143)
+    view.deleteLater()
+    QApplication.processEvents()
 
 
 def run(lab, df, kind="backtest"):

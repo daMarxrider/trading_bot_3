@@ -311,3 +311,163 @@ def test_cli_evolve_and_save(monkeypatch, tmp_path):
     monkeypatch.setenv("TRADEBOT_PLUGIN_DIR", str(tmp_path))
     bt = CliRunner().invoke(cli.app, ["backtest", "X", "evolved_cli", "--no-plot"], env={"COLUMNS": "200"})
     assert bt.exit_code == 0, bt.output
+
+
+def test_best_result_settings_cover_the_evolver_and_scale_with_data():
+    import inspect
+
+    from tradebot.evolve import Evolver, best_result_settings
+
+    small, big = best_result_settings(500), best_result_settings(6000)
+    assert big["max_depth"] > small["max_depth"] and big["min_trades"] >= small["min_trades"]
+    assert big["folds"] > small["folds"] == 0
+    assert best_result_settings(3000, from_scratch=True)["max_depth"] >= 8  # an RSI fits
+    assert best_result_settings(3000, 5)["aggregate"] == "mean-std"
+    allowed = set(inspect.signature(Evolver).parameters) | {"permutations", "folds"}
+    for kw in (small, big, best_result_settings(3000, from_scratch=True)):
+        assert set(kw) <= allowed
+        assert kw["population"] > 300 and kw["generations"] > 40 and kw["permutations"] >= 19
+        extra = {k: v for k, v in kw.items() if k not in ("permutations", "folds")}
+        Evolver(make_ohlc(900), **{**extra, "population": 8}, seed=1)  # valid
+
+
+def test_best_result_cli_flag_is_overridable(monkeypatch):
+    from typer.testing import CliRunner
+
+    from tradebot.cli import main as cli
+
+    seen = {}
+
+    def fake(df, **kw):
+        seen.update(kw)
+        raise ValueError("stop here")
+
+    monkeypatch.setattr("tradebot.evolve.evolve", fake)
+    monkeypatch.setattr(cli, "load_data", lambda *a, **k: make_ohlc(900))
+    CliRunner().invoke(cli.app, ["evolve", "X", "--best-result", "--generations", "3"])
+    assert seen["generations"] == 3 and seen["population"] > 300 and seen["permutations"] == 20
+    CliRunner().invoke(cli.app, ["evolve", "X", "--best-result", "--effort", "good"])
+    assert seen["permutations"] == 10 and seen["generations"] == 60
+
+
+def test_auto_configure_keeps_the_test_part_out_and_returns_runnable_settings():
+    from tradebot.evolve import auto_configure
+    from tradebot.evolve.autoconfig import hold_out
+
+    df = make_ohlc(900, seed=3)
+    assert hold_out(df, 0.2).index[-1] < df.index[-180]
+    assert len(hold_out({"A": df, "B": df}, 0.0)["A"]) == 900
+    seen = []
+    cfg = auto_configure(df, level="good", candidates=4, rounds=2, population=24, generations=4, seed=1,
+                         on_trial=lambda i, n, label: seen.append((i, n)))
+    assert seen[-1][0] == 5 and seen[-1][1] == 6 and len(cfg.trials) == 6  # 4 + 2 candidates
+    assert cfg.test == 0.2 and cfg.settings["population"] == 24 and cfg.settings["permutations"] == 10
+    assert any("kept out" in line for line in cfg.report())
+    # the chosen settings run on the whole data, test part included
+    settings = {k: v for k, v in cfg.settings.items() if k not in ("permutations", "folds")}
+    res = evolve(df, permutations=0, folds=0, **{**settings, "population": 24, "generations": 3, "seed": 2})
+    assert res.test_start is not None
+
+
+def test_auto_configure_finds_no_edge_in_a_random_walk():
+    """The test part is untouched by the outer search, so on pure noise the final score cannot be bought
+    with the settings: the permutation test must not call it an edge."""
+    from tradebot.evolve import auto_configure
+
+    rng = np.random.default_rng(11)
+    close = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, 900)))
+    idx = pd.date_range("2020-01-01", periods=900, freq="D")
+    df = pd.DataFrame({"open": close, "high": close * 1.002, "low": close * 0.998, "close": close,
+                       "volume": 1000.0}, index=idx)
+    cfg = auto_configure(df, level="good", candidates=4, rounds=2, population=24, generations=4, seed=5)
+    settings = {k: v for k, v in cfg.settings.items() if k not in ("permutations", "folds")}
+    res = evolve(df, permutations=19, folds=0, **{**settings, "population": 24, "generations": 4, "seed": 6})
+    assert res.permutation.p > 0.05  # beating all 19 shuffled runs would be an edge
+
+
+def test_auto_settings_cli_flag(monkeypatch):
+    from typer.testing import CliRunner
+
+    from tradebot.cli import main as cli
+    from tradebot.evolve import AutoConfig, best_result_settings
+
+    seen = {}
+
+    def fake(df, **kw):
+        seen.update(kw)
+        raise ValueError("stop here")
+
+    chosen = {**best_result_settings(900), "population": 77, "generations": 9, "parsimony": 0.011}
+    monkeypatch.setattr("tradebot.evolve.evolve", fake)
+    monkeypatch.setattr("tradebot.evolve.auto_configure", lambda df, **kw: AutoConfig(chosen))
+    monkeypatch.setattr(cli, "load_data", lambda *a, **k: make_ohlc(900))
+    CliRunner().invoke(cli.app, ["evolve", "X", "--auto-settings", "--generations", "3"])
+    assert seen["generations"] == 3 and seen["population"] == 77 and seen["parsimony"] == 0.011
+
+
+def test_levels_good_is_cheaper_than_best():
+    from tradebot.evolve import best_result_settings
+
+    for scratch in (False, True):
+        good, best = (best_result_settings(3000, 2, from_scratch=scratch, level=lv) for lv in ("good", "best"))
+        assert 300 < good["population"] < best["population"] and good["generations"] < best["generations"]
+        assert good["permutations"] < best["permutations"] and good["folds"] <= best["folds"]
+    with pytest.raises(ValueError):
+        best_result_settings(3000, level="great")
+
+
+def test_robustness_rewards_the_robust_candidate():
+    """Same validation score: walk-forward folds, the shuffled-price margin, the deflated Sharpe ratio and
+    consistency across symbols all move the score."""
+    from tradebot.evolve import autoconfig as ac
+    from tradebot.evolve.search import Deflated, PermutationTest, WalkForward
+
+    class Part:
+        def __init__(self, score):
+            self.score = score
+
+    class Fold:
+        def __init__(self, score):
+            self.score = score
+
+        def aggregated(self, part):
+            return self.score
+
+    class R:
+        multi, symbols = False, [object()]
+        walk_forward = permutation = deflated = None
+
+        def aggregated(self, part):
+            return 1.0 if part == "validation" else 1.2
+
+        def trades(self, part):
+            return 10
+
+        def beats(self, part):
+            return {ac.BUY_HOLD: 1}
+
+    plain = ac.robustness(R())
+    assert plain == pytest.approx(1.0 - ac.GAP_WEIGHT * 0.2)
+    r = R()
+    r.walk_forward = WalkForward([Fold(1.0), Fold(-1.0)])
+    assert ac.robustness(r) < plain
+    r = R()
+    r.permutation = PermutationTest(1.0, [1.5, 0.2])
+    assert ac.robustness(r) < plain
+    r = R()
+    r.deflated = Deflated(0.5, 0.1, 0.2, 100)
+    assert ac.robustness(r) == pytest.approx(plain - ac.DEFLATE_WEIGHT * 0.45)
+    r = R()
+    r.multi, r.symbols = True, [object()] * 4
+    r.beats = lambda part: {ac.BUY_HOLD: 1}
+    assert ac.robustness(r) == pytest.approx(plain - ac.CONSISTENCY_WEIGHT * 0.75)
+
+
+def test_auto_configure_best_level_runs_folds_and_shuffled_prices():
+    from tradebot.evolve import auto_configure
+
+    cfg = auto_configure(make_ohlc(1200, seed=4), level="best", candidates=2, rounds=1, population=16, generations=3,
+                         permutations=2, folds=2, seed=3)
+    t = cfg.trials[0]
+    assert cfg.level == "best" and len(t.folds) == 2 and t.margin is not None and t.deflated is not None
+    assert any("margin over shuffled" in line and "folds" in line for line in cfg.report())

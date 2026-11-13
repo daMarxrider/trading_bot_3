@@ -4,7 +4,6 @@
 
 import os
 
-import sys
 
 import pytest
 
@@ -46,7 +45,10 @@ def lab(app, tmp_path, monkeypatch):
     view.generations.setValue(2)
     monkeypatch.setattr("tradebot.gui.views.run_async", lambda work, done, fail: done(work()))
     QApplication.processEvents()
-    return view
+    yield view
+    view.close()  # a shown view freed by Python's refcount segfaults in sip (#143)
+    view.deleteLater()
+    QApplication.processEvents()
 
 
 def test_watchlist_menu_fills_the_symbols(lab):
@@ -140,7 +142,6 @@ def test_optional_beating_and_random_windows(lab, monkeypatch):
     assert lab.per_symbol_card.isVisible()
 
 
-@pytest.mark.xfail(sys.platform == "win32", reason="#6: the offscreen Windows font makes the plugin test algorithm's panel 549 px wide against a 370 px viewport")
 def test_side_panel_never_scrolls_sideways(lab):
     scroll = lab.findChild(QScrollArea)
     for i in range(lab.algo.count()):  # each algorithm has its own parameter rows; a pool also shows its cards
