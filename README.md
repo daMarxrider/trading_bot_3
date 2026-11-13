@@ -200,6 +200,9 @@ tradebot bot pair-run BTC/USDT:USDT ETH/USDT:USDT --once       # live pair bot (
 tradebot halving --live                                        # Bitcoin halvings and the forecast of the next
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50          # dry run
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50 --live   # real orders
+tradebot bot run ETH/USDT sma_cross --tf 1h --stake 50 --paper                   # simulated account that survives restarts
+tradebot paper show                 # paper account: cash, positions, P&L, latest orders
+tradebot paper reset --balance 5000 # start over
 tradebot positions --broker kucoin
 tradebot portfolio --broker scalable --broker binance
 tradebot screen -f "rsi < 35" -f "close > sma200"
@@ -207,6 +210,8 @@ tradebot news AAPL NVDA BTC/USDT
 tradebot news --watchlist Crypto   # without symbols: one watchlist (default: all of them)
 tradebot cache info                 # cache folder, size, number of cached series
 tradebot cache clear [--ohlc|--symbols]
+tradebot notify test                # send a test message to every notification channel
+tradebot scan --alert cross_up --notify   # send the scan's matches to the channels
 ```
 
 `--bars N` returns exactly N candles, also for stocks, whose markets close on
@@ -240,6 +245,16 @@ Charts are rendered with plotext, so they work in fish, bash and zsh.
 `optimize` evolves parameters on the first 70 % of the data and reports the
 remaining 30 % out-of-sample. Candidates with fewer than `--min-trades` round
 trips are rejected.
+
+**Slippage.** Fills at the close are optimistic, most of all on short timeframes and thin
+symbols. `--slippage 5` (basis points per side, 0.05%) charges a spread/slippage cost on every
+position change on top of the fee. It is 0 by default, so existing results do not change, and it
+is applied identically in `backtest`, `optimize` (GA/PSO, NumPy and torch), `evolve`, walk-forward
+and the baselines. `--slippage auto` uses a suggestion for the asset class (crypto 5, stocks 2,
+currencies 1 bp). A default goes into `config.toml` (`[backtest] slippage_bps = 3`, or per asset
+class `slippage_bps = { crypto = 5, stock = 2 }`); the Backtest lab and Evolve page have a
+"Slippage / side" field (initialised from the config). Multi-symbol searches use one value, taken
+from the first symbol's asset class for `auto`/the config table.
 
 **Baselines.** `backtest` and `optimize` (in- and out-of-sample) show the strategy
 next to two things it has to beat, on the same candles and with the same fee:
@@ -589,7 +604,7 @@ number of symbols, and `--permutations N` repeats the whole search N times.
   `A:B` (e.g. `KO:PEP`) is also a symbol everywhere: candles of the ratio, converted into one currency.
 * **Volume** (#116): candles carry volume next to open/high/low/close (`o.volume` in indicators, scripts and
   algorithms; NaN when the symbol has none), with a volume pane in the chart (`vol` button, `--volume/--no-volume`
-  in the CLI chart) and the Volume, OBV, VWAP, MFI and volume-ratio indicators. Prices are the same whichever venue
+  in the CLI chart) and the Volume, OBV, VWAP, MFI and volume-ratio indicators (plus the volume profile and anchored VWAP). Prices are the same whichever venue
   delivered the candles, **volume is not**: one exchange's BTC volume isn't another's, so results that use volume
   can differ between data providers.
 * **Screener**: filter any universe by technicals, volume and market cap using
@@ -696,6 +711,9 @@ holdings_csv = "~/finance/scalable.csv"   # columns: symbol,quantity,avg_cost
 
 [tools]
 sc = "/opt/scalable/sc"     # optional; default: found on PATH
+
+[backtest]
+slippage_bps = 0            # slippage per side in basis points; a number, or { crypto = 5, stock = 2 }
 ```
 
 The settings dialog writes `theme`, the `[tools]` paths and the broker keys to this file, so the app
@@ -734,6 +752,37 @@ enabled = true    # false: keep candles in memory only
 max_mb = 500
 ```
 
+### Notifications
+
+Bot trades (`trade`), failed bot steps (`error`), risk-guard stops (`risk`) and
+scanner hits (`scanner`, with `tradebot scan --notify`) can be pushed to
+Telegram, a Discord webhook, a generic JSON webhook, email or the desktop
+(`notify-send` on Linux, `osascript` on macOS, else the app's tray). Configure
+them under Settings > Notifications or by hand, one table per channel; `events`
+filters the kinds (default: all):
+
+```toml
+[notify.phone]
+type = "telegram"
+token = "$TELEGRAM_TOKEN"   # "$NAME" or "env:NAME" reads the environment, keeping the secret out of the file
+chat_id = "12345678"
+events = ["trade", "error"]
+
+[notify.mail]
+type = "email"              # also: discord (url), webhook (url), desktop
+host = "smtp.example.com"
+port = 587                  # 465: SSL, otherwise STARTTLS
+user = "me@example.com"
+password = "$SMTP_PASSWORD"
+to = "me@example.com"
+```
+
+Sends run in the background with a 10 s timeout; a failure is only logged (never
+with the secrets) and can't stop a bot. `tradebot notify test` or the test button
+sends to every enabled channel. Code raises an event with
+`tradebot.notify.notify("risk", title, text)` and adds a channel type with
+`@notify.channel(...)`.
+
 Settings the app remembers by itself (such as the chart's auto-fit toggle) are
 saved in `settings.json` in the OS config folder, not in `config.toml`:
 `$XDG_CONFIG_HOME/tradebot/` (usually `~/.config/tradebot/`) on Linux,
@@ -750,7 +799,8 @@ example `TRADEBOT_BINANCE_SECRET`. The optional data providers read
 src/tradebot/
   core/        ops (NumPy/torch time-series primitives), OHLC container, registry + plugin loader, models
   indicators/  BaseIndicator + built-ins (SMA, EMA, RSI, MACD, Bollinger, ATR, Stochastic, Donchian, Ichimoku,
-               Elliott waves, Bitcoin halving cycle)
+               Elliott waves, Bitcoin halving cycle, ADX, Supertrend, Parabolic SAR, Keltner, CCI, Williams %R, ROC,
+               momentum, pivots, volume profile, anchored VWAP)
   algorithms/  BaseAlgorithm + built-ins (rsi_threshold, macd_cross, ichimoku_cloud, sma_cross,
                bollinger_reversion, range, vote ensemble, elliott_wave, halving_cycle)
   analysis/    loop-based pattern detection (Elliott waves), Bitcoin halving schedule and forecast
@@ -767,7 +817,7 @@ src/tradebot/
 
 **One execution model.** An algorithm returns a target position per bar (1
 long, 0 flat, −1 short when allowed). The position decided at bar *t*'s close
-earns bar *t+1*'s return, and fees are charged on every position change. The
+earns bar *t+1*'s return, and fees (plus the optional slippage) are charged on every position change. The
 backtester, the optimizer and the live bot all use this model, so there is no
 look-ahead and live behaviour matches backtests.
 
@@ -789,6 +839,23 @@ mode:
   Orders become `OrderIntent`s for you to execute by hand, and holdings are
   read from a CSV.
 * `read_only`: tracking only.
+
+## Paper trading
+
+`tradebot bot run ... --paper` (or `--broker paper`) trades a simulated account: orders fill at the last price of the
+real data source minus the backtester's proportional fee (0.1 % by default). Cash, positions and the order history are
+saved after every order to `paper_account.json` in the app's config folder (next to `settings.json`), written
+atomically, so a restart resumes with the same holdings. `tradebot paper show` prints equity and P&L,
+`tradebot paper reset` starts over. Optional settings:
+
+```toml
+[brokers.paper]
+starting_balance = 10000
+currency = "USDT"
+fee = 0.001
+```
+
+The fill price goes through `PaperBroker.fill_price`, the place to add a slippage model later. There is no GUI view yet.
 
 ## Elliott waves
 

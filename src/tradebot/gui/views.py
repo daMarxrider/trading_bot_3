@@ -43,7 +43,9 @@ from tradebot.algorithms.builtin import VotingEnsemble
 from tradebot.algorithms.combo import LOGIC, RISK, Combo, check, combine, save_combo, terms
 from tradebot.algorithms.pool import RULES, PoolEnsemble, default_pool
 from tradebot.backtest.baselines import BUY_HOLD, MONTHLY, baselines, buy_and_hold, monthly_investing
+from tradebot.backtest.engine import bps
 from tradebot.backtest.metrics import fmt
+from tradebot.backtest.slippage import configured_bps
 from tradebot.config import Settings, watchlists
 from tradebot.brokers import BROKERS, create_broker
 from tradebot.core.timeframes import TIMEFRAMES
@@ -606,6 +608,11 @@ class BacktestView(QWidget):
         self.fee.setDecimals(4)
         self.fee.setRange(0, 0.05)
         self.fee.setValue(0.001)
+        self.slippage = QDoubleSpinBox()  # basis points per side, charged on top of the fee (#146)
+        self.slippage.setDecimals(1)
+        self.slippage.setRange(0, 500)
+        self.slippage.setSuffix(" bp")
+        self.slippage.setValue(configured_bps())
         self.dca_amount = QDoubleSpinBox()  # the monthly-investing baseline (#19)
         self.dca_amount.setRange(0, 1e9)
         self.dca_amount.setDecimals(2)
@@ -718,8 +725,8 @@ class BacktestView(QWidget):
         form = QFormLayout()
         for label, w, term in (("Symbols", symbol_row, "symbol"), ("Timeframe", self.tf, "timeframe"),
                                ("Candles", self.bars, "candles"), ("Dates", self.dates, "dates"),
-                               ("Fee / side", self.fee, "fee"), ("Monthly amount", self.dca_amount, "dca_amount"),
-                               ("Algorithm", self.algo, "algorithm")):
+                               ("Fee / side", self.fee, "fee"), ("Slippage / side", self.slippage, "slippage"),
+                               ("Monthly amount", self.dca_amount, "dca_amount"), ("Algorithm", self.algo, "algorithm")):
             _explained_row(form, label, w, term)
         opt_form = QFormLayout()
         for label, w, term in (("Method", self.method, "method"), ("Population / swarm", self.population, "population"),
@@ -998,20 +1005,22 @@ class BacktestView(QWidget):
     def _amount(self) -> float | None:
         return self.dca_amount.value() or None  # 0 shows as "auto": capital / months
 
-    def _plot_baselines(self, df, fee, amount) -> dict:
+    def _plot_baselines(self, df, fee, amount, slippage: float = 0.0) -> dict:
         """Runs in the worker thread: both baselines over all candles, for the equity chart."""
-        return {BUY_HOLD: buy_and_hold(df, fee), MONTHLY: monthly_investing(df, fee, amount=amount)}
+        return {BUY_HOLD: buy_and_hold(df, fee, slippage=slippage),
+                MONTHLY: monthly_investing(df, fee, amount=amount, slippage=slippage)}
 
     def run_backtest(self):
         from tradebot.backtest import backtest
 
         algo, fee, amount = self._algorithm(), self.fee.value(), self._amount
+        slip = bps(self.slippage.value())
         self._busy(True)
 
         def one(df):
-            res = backtest(df, algo, fee=fee)
-            return df, {"backtest": res, "_baselines": {"backtest": baselines(df, res, fee, amount=amount)},
-                        "_plot_baselines": self._plot_baselines(df, fee, amount)}
+            res = backtest(df, algo, fee=fee, slippage=slip)
+            return df, {"backtest": res, "_baselines": {"backtest": baselines(df, res, fee, amount=amount, slippage=slip)},
+                        "_plot_baselines": self._plot_baselines(df, fee, amount, slip)}
 
         def work():
             data = self._data()
@@ -1088,7 +1097,7 @@ class BacktestView(QWidget):
         algo, fee = self._algorithm(), self.fee.value()
         method = self.method.currentData()
         kwargs = dict(population=self.population.value(), generations=self.generations.value(),
-                      objective=self.objective.currentText(), fee=fee, min_trades=4, dca_amount=self._amount,
+                      objective=self.objective.currentText(), fee=fee, slippage=bps(self.slippage.value()), min_trades=4, dca_amount=self._amount,
                       aggregate=self.aggregate.currentText(), align=self.align.isChecked(),
                       min_symbols_beating=self.min_beating.value(), samples=self.samples.value(),
                       sample_length=self.sample_length.value())
@@ -1111,7 +1120,7 @@ class BacktestView(QWidget):
 
         def one(df, single, results):
             """The (df, results) payload of one symbol; ``single``(result) -> that symbol's part of a result."""
-            plot = self._plot_baselines(df, fee, kwargs["dca_amount"])
+            plot = self._plot_baselines(df, fee, kwargs["dca_amount"], kwargs["slippage"])
             if method == "both":
                 cmp, (ga, pso) = results, (single(results.ga), single(results.pso))
                 return df, {"GA in-sample": ga.train, "GA out-of-sample": ga.test,
@@ -1307,7 +1316,7 @@ class BacktestView(QWidget):
         stretches = [(str(f.index + 1), part.test.equity.index[0], part.test.equity.index[-1]) for f in wf.folds
                      if (part := self._fold_part(f, symbol)) is not None and part.test is not None]
         latest = wf.holdout or wf.folds[-1]
-        return df, {**results, "_baselines": bases, "_plot_baselines": self._plot_baselines(df, wf.fee, wf.dca_amount),
+        return df, {**results, "_baselines": bases, "_plot_baselines": self._plot_baselines(df, wf.fee, wf.dca_amount, wf.slippage),
                     "_chain": {"holdout": "walk-forward"}, "_stretches": stretches, "_params": latest.params,
                     "_selection": (algo, {"newest": latest.params})}
 
@@ -1403,7 +1412,7 @@ class BacktestView(QWidget):
         window = df[(df.index >= fold.start) & ((df.index < fold.end) if fold.end is not None else True)]
         self._render(window, {"in-sample": part.train, "out-of-sample": part.test, "_params": fold.params,
                               "_baselines": {"in-sample": part.train_baselines, "out-of-sample": part.test_baselines},
-                              "_plot_baselines": self._plot_baselines(window, wf.fee, wf.dca_amount),
+                              "_plot_baselines": self._plot_baselines(window, wf.fee, wf.dca_amount, wf.slippage),
                               "_selection": (algo, {f"fold {label}": fold.params}), "_comparison": fold.comparison})
 
     def _progress(self, step, best):
@@ -1466,7 +1475,7 @@ class BacktestView(QWidget):
         selection_algo, selection = results.pop("_selection", (None, {}))
         self._show_selection(selection_algo, selection)
         bases = results.pop("_baselines", {})
-        plot_bases = results.pop("_plot_baselines", None) or self._plot_baselines(df, self.fee.value(), self._amount)
+        plot_bases = results.pop("_plot_baselines", None) or self._plot_baselines(df, self.fee.value(), self._amount, bps(self.slippage.value()))
         self._show_comparison(comparison)
         self._show_not_beaten(bases)
         if params:

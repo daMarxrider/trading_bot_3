@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from tradebot.algorithms import ALGORITHMS, build_algorithm
@@ -30,6 +31,9 @@ app.add_typer(cache_app, name="cache")
 combo_app = typer.Typer(help="Saved strategy combos (combos.toml): entry and exit rules built from strategies and "
                              "indicator conditions.", no_args_is_help=True)
 app.add_typer(combo_app, name="combo")
+notify_app = typer.Typer(help="Notification channels ([notify.*] in config.toml): Telegram, Discord, webhook, "
+                              "email, desktop.", no_args_is_help=True)
+app.add_typer(notify_app, name="notify")
 console = Console()
 
 Params = Annotated[list[str], typer.Option("--param", "-p", help="Algorithm parameter, e.g. -p lower=30",
@@ -46,6 +50,9 @@ TF = Annotated[str, typer.Option("--tf", help="Timeframe: 1m 5m 15m 30m 1h 4h 1d
 Symbol = Annotated[str, typer.Argument(help="e.g. AAPL, SAP.DE, BTC/USDT", autocompletion=complete.symbols)]
 Algo = Annotated[str, typer.Argument(help="Algorithm name (tradebot list)", autocompletion=complete.algorithms)]
 Broker = Annotated[str, typer.Option(help="Registered broker name", autocompletion=complete.brokers)]
+Slippage = Annotated[Optional[str], typer.Option(
+    help="Slippage per side in basis points (5 = 0.05%), charged on top of the fee; 'auto' = suggested for the "
+    "asset class (crypto 5, stock 2). Default: [backtest] slippage_bps in config.toml, else 0")]
 DcaAmount = Annotated[Optional[float], typer.Option(
     help="Amount the monthly-investing baseline invests each month (default: capital / months)")]
 
@@ -193,6 +200,7 @@ def backtest(
     entry: Entry = None,
     exit: Exit = None,
     fee: Annotated[float, typer.Option(help="Fee per side, fraction")] = 0.001,
+    slippage: Slippage = None,
     capital: float = 10_000.0,
     dca_amount: DcaAmount = None,
     plot: Annotated[bool, typer.Option(help="Show chart with signals and equity")] = True,
@@ -207,13 +215,14 @@ def backtest(
     algorithm = make_algo(algo, param, members, entry, exit)
     symbols = _symbols(symbol, [])
     if len(symbols) > 1:
-        _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount)
+        _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount, slippage)
         return
     df = load_data(symbol, tf, start, end, bars)
-    res = run_backtest(df, algorithm, fee=fee, initial_capital=capital)
+    slip = _slippage(slippage, symbol)
+    res = run_backtest(df, algorithm, fee=fee, initial_capital=capital, slippage=slip)
     if plot:
         print(render_chart(df, f"{symbol} {tf} · {algorithm!r}", algorithm.chart_indicators(), algorithm, equity=res.equity))
-    bl = baselines(df, res, fee=fee, initial_capital=capital, amount=dca_amount)
+    bl = baselines(df, res, fee=fee, initial_capital=capital, amount=dca_amount, slippage=slip)
     console.print(f"[bold]{algorithm!r}[/] on {symbol} {tf} ({df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d})")
     console.print(results_table("backtest", bl.columns("strategy", res)))
     console.print(f"final equity [bold]{res.equity.iloc[-1]:,.2f}[/]")
@@ -277,7 +286,19 @@ def montecarlo(
         console.print("[dim]Shuffling keeps the final return of every run; only the drawdown depends on the order.[/]")
 
 
-def _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount) -> None:
+
+def _slippage(value: str | None, symbol: str | None) -> float:
+    """``--slippage`` (basis points, 'auto' or unset) as a fraction."""
+    from tradebot.backtest import bps
+    from tradebot.backtest.slippage import resolve_bps
+
+    try:
+        return bps(resolve_bps(value, symbol))
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--slippage") from None
+
+
+def _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount, slippage=None) -> None:
     """One row per symbol: the strategy's return, Sharpe, XIRR and lead over each baseline."""
     from tradebot.backtest import backtest as run_backtest, baselines
     from tradebot.backtest.metrics import fmt
@@ -287,8 +308,9 @@ def _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_a
         t.add_column(col, justify="left" if col == "symbol" else "right")
     beats = {}
     for s, df in _load_many(symbols, tf, start, end, bars).items():
-        res = run_backtest(df, algorithm, fee=fee, initial_capital=capital)
-        bl = baselines(df, res, fee=fee, initial_capital=capital, amount=dca_amount)
+        slip = _slippage(slippage, s)
+        res = run_backtest(df, algorithm, fee=fee, initial_capital=capital, slippage=slip)
+        bl = baselines(df, res, fee=fee, initial_capital=capital, amount=dca_amount, slippage=slip)
         lead = [f"[{'green' if v > 0 else 'red'}]{fmt('vs buy & hold', v)}[/]" for v in bl.excess.values()]
         for name in bl.excess:
             beats[name] = beats.get(name, 0) + (name not in bl.not_beaten)
@@ -331,6 +353,7 @@ def optimize(
     backend: Annotated[str, typer.Option(help="auto | gpu | cuda | rocm | cpu | numpy", autocompletion=complete.choices(
         ("auto", "GPU if available"), ("gpu", "any GPU"), ("cuda", "NVIDIA only"), ("rocm", "AMD only (alias: amd)"), ("cpu", "torch on the CPU"), ("numpy", "")))] = "auto",
     fee: float = 0.001,
+    slippage: Slippage = None,
     min_trades: Annotated[int, typer.Option(help="Reject parameter sets with fewer round trips")] = 4,
     dca_amount: DcaAmount = None,
     seed: Optional[int] = None,
@@ -409,7 +432,7 @@ def optimize(
     if backend == "auto" and not algorithm.vectorized:
         backend = "numpy"  # loop-based algorithms (e.g. elliott_wave) run on the CPU anyway
     kwargs = dict(population=population, generations=generations, objective=objective, train_fraction=train,
-                  backend=select_backend(backend), fee=fee, seed=seed, fixed=parse_kv(fix), min_trades=min_trades,
+                  backend=select_backend(backend), fee=fee, slippage=_slippage(slippage, symbols[0]), seed=seed, fixed=parse_kv(fix), min_trades=min_trades,
                   dca_amount=dca_amount, aggregate=aggregate, align=align, min_symbols_beating=min_symbols_beating,
                   samples=samples, sample_length=sample_length)
     n_genes = len([k for k in algorithm.param_space() if k not in kwargs["fixed"]])
@@ -724,6 +747,7 @@ def evolve(
         help="Walk-forward: also run the search on this many rolling windows, each scored on the stretch after it "
         "(default 0, with --from-scratch 3)")] = None,
     fee: float = 0.001,
+    slippage: Slippage = None,
     dca_amount: DcaAmount = None,
     best_result: Annotated[bool, typer.Option(
         "--best-result", help="Set every setting for the best out-of-sample result, ignoring runtime (much slower "
@@ -785,7 +809,7 @@ def evolve(
             raise typer.BadParameter("good or best", param_hint="--effort")
         candles = min(len(f) for f in df.values()) if isinstance(df, dict) else len(df)
         if auto_settings:
-            fixed = dict(fee=fee, align=align, dca_amount=dca_amount, state=state)
+            fixed = dict(fee=fee, slippage=_slippage(slippage, symbols[0]), align=align, dca_amount=dca_amount, state=state)
             if names:
                 fixed["indicators"] = names
             from rich.progress import Progress as _Progress
@@ -823,7 +847,7 @@ def evolve(
     kwargs = dict(**extra, population=population, generations=generations, max_depth=max_depth, max_size=max_size,
                   objective=objective, aggregate=aggregate, align=align, validation=validation, test=test,
                   segments=segments, min_trades=min_trades, parsimony=parsimony, state=state, indicators=names,
-                  fee=fee, dca_amount=dca_amount, seed=seed, from_scratch=from_scratch, islands=islands)
+                  fee=fee, slippage=_slippage(slippage, symbols[0]), dca_amount=dca_amount, seed=seed, from_scratch=from_scratch, islands=islands)
     with Progress(console=console) as progress:
         task = progress.add_task("evolving", total=generations)
         label = {"name": "evolving"}
@@ -1045,28 +1069,68 @@ def bot_run(
     live: Annotated[bool, typer.Option(help="Actually place orders (default: dry run)")] = False,
     sandbox: Annotated[bool, typer.Option(help="Use the exchange testnet (ccxt brokers)")] = False,
     once: Annotated[bool, typer.Option(help="Evaluate a single candle and exit")] = False,
+    paper: Annotated[bool, typer.Option(help="Trade a simulated account that survives restarts (see `tradebot paper`)")] = False,
 ):
-    """Run an algorithm live against a broker (dry run unless --live)."""
+    """Run an algorithm live against a broker (dry run unless --live or --paper)."""
     from tradebot.live import TradingBot
 
+    if paper:
+        broker = "paper"
     confirm_live_risk(live)
 
     kwargs = {"sandbox": True} if sandbox else {}
     b = create_broker(broker, **kwargs)
     if live and not b.can_trade:
         raise typer.BadParameter(f"{broker} is read-only")
-    bot = TradingBot(b, make_algo(algo, param, members, entry, exit), symbol, tf, stake, dry_run=not live,
+    bot = TradingBot(b, make_algo(algo, param, members, entry, exit), symbol, tf, stake, dry_run=not (live or broker == "paper"),
                      on_event=lambda e: console.print(
                          f"[dim]{e.time:%Y-%m-%d %H:%M}[/] {symbol} target={e.target:.2f} "
                          f"price={e.price:.6g} → [bold]{e.action}[/] {e.amount:.6g}"
                          + (" [yellow](dry run)[/]" if e.dry_run else "")
                          + (f" order {e.order.id} {e.order.status.value}" if e.order else "")))
-    mode = "[red]LIVE[/]" if live else "[yellow]dry run[/]"
+    mode = "[red]LIVE[/]" if live else "[cyan]paper[/]" if broker == "paper" else "[yellow]dry run[/]"
     console.print(f"bot {algo} on {broker}:{symbol} {tf}, stake {stake} · {mode} · {b.execution_mode.value}")
     try:
         bot.run(max_steps=1 if once else None)
     except KeyboardInterrupt:
         console.print("stopped")
+
+
+paper_app = typer.Typer(help="The simulated paper trading account.", no_args_is_help=True)
+app.add_typer(paper_app, name="paper")
+
+
+@paper_app.command("show")
+def paper_show(orders: Annotated[int, typer.Option(help="How many recent orders to list")] = 10):
+    """Cash, positions, P&L and the latest orders of the paper account."""
+    from tradebot.brokers.paper import PaperBroker
+
+    b = PaperBroker()
+    s = b.summary()
+    cur = s["currency"]
+    console.print(f"[bold]paper account[/] ({b.path}) · fee {b.fee:.2%}")
+    console.print(f"cash {s['cash']:,.2f} {cur} · positions {s['positions_value']:,.2f} · equity {s['equity']:,.2f} "
+                  f"(start {s['starting_balance']:,.2f})")
+    console.print(f"P&L {s['pnl']:+,.2f} {cur} ({s['pnl_pct']:+.2%}) · realised {s['realised_pnl']:+,.2f} · "
+                  f"fees {s['fees']:,.2f} · {s['orders']} orders")
+    for a, p in b.positions.items():
+        console.print(f"  {a}: {p['quantity']:.8g} @ avg {p['avg_cost']:.6g}")
+    for o in b.orders[-orders:] if orders > 0 else []:
+        console.print(f"[dim]{o['time'][:16]}[/] {o['side']} {o['amount']:.6g} {o['symbol']} @ {o['price']:.6g}"
+                      + (f" P&L {o['profit']:+.2f}" if o["profit"] is not None else ""))
+
+
+@paper_app.command("reset")
+def paper_reset(balance: Annotated[float, typer.Option(help="New starting balance (default: keep the current one)")] = 0.0,
+                yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask")] = False):
+    """Throw away positions and order history and start again with a fresh balance."""
+    from tradebot.brokers.paper import PaperBroker
+
+    b = PaperBroker()
+    if not yes:
+        typer.confirm(f"Reset the paper account ({len(b.orders)} orders, equity {b.summary()['equity']:,.2f})?", abort=True)
+    b.reset(balance or None)
+    console.print(f"paper account reset to {b.cash:,.2f} {b.currency}")
 
 
 @bot_app.command("pair-run")
@@ -1202,6 +1266,8 @@ def scan(
     index: Annotated[Optional[str], typer.Option("--index", help="Scan a market index instead: sp500, nasdaq100, "
                                                  "dow30, dax40, ftse100, crypto_top100 (weekly cached list)",
                                                  autocompletion=complete.indices)] = None,
+    notify: Annotated[bool, typer.Option("--notify", help="Send the matches to the notification channels "
+                                         "(event kind scanner)")] = False,
 ):
     """Scan symbols with one indicator, filtered on its values and alerts (the Scanner tab's engine)."""
     from tradebot import scanner
@@ -1232,6 +1298,11 @@ def scan(
         t.add_row(*[str(row[c]) if isinstance(row[c], (bool, np.bool_)) else _fmt_cell(c, row[c]) for c in result.table.columns])
     console.print(t)
     console.print(result.summary())
+    if notify:
+        from tradebot.notify import notify as send_notification
+
+        names = ", ".join(result.table["symbol"].astype(str)) if len(result.table) else "no matches"
+        send_notification("scanner", f"Scan {indicator} {timeframe}: {result.matched} match", names, wait=True)
     for sym, why in list(result.skipped.items())[:5]:
         console.print(f"[dim]skipped {sym}: {why}[/]")
 
@@ -1531,6 +1602,23 @@ def combo_delete(name: Annotated[str, typer.Argument(help="The saved combo to de
     if not delete_combo(name):
         raise typer.BadParameter(f"no saved combo {name!r}")
     console.print(f"deleted combo {name}")
+
+
+@notify_app.command("test")
+def notify_test():
+    """Send a test message to every enabled channel and report which worked."""
+    from tradebot import notify as notifications
+
+    chans = notifications.channels()
+    if not chans:
+        console.print("no channels: add [notify.<name>] tables to config.toml (see the README)")
+        raise typer.Exit(1)
+    failed = 0
+    for name, error in notifications.test_all().items():
+        failed += bool(error)
+        console.print(f"[red]✗[/] {name}: {escape(error)}" if error else f"[green]✓[/] {name}")
+    if failed:
+        raise typer.Exit(1)
 
 
 @cache_app.command("info")

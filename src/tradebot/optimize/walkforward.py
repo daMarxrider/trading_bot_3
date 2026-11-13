@@ -103,6 +103,7 @@ class WalkForwardResult:
     frames: dict[str, pd.DataFrame] = field(default_factory=dict, repr=False)  #: the candles ("" = one symbol)
     fee: float = 0.001
     dca_amount: float | None = None
+    slippage: float = 0.0
 
     @property
     def symbols(self) -> list[str]:
@@ -119,8 +120,10 @@ class WalkForwardResult:
         positions = pd.concat(parts)
         df = self.frames[symbol].loc[positions.index]
         ppy = infer_periods_per_year(self.frames[symbol].index)
-        res = from_positions(df, positions, "walk-forward", {}, self.fee, periods_per_year=ppy)
-        return res, baselines(df, res, self.fee, amount=self.dca_amount, periods_per_year=ppy)
+        res = from_positions(df, positions, "walk-forward", {}, self.fee, periods_per_year=ppy,
+                             slippage=self.slippage)
+        return res, baselines(df, res, self.fee, amount=self.dca_amount, periods_per_year=ppy,
+                                    slippage=self.slippage)
 
     @property
     def scores(self) -> np.ndarray:
@@ -278,4 +281,4 @@ def walk_forward(
     first = windows[0]
     return WalkForwardResult(out, last, space, kwargs.get("objective", "sharpe"), aggregate, method, anchored,
                              first[1] - first[0], first[2] - first[1], skipped, frames, kwargs.get("fee", 0.001),
-                             kwargs.get("dca_amount"))
+                             kwargs.get("dca_amount"), kwargs.get("slippage", 0.0))
