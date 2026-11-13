@@ -131,6 +131,9 @@ TERMS = {
     "dates": "Optionally a fixed period to test, instead of the latest candles.",
     "fee": "The cost of each buy and each sell, as a fraction: 0.001 is 0.1%. A full trade (in and out) pays it "
            "twice.",
+    "slippage": "How much worse than the close a trade fills (spread, price moving while the order runs), in "
+                "basis points per side: 5 bp is 0.05%. Charged on top of the fee; 0 ignores it. Rough values: "
+                "crypto 5, stocks 2. Use more for thin symbols and short timeframes.",
     "algorithm": "The trading strategy: the rules that decide when to buy and when to sell.",
     "members": "The strategies that vote. Each one says buy or sell, and the vote acts when enough of them "
                "agree (the threshold). All checks every known strategy.",
