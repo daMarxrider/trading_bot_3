@@ -24,7 +24,8 @@ def pytest_collection_modifyitems(config, items):
 def _flush_deferred_deletes(module):
     """deleteLater() is not honoured by a bare processEvents(): destroy those widgets now, in order, not at exit."""
     from PyQt6.QtCore import QEvent
-    qapp = module.QApplication.instance()
+    from PyQt6.QtWidgets import QApplication
+    qapp = QApplication.instance()
     if qapp is not None:
         qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         qapp.processEvents()
