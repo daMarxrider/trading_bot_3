@@ -33,6 +33,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QTabWidget,
     QTableView,
     QToolButton,
     QVBoxLayout,
@@ -520,9 +521,11 @@ class PortfolioView(QWidget):
     status = pyqtSignal(str)
     loaded = pyqtSignal(list)
 
-    def __init__(self, engine, themes: ThemeManager):
+    def __init__(self, engine, themes: ThemeManager, journal_factory=None):
         super().__init__()
         self.engine, self.themes = engine, themes
+        self._journal_factory = journal_factory
+        self._pf = None  # the last loaded PortfolioSummary, input of the analytics (#169)
         self.checks = {name: QCheckBox(name) for name in BROKERS.names()}
         self.checks.get("scalable", next(iter(self.checks.values()))).setChecked(True)
         load = QPushButton("Load portfolio")
@@ -563,6 +566,92 @@ class PortfolioView(QWidget):
         lay.addLayout(charts)
         lay.addWidget(table, 1)
 
+        # analytics (#169)
+        self.benchmark = QLineEdit("SPY", toolTip="Benchmark symbol, e.g. SPY, URTH (MSCI World) or BTC/USDT")
+        self.targets = QLineEdit(placeholderText="target allocation, e.g. AAPL=40, MSFT=40, BTC/USDT=20",
+                                 toolTip="Weights in percent (any scale, normalised); holdings not listed are sold")
+        self.analyze_btn = QPushButton("Analyze")
+        self.analyze_btn.clicked.connect(self.analyze)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Benchmark:"))
+        row.addWidget(self.benchmark)
+        row.addWidget(self.targets, 2)
+        row.addWidget(self.analyze_btn)
+        self.perf_summary = QLabel("Load the portfolio, then Analyze: needs the journal for the history.")
+        self.perf_summary.setWordWrap(True)
+        self.perf_plot = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem()})
+        self.perf_plot.addLegend()
+        self.perf_plot.setMinimumHeight(180)
+        self.corr_model, self.risk_model, self.reb_model = DataFrameModel(), DataFrameModel(formats={
+            "weight": pct, "volatility": pct, "risk_share": pct}), DataFrameModel(formats={
+            "value": lambda v: f"{v:,.2f}", "weight": pct, "target": pct, "trade_value": lambda v: f"{v:+,.2f}",
+            "quantity": lambda v: f"{v:+,.6g}"})
+        perf = QWidget()
+        pl = QVBoxLayout(perf)
+        pl.addWidget(self.perf_summary)
+        pl.addWidget(self.perf_plot, 1)
+        self.analytics = QTabWidget()
+        self.analytics.addTab(perf, "Performance")
+        for title, model in (("Correlation", self.corr_model), ("Risk", self.risk_model),
+                             ("Rebalancing", self.reb_model)):
+            self.analytics.addTab(_table(model), title)
+        lay.addLayout(row)
+        lay.addWidget(self.analytics, 2)
+
+    def analyze(self):
+        from tradebot.portfolio_analytics import analyse, parse_targets
+
+        if self._pf is None:
+            self.status.emit("load the portfolio first")
+            return
+        try:
+            targets = parse_targets(self.targets.text()) if self.targets.text().strip() else None
+        except ValueError as e:
+            self.status.emit(f"target allocation: {e}")
+            return
+        from tradebot.journal import Journal
+
+        pf, bench, engine = self._pf, self.benchmark.text().strip(), self.engine
+        factory = self._journal_factory or Journal
+        self.status.emit("analysing the portfolio …")
+
+        def work():
+            j = factory()
+            fills = j.fills("real")
+            j.close()
+            first = min((pd.Timestamp(f["time"]) for f in fills), default=None)
+            since = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=365)
+            if first is not None:
+                first = first.tz_localize("UTC") if first.tzinfo is None else first
+                since = min(since, first - pd.Timedelta(days=5))
+            return analyse(lambda s: engine.get_ohlc(s, "1d", start=since)["close"], pf, fills, bench, targets)
+
+        run_async(work, self.show_analytics, lambda e: self.status.emit(f"analysis failed: {e}"))
+
+    def show_analytics(self, out: dict):
+        t = self.themes.current
+        self.perf_plot.clear()
+        perf = out["performance"]
+        s = perf["summary"] if perf else {}
+        if s:
+            for (name, ser), color in zip((("Portfolio (TWR)", perf["twr"]), (self.benchmark.text() or "Benchmark",
+                                                                             perf["bench"])), t.series):
+                if len(ser):
+                    self.perf_plot.plot(epoch_seconds(ser.index), ser.to_numpy(dtype=float) * 100,
+                                        pen=pg.mkPen(qcolor(color), width=2), name=name)
+            self.perf_summary.setText(
+                f"Value {s['value']:,.2f}, paid in {s['invested']:,.2f}, profit {s['profit']:,.2f}. "
+                f"Time-weighted {pct(s['twr'])}, money-weighted {pct(s['mwr'])} (annualised {pct(s['mwr_annual'])}), "
+                f"benchmark {pct(s['benchmark'])}, vs benchmark {pct(s['excess'])}.")
+        else:
+            self.perf_summary.setText("No journal fills with price data: the history needs orders recorded in the journal.")
+        corr, risk, reb = out["correlation"], out["risk"], out["rebalance"]
+        self.corr_model.set_frame(corr.round(2).reset_index(names="symbol") if corr is not None else pd.DataFrame())
+        self.risk_model.set_frame(risk.sort_values("risk_share", ascending=False).reset_index(names="symbol")
+                                  if risk is not None else pd.DataFrame())
+        self.reb_model.set_frame(reb if reb is not None else pd.DataFrame())
+        self.status.emit("portfolio analysis done")
+
     def load(self):
         from tradebot.portfolio import build_portfolio
 
@@ -576,6 +665,7 @@ class PortfolioView(QWidget):
         run_async(work, self._loaded, lambda e: self.status.emit(f"portfolio failed: {e}"))
 
     def _loaded(self, pf):
+        self._pf = pf
         self.kpis["value"].set(f"{pf.total_value:,.2f}")
         self.kpis["income"].set(f"{pf.annual_income:,.2f}")
         self.kpis["current"].set(pct(pf.current_yield))
