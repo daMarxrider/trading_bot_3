@@ -402,9 +402,9 @@ class Evaluator:
             return self.value(expand(p, tuple(args)))
         name, output, keys = p.indicator
         params = dict(zip(keys, args))
-        k = (name, tuple(params.items()))
+        k = (name, p.tf, tuple(params.items()))
         if k not in self._indicators:
             if len(self._indicators) > self.cache_size:
                 self._indicators.clear()
-            self._indicators[k] = rt.indicator(name, self.ohlc, **params)
+            self._indicators[k] = rt.indicator(name, self.ohlc, tf=p.tf, **params)
         return self._indicators[k][output]

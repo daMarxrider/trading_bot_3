@@ -42,6 +42,8 @@ from tradebot.backtest.slippage import configured_bps
 from tradebot.config import Settings, watchlists
 from tradebot.evolve.search import LIMITS, SCRATCH_GUARDS, SCRATCH_ISLANDS, SCRATCH_LIMITS
 from tradebot.core.timeframes import TIMEFRAMES
+
+HIGHER_TIMEFRAMES = ("4h", "1d", "1w", "1mo")  #: offered as higher timeframes for indicators (#161)
 from tradebot.glossary import AGGREGATES, OBJECTIVES, explain
 from tradebot.gui.chart import PlotAutoFit
 from tradebot.gui.common import (
@@ -153,6 +155,16 @@ class EvolveView(QWidget):
         self.align = QCheckBox("Common date range only")
         self.state = QCheckBox("Bars in trade, stops, targets", checked=True)
         self.indicators = indicator_picker()
+        #: higher timeframes whose indicators the rules may also use (#161)
+        self.higher_tfs = {tf: QCheckBox(tf) for tf in HIGHER_TIMEFRAMES}
+        self.higher_row = QWidget()
+        higher = QHBoxLayout(self.higher_row)
+        higher.setContentsMargins(0, 0, 0, 0)
+        higher.addWidget(QLabel("Also on"))
+        for box in self.higher_tfs.values():
+            box.setToolTip(tooltip(explain("evo_higher_tf")))
+            higher.addWidget(box)
+        higher.addStretch()
 
         self.validation = self._spin(0, 40, 20, " %")
         self.test = self._spin(0, 40, 20, " %")
@@ -236,7 +248,7 @@ class EvolveView(QWidget):
             left.addWidget(box)
         ind_title = QLabel("Indicators")
         ind_title.setToolTip(tooltip(explain("evo_indicators")))
-        self.indicators_card = card(ind_title, self.indicators)
+        self.indicators_card = card(ind_title, self.indicators, self.higher_row)
         left.addWidget(self.indicators_card)
         buttons, more = QHBoxLayout(), QHBoxLayout()
         for b in (self.run_btn, self.stop_btn):
@@ -399,6 +411,8 @@ class EvolveView(QWidget):
                      dca_amount=self.dca_amount.value() or None)
         if not scratch and len(picked) != len(self.indicators.boxes):
             fixed["indicators"] = picked
+        if not scratch and self.higher_timeframes():
+            fixed["timeframes"] = self.higher_timeframes()
         objective, seed = self.objective.currentText(), self.seed.value() or None
         self._stop = False
         self._phase = {"name": "auto-configuring", "offset": 0, "runs": 0}
@@ -498,6 +512,13 @@ class EvolveView(QWidget):
             raise ValueError("none of the symbols could be loaded")
         return frames
 
+    def higher_timeframes(self) -> tuple[str, ...]:
+        """The ticked higher timeframes that are longer than the candles (#161)."""
+        from tradebot.core import mtf
+
+        base = mtf.seconds(self.tf.currentText())
+        return tuple(tf for tf, box in self.higher_tfs.items() if box.isChecked() and mtf.seconds(tf) > base)
+
     def settings_kwargs(self) -> dict:
         """The Evolver settings from the form."""
         picked = self.indicators.selected()
@@ -509,6 +530,7 @@ class EvolveView(QWidget):
                     segments=self.segments.value(), min_trades=self.min_trades.value(),
                     parsimony=self.parsimony.value(), state=self.state.isChecked(),
                     indicators=None if scratch or len(picked) == len(self.indicators.boxes) else picked,
+                    timeframes=() if scratch else self.higher_timeframes(),
                     fee=self.fee.value(), slippage=bps(self.slippage.value()),
                     dca_amount=self.dca_amount.value() or None, seed=self.seed.value() or None)
 

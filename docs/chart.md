@@ -58,6 +58,11 @@ indicator to add it: a dialog asks for its parameters (defaults filled in). The 
 **line colours...** entry to change how its outputs are drawn (colour, width, dash). The crosshair readout uses the
 same colours. Colours you choose are remembered per indicator.
 
+The dialog's **timeframe** box computes the indicator on longer candles than the chart's, e.g. the daily SMA on an
+hourly chart; each candle sees the last closed longer candle only, so the line steps
+([multi-timeframe indicators](multi-timeframe.md)). From the command line: `tradebot chart BTC/USDT --tf 1h -i
+sma:period=50,tf=1d`.
+
 Built-in indicators: SMA, EMA, `ma_cross`, RSI, MACD, Bollinger bands, ATR, Stochastic, Donchian, Ichimoku, Elliott
 waves, Bitcoin halving cycle, ADX, Supertrend, Parabolic SAR, Keltner, CCI, Williams %R, ROC, momentum, pivots,
 volume profile, anchored VWAP, Volume, OBV, VWAP, MFI and volume ratio. `tradebot list indicators` prints the full

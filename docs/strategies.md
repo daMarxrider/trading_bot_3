@@ -62,6 +62,9 @@ Building blocks:
   half at +5 % and the rest at +10 %.
 * a **limit entry** (entry rule, joined with `&`): `limit_pct(1)` / `limit_atr(0.5)` buys with a limit order below the
   close of the candle on which the rest holds, for the next candle.
+* a **higher timeframe**: `tf=` on an indicator, rule or strategy runs it on longer candles, only closed ones:
+  `close > sma(200, tf=1d)` on hourly candles, `rsi(14, tf=4h) < 30`, `macd_cross(tf=1d)`. Its parameters are
+  `sma_1d.period` and so on. See [multi-timeframe indicators](multi-timeframe.md).
 * `entry` in the exit rule is the entry rule: `!entry | stop_pct(5)`. Without an exit rule a combo exits when the entry
   rule stops holding.
 

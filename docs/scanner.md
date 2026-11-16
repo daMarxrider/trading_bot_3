@@ -14,6 +14,9 @@ the ones that match your filters. It's separate from the **Screener** page, whic
    screened (Elliott waves, anything with no plot and no alert) are hidden; the footer counts them.
    **⚙** edits the numeric inputs, remembered per indicator.
 3. **Timeframe**: `1m 5m 15m 30m 1h 2h 4h 1D 1W 1M`. The last 500 candles of each symbol are used.
+   **indicator:** next to it runs the indicator on a longer timeframe than the scan's, as of its last *closed*
+   candle (what a strategy with [`tf=1d`](multi-timeframe.md) sees right now); a timeframe not longer than the
+   scan's is ignored.
 4. **Filters** (chips under the toolbar, all must match):
    * the indicator's first two alerts appear as **off** chips (`◻ Fast MA crosses above slow MA`); click to turn on
    * **＋ Filter** adds a *plot value* filter (`fast > slow`, `rsi < 30`) or an *alert* filter (is true / is false)
@@ -34,6 +37,7 @@ Only one scan runs at a time; a second one is refused with "Another scan is runn
 tradebot scan --watchlist Main                                   # MA Cross (9/21) on the daily candles
 tradebot scan AAPL MSFT NVDA -i rsi -p period=7 -t 4h --where "value < 30"
 tradebot scan -i ma_cross -p fast=5 -p slow=20 --alert cross_up --alert '!cross_down'
+tradebot scan -t 1h -i rsi --indicator-tf 1d --where "value < 30"  # the daily RSI of the last closed day
 ```
 
 `--where "<output> <op> <number|output>"` (`> >= < <= == !=`), `--alert NAME` or `--alert '!NAME'`.

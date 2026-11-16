@@ -31,6 +31,10 @@ Indicators come from the registry (plugins included). An output is used only if 
 values on a prefix of the data equal those on the full data, which drops hindsight outputs like the
 Elliott zigzag. Hidden outputs and label outputs are left out unless the indicator declares a unit
 for them (:attr:`BaseIndicator.units`).
+
+**Higher timeframes** (#161, ``timeframes=("1d",)``): every indicator output is offered a second time computed on
+those candles (``sma(50, tf=1d)``), each candle seeing the last closed higher candle only
+(:mod:`tradebot.core.mtf`), so a rule on hourly candles can filter on the daily trend.
 """
 
 from __future__ import annotations
@@ -82,6 +86,7 @@ class Primitive:
     weight: float = 1.0
     prec: int = 9  #: binding strength of ``text`` (or 1 < and 2 < not 3 < comparison 4 < +/- 5 < call 9)
     indicator: tuple[str, str, tuple[str, ...]] | None = None  #: (name, output, parameter names)
+    tf: str | None = None  #: an indicator computed on this higher timeframe (#161)
     #: a module (``kind`` "module"): the subtree it stands for, and per parameter the paths of its constants
     body: object = None
     slots: tuple = ()
@@ -347,15 +352,16 @@ def indicator_outputs(names: list[str] | None = None) -> list[tuple[type[BaseInd
     return out
 
 
-def _indicator(cls: type[BaseIndicator], output: str, unit: str) -> Primitive:
+def _indicator(cls: type[BaseIndicator], output: str, unit: str, tf: str | None = None) -> Primitive:
     keys = tuple(cls.params)
-    args = ", ".join("{%d}" % i for i in range(len(keys)))
-    call = f"{cls.name}({args})" if keys else cls.name
+    args = ", ".join(["{%d}" % i for i in range(len(keys))] + ([f"tf={tf}"] if tf else []))
+    call = f"{cls.name}({args})" if args else cls.name
     text = call if cls.plot_outputs() == ("value",) else f"{call}.{output}"
-    kw = ", ".join(f"{k}={{{i}}}" for i, k in enumerate(keys))
+    kw = ", ".join([f'tf="{tf}"'] * bool(tf) + [f"{k}={{{i}}}" for i, k in enumerate(keys)])
     code = f'rt.indicator("{cls.name}", o{", " + kw if kw else ""})["{output}"]'
-    return Primitive(f"{cls.name}.{output}:{unit}", unit, tuple(cls.params[k] for k in keys), None, text, code,
-                     kind="indicator", indicator=(cls.name, output, keys))
+    name = f"{cls.name}.{output}@{tf}:{unit}" if tf else f"{cls.name}.{output}:{unit}"
+    return Primitive(name, unit, tuple(cls.params[k] for k in keys), None, text, code,
+                     kind="indicator", indicator=(cls.name, output, keys), tf=tf)
 
 
 def _level(unit: str, cls: type[BaseIndicator] | None) -> Param | None:
@@ -421,8 +427,10 @@ class PrimitiveSet:
                 and q.args == p.args and q.name in self.min_depth]
 
     @classmethod
-    def default(cls, indicators: list[str] | None = None, state: bool = True) -> "PrimitiveSet":
-        """Candles, logic and arithmetic, plus every usable indicator output (or those of ``indicators``)."""
+    def default(cls, indicators: list[str] | None = None, state: bool = True,
+                timeframes: tuple[str, ...] = ()) -> "PrimitiveSet":
+        """Candles, logic and arithmetic, plus every usable indicator output (or those of ``indicators``), also
+        on each of the higher ``timeframes`` (#161)."""
         found = indicator_outputs(indicators)
         units = {PRICE, OSC, RATIO, VOLUME} | {u for _, _, u in found}
         prims = _core(units)
@@ -431,7 +439,8 @@ class PrimitiveSet:
             prims += _generic(unit, _level(unit, owner.get(unit)))
         # the indicator outputs of one unit share a weight, so many outputs don't crowd out the rest; so do
         # the comparisons, so the many units don't crowd out and/or
-        indicator_prims = [_indicator(c, out, u) for c, out, u in found]
+        indicator_prims = [_indicator(c, out, u, tf) for tf in (None, *dict.fromkeys(timeframes))
+                           for c, out, u in found]
         per_unit = {u: sum(p.ret == u for p in indicator_prims) for u in units}
         indicator_prims = [replace(p, weight=2.0 / per_unit[p.ret]) for p in indicator_prims]
         comparisons = sum(p.family in COMPARISONS | LEVEL_COMPARISONS for p in prims)

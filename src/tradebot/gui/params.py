@@ -4,7 +4,8 @@
 
 from __future__ import annotations
 
-from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QSpinBox, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QSpinBox, QVBoxLayout,
+                             QWidget)
 
 from tradebot.core.registry import Param
 from tradebot.gui.common import tooltip
@@ -48,21 +49,42 @@ class ParamForm(QWidget):
         return {k: box.value() for k, box in self.editors.items()}
 
 
+#: what the timeframe box offers (#161): None = the chart's own candles
+TIMEFRAME_CHOICES = (None, "15m", "30m", "1h", "2h", "4h", "1d", "1w", "1mo")
+
+
 class ParamDialog(QDialog):
-    def __init__(self, title: str, space: dict[str, Param], values: dict | None = None, parent=None):
+    def __init__(self, title: str, space: dict[str, Param], values: dict | None = None, parent=None,
+                 timeframe: bool = False, tf: str | None = None):
         super().__init__(parent)
         self.setWindowTitle(title)
         lay = QVBoxLayout(self)
         self.form = ParamForm(space, values)
         lay.addWidget(self.form)
+        self.tf_box = None
+        if timeframe:  # a higher timeframe to compute on (#161)
+            self.tf_box = QComboBox()
+            for choice in TIMEFRAME_CHOICES:
+                self.tf_box.addItem(choice or "chart's own", choice)
+            self.tf_box.setCurrentIndex(max(0, self.tf_box.findData(tf)))
+            self.tf_box.setToolTip(tooltip(
+                "Compute the indicator on longer candles than the chart's, e.g. the daily SMA on an hourly chart. "
+                "Each candle sees the last closed longer candle only (no look-ahead), so the line steps."))
+            self.form.form.addRow("timeframe", self.tf_box)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         lay.addWidget(buttons)
 
+    def values(self) -> dict:
+        """The parameters, plus ``"tf"`` when a higher timeframe was picked."""
+        tf = self.tf_box.currentData() if self.tf_box is not None else None
+        return {**self.form.values(), **({"tf": tf} if tf else {})}
+
     @classmethod
-    def ask(cls, title, space, values=None, parent=None) -> dict | None:
-        if not space:
+    def ask(cls, title, space, values=None, parent=None, timeframe: bool = False, tf: str | None = None) -> dict | None:
+        """The values entered, or None if cancelled. ``timeframe``: also offer a higher timeframe (``"tf"``)."""
+        if not space and not timeframe:
             return {}
-        dlg = cls(title, space, values, parent)
-        return dlg.form.values() if dlg.exec() == QDialog.DialogCode.Accepted else None
+        dlg = cls(title, space, values, parent, timeframe, tf)
+        return dlg.values() if dlg.exec() == QDialog.DialogCode.Accepted else None

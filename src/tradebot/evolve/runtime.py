@@ -10,13 +10,15 @@ from __future__ import annotations
 
 import numpy as np
 
-from tradebot.core import ops
+from tradebot.core import mtf, ops
 from tradebot.indicators.base import INDICATORS
 
 
-def indicator(name: str, o, **params) -> dict:
-    """``{output: array}`` of a registered indicator (looked up when called, so plugin indicators work too)."""
-    return INDICATORS.get(name).compute(o, **params)
+def indicator(name: str, o, tf: str | None = None, **params) -> dict:
+    """``{output: array}`` of a registered indicator (looked up when called, so plugin indicators work too);
+    ``tf``: computed on that higher timeframe, without look-ahead (#161)."""
+    cls = INDICATORS.get(name)
+    return mtf.compute(cls, o, tf, **params) if tf else cls.compute(o, **params)
 
 
 def always(o):

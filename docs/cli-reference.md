@@ -29,7 +29,7 @@ Arguments: `SYMBOL`
 |---|---|---|
 | `--tf` | `1d` | Timeframe: 1m 5m 15m 30m 1h 4h 1d 1w |
 | `--bars` | `150` | Number of candles |
-| `--indicator`, `-i` |  | e.g. -i sma:period=50 -i rsi |
+| `--indicator`, `-i` |  | e.g. -i sma:period=50 -i rsi; tf= on a higher timeframe: -i sma:period=200,tf=1d |
 | `--algo` |  | Overlay this algorithm's buy/sell signals |
 | `--param`, `-p` |  | Algorithm parameter, e.g. -p lower=30 |
 | `--members` |  | Comma-separated members for the 'vote' ensemble, or for the 'pool' (strategies and indicators) |
@@ -186,6 +186,7 @@ Arguments: `SYMBOL` (optional)
 | `--parsimony` | `0.002` | Fitness penalty per building block: shorter rules win ties |
 | `--state`, `--no-state` | `True` | Let exit rules use the open trade (bars in trade, stop loss, take profit, trailing stop) |
 | `--indicators` |  | Comma-separated indicators the rules may use (default: all, plugins included) |
+| `--higher-tf` |  | Comma-separated higher timeframes, e.g. 1d,1w: the rules may also use every indicator computed on those candles (only closed ones, no look-ahead) |
 | `--permutations` |  | Also run the search this many times on shuffled candles, to see whether it finds as much in noise (default 0, with --from-scratch 5) |
 | `--folds` |  | Walk-forward: also run the search on this many rolling windows, each scored on the stretch after it (default 0, with --from-scratch 3) |
 | `--fee` | `0.001` |  |
@@ -253,6 +254,7 @@ Arguments: `SYMBOLS` (optional)
 | `--indicator`, `-i` | `ma_cross` | Any scannable indicator |
 | `--param`, `-p` |  | e.g. -p fast=9 -p slow=21 |
 | `--timeframe`, `-t` | `1d` | 1m 5m 15m 30m 1h 2h 4h 1d 1w 1mo |
+| `--indicator-tf` |  | Run the indicator on this longer timeframe, its last closed candle (e.g. -t 1h --indicator-tf 1d) |
 | `--where` |  | e.g. --where "fast > slow" --where "rsi < 30" |
 | `--alert` |  | Alert that must be on; !NAME: off. e.g. --alert cross_up |
 | `--watchlist`, `-w` |  | Without symbols: only this watchlist's (default: all watchlists) |

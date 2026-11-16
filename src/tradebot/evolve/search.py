@@ -57,7 +57,8 @@ from tradebot.backtest import BacktestResult, Baselines, baselines, batch_fitnes
 from tradebot.backtest.baselines import BUY_HOLD, MONTHLY
 from tradebot.backtest.engine import from_positions
 from tradebot.backtest.metrics import deflated_sharpe, infer_periods_per_year
-from tradebot.core.series import OHLC
+from tradebot.core import mtf
+from tradebot.core.series import OHLC, unix_seconds
 from tradebot.evolve.export import load_plugin, plugin_source
 from tradebot.evolve.modules import Library, rewrite
 from tradebot.evolve.primitives import BOOL, Primitive, PrimitiveSet, uses_volume
@@ -330,6 +331,7 @@ class Evolver:
         hall_of_fame: int = 30,
         state: bool = True,
         indicators: list[str] | None = None,
+        timeframes: tuple[str, ...] = (),
         seed: int | None = None,
         align: bool = False,
         min_history: float = 0.5,
@@ -356,6 +358,8 @@ class Evolver:
         tuned (the best ``tune`` programs are per island)."""
         if from_scratch and indicators is not None:
             raise ValueError("from scratch uses no ready-made indicators; leave out the indicator choice")
+        if from_scratch and timeframes:
+            raise ValueError("from scratch uses no ready-made indicators, so no higher-timeframe ones either")
         limits = SCRATCH_LIMITS if from_scratch else LIMITS
         max_depth = limits[0] if max_depth is None else max_depth
         max_size = limits[1] if max_size is None else max_size
@@ -381,7 +385,7 @@ class Evolver:
         self.rng = np.random.default_rng(self.seed)
         self.from_scratch = from_scratch
         self.base_ps = primitives or (PrimitiveSet.from_scratch(state) if from_scratch
-                                      else PrimitiveSet.default(indicators, state))
+                                      else PrimitiveSet.default(indicators, state, tuple(timeframes)))
         self.ps = self.base_ps  #: grows with the library's modules
         library, dedupe, deflate = (from_scratch if x is None else x for x in (library, dedupe, deflate))
         self.library = Library() if library else None
@@ -402,6 +406,11 @@ class Evolver:
         self.multi = not isinstance(df, pd.DataFrame)
         frames, self.skipped = select_frames(df if self.multi else {"": df}, align, min_history)
         self.frames = frames
+        for tf in sorted({p.tf for p in self.base_ps.primitives if p.tf}):  # higher timeframes (#161)
+            for f in frames.values():
+                t = unix_seconds(f.index)
+                if t is not None and mtf.spacing(t) > mtf.seconds(tf) * (1 + 1e-9):
+                    raise ValueError(f"higher timeframe {tf} is shorter than the candles; pick a longer one")
         timeline = reduce(lambda a, b: a.union(b), (f.index for f in frames.values()))
         n = len(timeline)
         test_at = n - int(round(n * test)) if test else n

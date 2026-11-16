@@ -10,6 +10,10 @@ Next to :mod:`tradebot.screener`, which stays as it is. The indicator only ever 
     result.table, result.summary()
 
 A row has the symbol and the last-bar value of every output of the indicator (alerts as ``True``/``False``).
+
+``indicator_tf`` (#161) runs the indicator on a higher timeframe than the scan's: a 1h scan with
+``indicator_tf="1d"`` shows the daily values as of the last *closed* day (the day still running is left out),
+which is what a 1h strategy filtering on ``sma(200, tf=1d)`` sees.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
+from tradebot.core import mtf
 from tradebot.core.registry import resolve_params
 from tradebot.core.series import OHLC
 from tradebot.indicators import INDICATORS
@@ -124,16 +129,25 @@ def scan(
     progress: Callable[[int, int], None] | None = None,
     cancel: Callable[[], bool] | None = None,
     workers: int = 8,
+    indicator_tf: str | None = None,
+    now: float | None = None,
 ) -> ScanResult:
     """Run ``indicator`` over ``symbols`` and keep the rows passing every filter (ANDed).
 
     ``fetch(symbol, timeframe)`` returns candles (default: the market data engine); only the last
     :data:`BARS` are used. ``progress(done, total)`` is called after each symbol, from worker threads;
-    ``cancel()`` is polled between symbols, and a cancelled scan returns what it has. Raises ``ValueError``
+    ``cancel()`` is polled between symbols, and a cancelled scan returns what it has. ``indicator_tf``: the
+    indicator runs on that (longer) timeframe's closed candles, judged by ``now`` (Unix seconds, default the
+    clock). Raises ``ValueError``
     for bad input before anything is fetched and :class:`ScanBusy` if another scan is running.
     """
     if timeframe not in TIMEFRAMES:
         raise ValueError(f"unsupported timeframe {timeframe!r}; use one of {' '.join(TIMEFRAMES)}")
+    if indicator_tf:
+        mtf.check(indicator_tf)
+        if mtf.seconds(indicator_tf) <= mtf.seconds(timeframe):
+            raise ValueError(f"the indicator timeframe {indicator_tf} must be longer than the scan's {timeframe}")
+    now = time.time() if now is None else now
     symbols = list(dict.fromkeys(symbols))
     if len(symbols) > MAX_SYMBOLS:
         raise ValueError(f"{len(symbols)} symbols: a scan covers at most {MAX_SYMBOLS}")
@@ -157,7 +171,8 @@ def scan(
         if cancel and cancel():
             return
         try:
-            df = fetch(sym, timeframe).tail(BARS)
+            df = (mtf.closed(fetch(sym, indicator_tf), indicator_tf, now) if indicator_tf
+                  else fetch(sym, timeframe)).tail(BARS)
             if df.empty:
                 raise ValueError("no data")
             out = cls.compute(OHLC.from_frame(df), **values)

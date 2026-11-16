@@ -52,7 +52,10 @@ The rules are trees made of:
   (a/b - 1), `volatility(n)`, `price + k x atr(n)`;
 * comparisons (`>`, `<`, `crosses_above`, `crosses_below`), `and`, `or`, `not`;
 * in exit rules, the open trade: `bars_in_trade`, `stop_loss`, `take_profit` and `trailing_stop` (fractions of the
-  price; `--no-state` turns them off).
+  price; `--no-state` turns them off);
+* with `--higher-tf 1d,1w` (the page: **Also on** under Indicators), every indicator output again on those longer
+  candles, e.g. `close > sma(50, tf=1d)` as a daily trend filter for hourly rules
+  ([multi-timeframe indicators](multi-timeframe.md)).
 
 Every part has a **unit**: a price, a 0-100 oscillator, a relative change, a price distance (ATR), or an indicator's own
 unit like MACD. Only like is compared with like, and a price is never compared with a fixed number, because

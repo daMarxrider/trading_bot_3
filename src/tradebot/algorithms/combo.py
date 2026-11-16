@@ -28,6 +28,10 @@ Building blocks:
   take_profit(10)`` sells half at +5% and the rest at +10% (the second number: the share of the position).
 * a limit entry (entry rule only, joined with ``&``): ``limit_pct(1)`` / ``limit_atr(0.5)``: when the rest of
   the entry rule holds on a candle, buy with a limit order 1% / 0.5 ATRs below its close, for the next candle.
+* a **higher timeframe** (#161): ``tf=`` on an indicator, rule or strategy computes it on higher-timeframe
+  candles, e.g. ``close > sma(200, tf=1d)`` on hourly candles, ``rsi(14, tf=4h) < 30``, ``regime(tf=1w).bull``,
+  ``macd_cross(tf=1d)``. Each candle sees the last *closed* higher candle only (no look-ahead, see
+  :mod:`tradebot.core.mtf`); its parameters are namespaced with the timeframe (``sma_1d.period``).
 * ``entry`` in the exit rule is the entry rule: ``!entry | stop_pct(5)``. Without an exit rule, a combo exits
   when the entry rule stops holding (``!entry``).
 
@@ -63,7 +67,7 @@ from pathlib import Path
 import numpy as np
 
 from tradebot.algorithms.base import ALGORITHMS, BaseAlgorithm
-from tradebot.core import ops
+from tradebot.core import mtf, ops
 from tradebot.core.registry import IntParam, Param
 from tradebot.core.series import OHLC
 from tradebot.indicators.base import INDICATORS
@@ -116,7 +120,7 @@ ARITH = {"+": operator.add, "-": operator.sub, "*": operator.mul, "/": operator.
 
 
 # -- parsing ------------------------------------------------------------------------------------------
-_TOKEN = re.compile(r"\s*(?:(\d+\.?\d*(?:[eE][-+]?\d+)?|\.\d+)|([A-Za-z_]\w*)|(>=|<=|==|!=|&&|\|\||[-+*/<>!~&|(),:.=]))")
+_TOKEN = re.compile(r"\s*(?:(\d+(?:mo|[mhdw])(?!\w))|(\d+\.?\d*(?:[eE][-+]?\d+)?|\.\d+)|([A-Za-z_]\w*)|(>=|<=|==|!=|&&|\|\||[-+*/<>!~&|(),:.=]))")
 
 
 def tokenize(text: str) -> list[str]:
@@ -125,9 +129,9 @@ def tokenize(text: str) -> list[str]:
         m = _TOKEN.match(text, i)
         if not m:
             raise ValueError(f"can't read {text[i:].strip()!r}")
-        tok = m.group(1) or m.group(2) or m.group(3)
+        tok = m.group(1) or m.group(2) or m.group(3) or m.group(4)
         tok = {"&&": "&", "||": "|", "~": "!"}.get(tok, tok)
-        if m.group(2) and tok.lower() in WORDS:
+        if m.group(3) and tok.lower() in WORDS:
             tok = WORDS[tok.lower()]
         out.append(tok)
         i = m.end()
@@ -242,7 +246,13 @@ class _Parser:
                     and re.fullmatch(r"[A-Za-z_]\w*", self.peek()):
                 key = self.take()
                 self.take("=")
-                node.kwargs[key] = self.or_()
+                if key == "tf":  # a timeframe: 1d, 4h, 1w, 1mo
+                    tf = self.take()
+                    if not re.fullmatch(r"\d+(?:mo|[mhdw])", tf):
+                        raise ValueError(f"tf= takes a timeframe such as 4h, 1d or 1w in {name}(...), not {tf!r}")
+                    node.kwargs[key] = Ast("tf", tf)
+                else:
+                    node.kwargs[key] = self.or_()
             else:
                 if node.kwargs:
                     raise ValueError(f"positional argument after keyword in {name}(...)")
@@ -272,6 +282,12 @@ class _Eval:
 
     def __init__(self, combo: "Combo", o: OHLC, p: dict):
         self.combo, self.o, self.p, self.cache = combo, o, p, {}
+
+    def higher(self, tf: str) -> mtf.Higher:
+        """The ``tf`` candles of these candles (#161), computed once per evaluation."""
+        if ("_tf", tf) not in self.cache:
+            self.cache[("_tf", tf)] = mtf.Higher(self.o, tf)
+        return self.cache[("_tf", tf)]
 
 
 def _known(x):
@@ -337,11 +353,17 @@ class Member(Node):
 class Strategy(Member):
     algo: BaseAlgorithm = None
     exit_side: bool = False  #: in the exit rule: holds while the strategy is out
+    tf: str | None = None  #: a higher timeframe to run on (#161)
 
     def value(self, ev):
         if self.key not in ev.cache:
             mp = {k: ev.p.get(f"{self.key}.{k}", v) for k, v in self.algo.values.items()}
-            ev.cache[self.key] = ops.nan_to_num(self.algo.signals(ev.o, mp))
+            if self.tf:
+                mp = mtf.numpy_params(mp)
+                sig = ev.higher(self.tf).map(lambda h: self.algo.signals(h, mp))
+            else:
+                sig = self.algo.signals(ev.o, mp)
+            ev.cache[self.key] = ops.nan_to_num(sig)
         return ev.cache[self.key]
 
     def truth(self, ev):
@@ -357,10 +379,15 @@ class Indicator(Member):
     cls: type = None
     output: str = "value"
     alert: bool = False
+    tf: str | None = None  #: a higher timeframe to compute on (#161)
 
     def value(self, ev):
         if self.key not in ev.cache:
-            ev.cache[self.key] = self.cls.compute(ev.o, **self.params(ev))
+            if self.tf:
+                params = mtf.numpy_params(self.params(ev))
+                ev.cache[self.key] = ev.higher(self.tf).map(lambda h: self.cls.compute(h, **params))
+            else:
+                ev.cache[self.key] = self.cls.compute(ev.o, **self.params(ev))
         return ev.cache[self.key][self.output]
 
     def truth(self, ev):
@@ -377,8 +404,19 @@ class Indicator(Member):
 @dataclass(eq=False)
 class Rule(Member):
     rule: object = None
+    tf: str | None = None  #: a higher timeframe to run on (#161)
 
     def truth(self, ev):
+        if self.tf:
+            params = mtf.numpy_params(self.params(ev))
+
+            def cond(h):
+                held = self.rule.condition(h, params)
+                return _bool(held, h.close) if isinstance(held, bool) else held
+
+            x = ev.higher(self.tf).map(cond)
+            known = ~ops.isnan(x)
+            return known & (x > 0.5), known & ~(x > 0.5)
         held = self.rule.condition(ev.o, self.params(ev))
         held = held if not isinstance(held, bool) else _bool(held, ev.o.close)
         return held, ~held
@@ -564,7 +602,7 @@ class Combo(BaseAlgorithm):
         self._space = {k: replace(s, default=s.clip(defaults[k])) if k in defaults else s for k, s in self._space.items()}
         super().__init__(**params)
         with np.errstate(all="ignore"):  # a dry run, so a misused block fails now with a clear message
-            self.signals(_sample(), self.values)
+            self.signals(_sample(step=60.0 if self.timeframes else 86_400.0), self.values)  # 1m: any tf= fits
 
     # -- building
     def _compile_entry(self, ast: Ast):
@@ -624,6 +662,10 @@ class Combo(BaseAlgorithm):
         Calls with the same name and values share one key (and so one set of parameters)."""
         args = list(ast.args) if ast.kind == "call" else []
         kwargs = dict(ast.kwargs) if ast.kind == "call" else {}
+        tf = kwargs.pop("tf", None)
+        if tf is not None and kind not in ("strategy", "rule", "indicator"):
+            raise ValueError(f"{ast.value} takes no tf=: a timeframe is for indicators, rules and strategies")
+        tf = tf and tf.value
         names = list(space)
         if len(args) > len(names):
             raise ValueError(f"{ast.value} takes at most {len(names)} argument(s): {', '.join(names) or 'none'}")
@@ -643,7 +685,8 @@ class Combo(BaseAlgorithm):
             if not spec.description:
                 spec = replace(spec, description=f"The {k.replace('_', ' ')} of {ast.value} in this {what}.")
             out[k] = spec
-        key = self._key((kind, ast.value, tuple(s.default for s in out.values())), ast.value)
+        key = self._key((kind, ast.value, tf, tuple(s.default for s in out.values())),
+                        f"{ast.value}_{tf}" if tf else ast.value)
         for k, spec in out.items():
             self._space.setdefault(f"{key}.{k}", spec)
         return key, out
@@ -688,6 +731,9 @@ class Combo(BaseAlgorithm):
                 raise ValueError("'entry' can only be used in the exit rule, for the entry rule")
             return EntryRef()
         if name in PRICES:
+            if ast.kind == "call" and "tf" in ast.kwargs:
+                raise ValueError(f"{name}(tf=...): use a one-candle average for a higher timeframe's price, "
+                                 f"e.g. sma(1, tf={ast.kwargs['tf'].value})")
             if ast.kind == "call":
                 raise ValueError(f"{name} takes no arguments")
             return Price(name)
@@ -715,7 +761,7 @@ class Combo(BaseAlgorithm):
             self._loop = True
         key, space = self._member("strategy", algo.param_space(), ast, "strategy")
         algo = algo.with_params(**{k: s.default for k, s in space.items()})
-        node = Strategy(key, space, ast.value, algo, exit_rule)
+        node = Strategy(key, space, ast.value, algo, exit_rule, _tf(ast))
         self.members.append(node)
         return node
 
@@ -723,7 +769,7 @@ class Combo(BaseAlgorithm):
         if not rule.vectorized:
             self._loop = True
         key, space = self._member("rule", dict(rule.params), ast, "rule")
-        node = Rule(key, space, ast.value, rule)
+        node = Rule(key, space, ast.value, rule, _tf(ast))
         self.members.append(node)
         return node
 
@@ -740,7 +786,7 @@ class Combo(BaseAlgorithm):
         if ast.value in RULES and not RULES[ast.value].vectorized:
             self._loop = True
         key, space = self._member("indicator", dict(cls.params), ast, "condition")
-        node = Indicator(key, space, ast.value, cls, output, output in cls.alerts)
+        node = Indicator(key, space, ast.value, cls, output, output in cls.alerts, _tf(ast))
         self.members.append(node)
         return node
 
@@ -770,6 +816,24 @@ class Combo(BaseAlgorithm):
         self._space[thr] = Param(default, min(0.0, default), max(1.0, default),
                                  f"The {what} that must hold for {ast.value}(...) to hold: 0.6 means 60%.")
         return Group(ast.value, items, weights, thr, strict)
+
+    @property
+    def timeframes(self) -> set[str]:
+        """The higher timeframes the rules use (``tf=``, #161)."""
+        return {m.tf for m in self.members if getattr(m, "tf", None)}
+
+    def warmup_candles(self, spacing: float) -> int:
+        """Candles (``spacing`` seconds apart) the longest integer parameter needs, a higher timeframe's counted
+        in its own candles (``sma(200, tf=1d)`` on hourly candles: 4800); for the optimizer's warm-up (#161)."""
+        out = 0
+        for key, spec in self._space.items():
+            if not spec.integer:
+                continue
+            member = next((m for m in self.members if key.startswith(f"{m.key}.")), None)
+            tf = getattr(member, "tf", None)
+            scale = mtf.seconds(tf) / spacing if tf and spacing > 0 else 1.0
+            out = max(out, int(np.ceil(spec.high * scale)))
+        return out
 
     # -- the BaseAlgorithm interface
     def param_space(self):
@@ -979,9 +1043,11 @@ class Combo(BaseAlgorithm):
         for m in self.members:
             if isinstance(m, Strategy):
                 inds = m.algo.with_params(**{k: self.values[f"{m.key}.{k}"] for k in m.space}).chart_indicators()
+                for ind in inds:  # on the strategy's timeframe
+                    ind.tf = ind.tf or m.tf
             else:
                 cls = INDICATORS.get(m.source)
-                inds = [cls(**{k: self.values[f"{m.key}.{k}"] for k in m.space if k in cls.params})]
+                inds = [cls(tf=m.tf, **{k: self.values[f"{m.key}.{k}"] for k in m.space if k in cls.params})]
             for ind in inds:
                 if ind.label not in seen:
                     seen.add(ind.label)
@@ -997,13 +1063,19 @@ class Combo(BaseAlgorithm):
                 + (f" · fills: {self.fills})" if self.fills != "close" else ")"))
 
 
-def _sample(n: int = 300) -> OHLC:
+def _tf(ast: Ast) -> str | None:
+    """The ``tf=`` of a call (#161), or None."""
+    tf = ast.kwargs.get("tf") if ast.kind == "call" else None
+    return mtf.check(tf.value) if tf is not None else None
+
+
+def _sample(n: int = 300, step: float = 86_400.0) -> OHLC:
     rng = np.random.default_rng(22)
     close = 100 * np.exp(np.cumsum(rng.normal(0, 0.02, n)))
     open_ = np.r_[close[0], close[:-1]]
     spread = np.abs(rng.normal(0, 0.01, n)) * close
     return OHLC(open_, np.maximum(open_, close) + spread, np.minimum(open_, close) - spread, close,
-                1.42e9 + 86_400.0 * np.arange(n))
+                1.42e9 + step * np.arange(n))
 
 
 def check(entry: str, exit: str | None = None, fills: str | None = None) -> Combo:
