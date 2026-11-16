@@ -1937,7 +1937,7 @@ def notify_test():
 
     chans = notifications.channels()
     if not chans:
-        console.print("no channels: add [notify.<name>] tables to config.toml (see the README)")
+        console.print("no channels: add [notify.<name>] tables to config.toml (see docs/settings.md)")
         raise typer.Exit(1)
     failed = 0
     for name, error in notifications.test_all().items():
