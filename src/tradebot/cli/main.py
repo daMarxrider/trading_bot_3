@@ -197,16 +197,45 @@ def chart(
     sizing: Sizing = None,
     line: Annotated[bool, typer.Option(help="Line chart instead of candles")] = False,
     volume: Annotated[bool, typer.Option(help="Volume bars under the candles (when the data has volume)")] = True,
+    kind: Annotated[str, typer.Option("--type", help="candles | line | heikin-ashi | renko (a display transform: "
+                                      "signals and indicators still use the real candles)",
+                                      autocompletion=complete.choices(["candles", "line", "heikin-ashi", "renko"]))] = "candles",
+    brick: Annotated[Optional[float], typer.Option(help="Renko brick size in price units (default: ATR 14)")] = None,
+    compare: Annotated[Optional[list[str]], typer.Option("--compare", help="Overlay these symbols as percent change "
+                                                         "from the left edge (repeat the option); needs no indicators")] = None,
 ):
-    """Terminal OHLC chart with indicator overlays, volume and algorithm signals."""
-    from tradebot.cli.charts import render_chart
+    """Terminal OHLC chart with indicator overlays, volume and algorithm signals.
+
+    ``--type heikin-ashi|renko`` change how the candles are drawn; ``--compare ETH/USDT --compare SOL/USDT`` plots
+    percent change of several symbols instead. A ratio chart is a symbol like ``ETH/USDT:BTC/USDT`` or ``KO:PEP``."""
+    from tradebot.analysis.charttypes import TYPES, heikin_ashi, percent_change, renko
+    from tradebot.cli.charts import render_chart, render_lines
+
+    if kind not in TYPES:
+        raise typer.BadParameter(f"type must be one of {', '.join(TYPES)}", param_hint="--type")
+    if compare:
+        names = [symbol, *compare]
+        frame = percent_change({n: load_data(n, tf, None, None, bars)["close"] for n in names})
+        if frame.empty:
+            raise typer.BadParameter("the symbols have no candles in common")
+        print(render_lines({n: frame[n] for n in names}, f"{', '.join(names)} {tf}: change in %"))
+        return
 
     algorithm = make_algo(algo, param, members, entry, exit, fills, sizing) if algo else None
     inds = [parse_indicator(s) for s in indicator]
     if algorithm and not inds:
         inds = algorithm.chart_indicators()
     df = load_data(symbol, tf, None, None, bars + 250)  # extra history warms up indicators
-    print(render_chart(df, f"{symbol} {tf}", inds, algorithm, line, window=bars, volume=volume))
+    shown = None
+    title = f"{symbol} {tf}" + (f" ({kind})" if kind not in ("candles", "line") else "")
+    if kind == "heikin-ashi":
+        shown = heikin_ashi(df)
+    elif kind == "renko":  # bricks have their own time stamps: no indicators, signals or volume next to them
+        try:
+            df, inds, algorithm, volume = renko(df.tail(bars), brick), [], None, False
+        except ValueError as e:
+            raise typer.BadParameter(str(e), param_hint="--brick") from None
+    print(render_chart(df, title, inds, algorithm, line or kind == "line", window=bars, volume=volume, shown=shown))
 
 
 @app.command()
