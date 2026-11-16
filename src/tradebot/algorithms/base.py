@@ -42,6 +42,7 @@ from typing import ClassVar
 import numpy as np
 import pandas as pd
 
+from tradebot.core import ops
 from tradebot.core.registry import Param, Registry, resolve_params
 from tradebot.core.series import OHLC
 
@@ -77,6 +78,14 @@ class BaseAlgorithm(ABC):
     @abstractmethod
     def signals(self, o: OHLC, p: dict):
         """Return target positions shaped like ``o.close`` (or broadcast against batched params)."""
+
+    def short_signals(self, o: OHLC, p: dict, long):
+        """When the short variant (#149, see :mod:`tradebot.algorithms.direction`) is short, 0..1, given the
+        long signal ``long``. By default the mirror image: short whenever the long version is out of the market,
+        from its first entry on (stop and reverse; right for crossovers and for latches such as the RSI's).
+        Strategies whose mirror is different (a band or a cloud with a neutral zone) override it."""
+        started = ops.cummax(ops.where(long > 0, 1.0, 0.0)) > 0
+        return ops.where(started, 1.0 - long, 0.0)
 
     def execute(self, o: OHLC, p: dict):
         """``(positions, fills)``: the target positions and, for strategies that fill inside a candle (a combo

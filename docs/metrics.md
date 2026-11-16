@@ -16,6 +16,7 @@ touchscreen). The text comes from one place, `src/tradebot/glossary.py`, and thi
 | `win_rate` | The share of trades that made money. A low win rate can still be profitable if the wins are much bigger than the losses. |
 | `profit_factor` | Money won divided by money lost, over all trades. Above 1 is profitable overall. |
 | `exposure` | The share of the time the money was in the market. |
+| `liquidations` | How often a short or leveraged position was liquidated and its margin lost. Only shown with shorts, leverage or funding ([Shorts and leverage](shorts-and-leverage.md)). |
 | `xirr` | The yearly return on the money while it was actually invested (money-weighted). It makes strategies comparable with the monthly-investing baseline, where money goes in gradually. |
 | `vs buy & hold`, `vs monthly investing` | How much more per year the strategy made than that baseline, by XIRR. Negative means simply holding would have been better. |
 

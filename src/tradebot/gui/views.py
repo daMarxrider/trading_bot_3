@@ -43,12 +43,14 @@ from PyQt6.QtWidgets import (
 from tradebot.algorithms import ALGORITHMS, algorithm_names, build_algorithm
 from tradebot.algorithms.builtin import VotingEnsemble
 from tradebot.algorithms.combo import FILLS, LIMITS, LOGIC, RISK, Combo, check, combine, save_combo, terms
+from tradebot.algorithms.direction import DIRECTIONS, directed
 from tradebot.algorithms.sizing import DESCRIPTIONS as SIZING_MODELS, sized
 from tradebot.algorithms.pool import RULES, PoolEnsemble, default_pool
 from tradebot.backtest.baselines import BUY_HOLD, MONTHLY, baselines, buy_and_hold, monthly_investing
 from tradebot.backtest import report as rep
 from tradebot.backtest.engine import bps
 from tradebot.backtest.metrics import fmt
+from tradebot.backtest.margin import Margin
 from tradebot.backtest.slippage import configured_bps
 from tradebot.config import Settings, watchlists
 from tradebot.brokers import BROKERS, create_broker
@@ -737,6 +739,22 @@ class BacktestView(QWidget):
             self.sizing.addItem(text.split(":")[0], key)
         _explain_choices(self.sizing, explain("sizing"), {k: explain(f"sizing_{k}") for k in ("none", *SIZING_MODELS)})
         self.sizing.currentIndexChanged.connect(lambda _: self._members_changed())
+        self.direction = QComboBox()  # shorts (#149), backtests only
+        for key, text in DIRECTIONS.items():
+            self.direction.addItem(text.split(":")[0], key)
+        self.leverage = QDoubleSpinBox()  # liquidation is modelled (#149)
+        self.leverage.setRange(1.0, 125.0)
+        self.leverage.setDecimals(1)
+        self.leverage.setSuffix("x")
+        self.borrow_fee = QDoubleSpinBox()  # % a year on a short's value
+        self.borrow_fee.setRange(0.0, 100.0)
+        self.borrow_fee.setDecimals(2)
+        self.borrow_fee.setSuffix(" % / year")
+        self.funding = QDoubleSpinBox()  # % per 8 hours, perpetuals
+        self.funding.setRange(-1.0, 1.0)
+        self.funding.setDecimals(4)
+        self.funding.setSingleStep(0.001)
+        self.funding.setSuffix(" % / 8 h")
         self.params = ParamForm({})
         self.members = MemberPicker()
         self.members.changed.connect(self._members_changed)
@@ -844,7 +862,9 @@ class BacktestView(QWidget):
                                ("Candles", self.bars, "candles"), ("Dates", self.dates, "dates"),
                                ("Fee / side", self.fee, "fee"), ("Slippage / side", self.slippage, "slippage"),
                                ("Monthly amount", self.dca_amount, "dca_amount"), ("Algorithm", self.algo, "algorithm"),
-                               ("Position sizing", self.sizing, "sizing")):
+                               ("Position sizing", self.sizing, "sizing"), ("Direction", self.direction, "direction"),
+                               ("Leverage", self.leverage, "leverage"), ("Borrow fee", self.borrow_fee, "borrow_fee"),
+                               ("Funding", self.funding, "funding")):
             _explained_row(form, label, w, term)
         opt_form = QFormLayout()
         for label, w, term in (("Method", self.method, "method"), ("Population / swarm", self.population, "population"),
@@ -1091,7 +1111,16 @@ class BacktestView(QWidget):
     def _build(self):
         """The selected algorithm with default parameters; a vote or a pool with the checked members."""
         name = self.algo.currentText()
-        return sized(self._build_inner(name), self.sizing.currentData())
+        inner, direction = self._build_inner(name), self.direction.currentData()
+        if direction != "long" and getattr(inner, "fills", "close") == "intrabar":
+            self.status.emit("shorts need fills at the close: trading long only")
+            direction = "long"
+        return sized(directed(inner, direction), self.sizing.currentData())
+
+    def _margin(self) -> Margin | None:
+        """Leverage, borrow fee and funding (#149); None when they are all off."""
+        lev, borrow, funding = self.leverage.value(), self.borrow_fee.value() / 100, self.funding.value() / 100
+        return Margin(lev, borrow=borrow, funding=funding) if (lev != 1.0 or borrow or funding) else None
 
     def _build_inner(self, name: str):
         if ALGORITHMS.get(name) is PoolEnsemble:
@@ -1169,11 +1198,11 @@ class BacktestView(QWidget):
         from tradebot.backtest import backtest
 
         algo, fee, amount = self._algorithm(), self.fee.value(), self._amount
-        slip = bps(self.slippage.value())
+        slip, margin = bps(self.slippage.value()), self._margin()
         self._busy(True)
 
         def one(df):
-            res = backtest(df, algo, fee=fee, slippage=slip)
+            res = backtest(df, algo, fee=fee, slippage=slip, margin=margin)
             return df, {"backtest": res, "_baselines": {"backtest": baselines(df, res, fee, amount=amount, slippage=slip)},
                         "_plot_baselines": self._plot_baselines(df, fee, amount, slip)}
 
@@ -1256,6 +1285,8 @@ class BacktestView(QWidget):
                       aggregate=self.aggregate.currentText(), align=self.align.isChecked(),
                       min_symbols_beating=self.min_beating.value(), samples=self.samples.value(),
                       sample_length=self.sample_length.value())
+        if (margin := self._margin()) is not None:
+            kwargs["margin"] = margin
         if self.wf_folds.value() and self.meta.value():
             self._run_meta(algo, method, kwargs)
             return
@@ -1850,7 +1881,8 @@ class BacktestView(QWidget):
 
     def _show_selection(self, algo, results: dict[str, dict]):
         """Which pool members each method used and which it dropped; with two methods, whether they agree (#21)."""
-        algo = getattr(algo, "inner", algo)  # a sized pool (#147)
+        while hasattr(algo, "inner"):  # a sized (#147) or long/short (#149) pool
+            algo = algo.inner
         if not isinstance(algo, PoolEnsemble):
             self.selection_card.hide()
             return

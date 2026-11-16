@@ -39,6 +39,7 @@ tradebot backtest AAPL vote --members rsi_threshold,sma_cross
 tradebot backtest AAPL combo --entry "close > sma(200) & rsi(14) < 35" --exit "stop_pct(5) | rsi(14) > 55"
 tradebot backtest AAPL,MSFT,NVDA,KO,JNJ sma_cross --max-positions 3 --allocation volatility --rebalance month   # one shared account, see portfolio-backtest.md
 tradebot backtest BTC/USDT sma_cross --sizing vol -p size.target_vol=0.2   # position sizing
+tradebot backtest BTC/USDT macd_cross --direction long_short --leverage 3 --funding history   # shorts and leverage, see shorts-and-leverage.md
 tradebot backtest AAPL combo --entry "rsi_threshold & regime.bull" --regimes   # result per market regime
 tradebot backtest AAPL macd_cross --slippage 5 --fee 0.001
 tradebot backtest AAPL macd_cross --report aapl.html --trades-csv aapl.csv --no-plot
