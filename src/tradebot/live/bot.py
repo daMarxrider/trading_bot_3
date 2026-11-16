@@ -33,6 +33,7 @@ from tradebot.algorithms.base import BaseAlgorithm
 from tradebot.brokers.base import BaseBroker
 from tradebot.core.models import Order, Side
 from tradebot.core.timeframes import to_timedelta
+from tradebot.journal import Journal
 from tradebot.live.risk import RiskEvent, RiskGuard, RiskLimits
 
 log = logging.getLogger(__name__)
@@ -68,6 +69,7 @@ class TradingBot:
     on_risk: Callable[[RiskEvent], None] | None = None  #: called on every risk trigger (notification hook)
     entry_price: float = 0.0  #: price the current position was bought at
     guard: RiskGuard | None = field(default=None, init=False, repr=False)
+    journal: Journal | None = None  #: every order is stored here (#159); see :mod:`tradebot.journal`
 
     def _risk_trigger(self, e: RiskEvent) -> None:
         notify.notify("risk", f"Risk guard: {self.symbol} {e.kind}", e.message)
@@ -91,6 +93,23 @@ class TradingBot:
         if len(df) and df.index[-1] + step > pd.Timestamp.now(tz="UTC"):
             df = df.iloc[:-1]  # the last candle is still forming
         return df
+
+    @property
+    def mode(self) -> str:
+        return "dry" if self.dry_run else "paper" if getattr(self.broker, "simulated", False) else "live"
+
+    def _journal(self, event: BotEvent) -> None:
+        if not self.journal or event.action not in ("buy", "sell"):
+            return
+        try:
+            bot = f"{self.algorithm.__class__.__name__} {self.timeframe}"
+            if event.order:
+                self.journal.record_order(event.order, self.broker, mode=self.mode, bot=bot, note=event.note)
+            else:  # dry run: nothing was sent, record the intended fill at the candle's close
+                self.journal.record(self.symbol, event.action, event.amount, event.price, mode=self.mode,
+                                    broker=getattr(self.broker, "name", ""), bot=bot, note=event.note)
+        except Exception:  # a broken journal must never stop the bot
+            log.exception("journal write failed for %s", self.symbol)
 
     def _sell(self, event: BotEvent, target: float = 0.0) -> None:
         """Sell the whole holding (``target`` 0) or scale out to ``target`` of the position."""
@@ -146,6 +165,7 @@ class TradingBot:
         elif self.holding > 0 and target < fraction - 1e-9:
             self._sell(event, target)
         self.events.append(event)
+        self._journal(event)
         log.info("%s %s target=%.2f price=%.6g amount=%.6g%s%s", self.symbol, event.action, target, price,
                  event.amount, " (dry run)" if self.dry_run else "", f" [{event.note}]" if event.note else "")
         if self.on_event:
