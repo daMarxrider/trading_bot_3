@@ -289,6 +289,20 @@ TERMS = {
     "sizing_kelly": "Fractional Kelly: the share of the capital that grows it fastest given the strategy's "
                     "recent winners and losers, scaled down (half Kelly by default). Zero when the recent "
                     "returns show no edge.",
+    "liquidations": "How often a short or leveraged position ran so far against the strategy that the exchange "
+                    "closed it and kept its margin. Shown when shorts or leverage are on.",
+    "direction": "Long buys and profits when the price rises. Short sells borrowed units and profits when it "
+                 "falls: it goes short on the strategy's sell signal. Long and short does both, switching sides. "
+                 "A short is liquidated when the price runs away (about doubles without leverage). Backtests "
+                 "only; the live bot does not open shorts.",
+    "leverage": "How many times its margin a position is worth. 3x turns a 10% move into 30% on the margin, up "
+                "or down. When the loss nearly uses up the margin the position is liquidated and the margin is "
+                "lost (10x: a move of about 9.5% against it). 1x is no leverage.",
+    "borrow_fee": "The yearly fee for borrowing the shares of a short, as a percentage of its value (stocks: "
+                  "often 0.3 to 5%, more for hard-to-borrow ones; perpetual futures: 0).",
+    "funding": "Perpetual futures settle funding every 8 hours: at a positive rate longs pay shorts that share of "
+               "their position, at a negative one shorts pay longs. 0.01% per 8 hours is about 11% a year. The "
+               "command line can also use the exchange's historical rates (--funding history).",
     "limit_entry": "limit_pct(1) or limit_atr(0.5) in the entry rule, joined with &: when the rest holds, place "
                    "a buy order 1% (0.5 ATRs) below the close for the next candle. Not filled if the price "
                    "doesn't come down to it.",

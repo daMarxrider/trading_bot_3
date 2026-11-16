@@ -56,6 +56,7 @@ bots, a desktop app (PyQt6) and a terminal CLI. It is licensed under the GNU GPL
 * [Pairs trading](pairs-trading.md)
 * [Market regimes and position sizing](regimes-and-sizing.md)
 * [Multi-timeframe indicators and strategies](multi-timeframe.md): `tf=` in rules, on the chart, in the Scanner and in evolve
+* [Shorts and leverage](shorts-and-leverage.md): long/short strategies, leverage, liquidation, borrow fees, funding
 * [Alerts](alerts.md): price, indicator and scheduled-scan alerts
 
 **Reference**

@@ -28,6 +28,7 @@ def render_chart(
     height: int | None = None,
     window: int | None = None,
     volume: bool | None = None,
+    shown: pd.DataFrame | None = None,
 ) -> str:
     """Build the chart and return it as an ANSI string.
 
@@ -35,7 +36,8 @@ def render_chart(
     up) and only the last ``window`` candles are drawn. Overlay indicators and
     buy/sell markers share the price pane; other indicators and the equity
     curve get panes of their own. ``volume`` adds a volume bar pane under the
-    candles (default: when the data has volume).
+    candles (default: when the data has volume). ``shown``: other candles on the same index (Heikin-Ashi, #163)
+    drawn instead of ``df``'s; indicators, signals and volume still come from ``df``.
     """
     computed = {id(i): i(df) for i in indicators}
     positions = algorithm.run(df) if algorithm is not None else None
@@ -44,6 +46,7 @@ def render_chart(
         computed = {k: v.loc[df.index] for k, v in computed.items()}
         positions = positions.loc[df.index] if positions is not None else None
         equity = equity.loc[df.index] if equity is not None else None
+    drawn = df if shown is None else shown.loc[df.index]
     panes = [i for i in indicators if not i.overlay]
     vol = volume_of(df)
     has_volume = bool(np.isfinite(vol).any())
@@ -61,10 +64,10 @@ def render_chart(
 
     main = _pane(fig, 1, rows)
     if line:
-        main.draw(main.signal(dates, df["close"].tolist()).lines().label("close"))
+        main.draw(main.signal(dates, drawn["close"].tolist()).lines().label("close"))
     else:
-        main.draw(main.candlestick({"date": dates, "open": df["open"].tolist(), "high": df["high"].tolist(),
-                                    "low": df["low"].tolist(), "close": df["close"].tolist()}))
+        main.draw(main.candlestick({"date": dates, "open": drawn["open"].tolist(), "high": drawn["high"].tolist(),
+                                    "low": drawn["low"].tolist(), "close": drawn["close"].tolist()}))
     for ind in indicators:
         if ind.overlay:
             _draw_frame(main, dates, computed[id(ind)], ind)

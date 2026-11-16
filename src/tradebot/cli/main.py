@@ -60,6 +60,22 @@ Sizing = Annotated[Optional[str], typer.Option(
                                     ("vol", "volatility target"), ("risk", "fixed risk per trade"),
                                     ("kelly", "fractional Kelly"))
 )]
+Direction = Annotated[Optional[str], typer.Option(
+    help="Trade direction (#149): long (default), short (short on the strategy's sell signal) or long_short "
+         "(long on its buy signal, short on its sell signal). Shorts are backtested with liquidation and "
+         "--borrow-fee / --funding; the live bot does not open shorts",
+    autocompletion=complete.choices(("long", "long only"), ("short", "short only"),
+                                    ("long_short", "long and short")))]
+Leverage = Annotated[float, typer.Option(
+    min=1.0, max=125.0, help="Leverage (#149): each position is this many times its margin. Positions are "
+                             "liquidated (the margin is lost) when the price reaches the liquidation price")]
+MaintenanceMargin = Annotated[float, typer.Option(
+    help="Maintenance margin rate, fraction of the notional (0.005 = 0.5%); liquidation below it")]
+BorrowFee = Annotated[float, typer.Option(
+    help="Yearly borrow fee of a short, fraction (stocks ~0.01-0.05, perpetuals 0)")]
+Funding = Annotated[Optional[str], typer.Option(
+    help="Funding of a perpetual future: a rate per 8 hours (0.0001 = 0.01%, longs pay shorts when positive) or "
+         "'history' for the exchange's historical rates (crypto)")]
 TF = Annotated[str, typer.Option("--tf", help="Timeframe: 1m 5m 15m 30m 1h 4h 1d 1w", autocompletion=complete.timeframes)]
 Symbol = Annotated[str, typer.Argument(help="e.g. AAPL, SAP.DE, BTC/USDT", autocompletion=complete.symbols)]
 Algo = Annotated[str, typer.Argument(help="Algorithm name (tradebot list)", autocompletion=complete.algorithms)]
@@ -147,7 +163,8 @@ def load_data(symbol: str, tf: str, start: str | None, end: str | None, bars: in
 
 
 def make_algo(name: str, params: list[str], members: str | None, entry: str | None = None, exit: str | None = None,
-              fills: str | None = None, sizing: str | None = None):
+              fills: str | None = None, sizing: str | None = None, direction: str | None = None):
+    from tradebot.algorithms.direction import directed
     from tradebot.algorithms.sizing import PREFIX, sized
 
     try:
@@ -155,9 +172,43 @@ def make_algo(name: str, params: list[str], members: str | None, entry: str | No
         size = {k: v for k, v in given.items() if k.startswith(PREFIX)}
         algo = build_algorithm(name, {k: v for k, v in given.items() if k not in size},
                                members.split(",") if members else None, entry, exit, fills)
-        return sized(algo, sizing, **size)
+        return sized(directed(algo, direction), sizing, **size)
     except ValueError as e:
         raise typer.BadParameter(str(e)) from None
+
+
+def _margin(leverage: float = 1.0, maintenance: float = 0.005, borrow: float = 0.0, funding: str | None = None):
+    """The backtest's :class:`Margin` from the CLI options (#149), None when they are all at their defaults."""
+    from tradebot.backtest.margin import Margin
+
+    rate = 0.0 if funding in (None, "history") else _float(funding, "--funding")
+    if leverage == 1.0 and maintenance == 0.005 and not borrow and not rate:
+        return None
+    try:
+        return Margin(leverage, maintenance, borrow, rate)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+
+
+def _float(text: str, hint: str) -> float:
+    try:
+        return float(text)
+    except ValueError:
+        raise typer.BadParameter(f"expected a number or 'history', got {text!r}", param_hint=hint) from None
+
+
+def _funding_history(funding: str | None, symbol: str, df: pd.DataFrame):
+    """Historical funding per candle of ``df`` for ``--funding history``, else None."""
+    if funding != "history":
+        return None
+    from tradebot.data.funding import fetch_history, per_candle
+
+    try:
+        with console.status(f"fetching funding rates of {symbol} ..."):
+            rates = fetch_history(symbol, df.index[0], df.index[-1] + (df.index[-1] - df.index[-2]))
+    except Exception as e:  # noqa: BLE001 - no perpetual, offline, exchange error
+        raise typer.BadParameter(f"no funding history for {symbol}: {e}", param_hint="--funding") from None
+    return per_candle(rates, df.index)
 
 
 def results_table(title: str, columns: dict[str, dict]) -> Table:
@@ -217,18 +268,48 @@ def chart(
     exit: Exit = None,
     fills: Fills = None,
     sizing: Sizing = None,
+    direction: Direction = None,
     line: Annotated[bool, typer.Option(help="Line chart instead of candles")] = False,
     volume: Annotated[bool, typer.Option(help="Volume bars under the candles (when the data has volume)")] = True,
+    kind: Annotated[str, typer.Option("--type", help="candles | line | heikin-ashi | renko (a display transform: "
+                                      "signals and indicators still use the real candles)",
+                                      autocompletion=complete.choices(["candles", "line", "heikin-ashi", "renko"]))] = "candles",
+    brick: Annotated[Optional[float], typer.Option(help="Renko brick size in price units (default: ATR 14)")] = None,
+    compare: Annotated[Optional[list[str]], typer.Option("--compare", help="Overlay these symbols as percent change "
+                                                         "from the left edge (repeat the option); needs no indicators")] = None,
 ):
-    """Terminal OHLC chart with indicator overlays, volume and algorithm signals."""
-    from tradebot.cli.charts import render_chart
+    """Terminal OHLC chart with indicator overlays, volume and algorithm signals.
 
-    algorithm = make_algo(algo, param, members, entry, exit, fills, sizing) if algo else None
+    ``--type heikin-ashi|renko`` change how the candles are drawn; ``--compare ETH/USDT --compare SOL/USDT`` plots
+    percent change of several symbols instead. A ratio chart is a symbol like ``ETH/USDT:BTC/USDT`` or ``KO:PEP``."""
+    from tradebot.analysis.charttypes import TYPES, heikin_ashi, percent_change, renko
+    from tradebot.cli.charts import render_chart, render_lines
+
+    if kind not in TYPES:
+        raise typer.BadParameter(f"type must be one of {', '.join(TYPES)}", param_hint="--type")
+    if compare:
+        names = [symbol, *compare]
+        frame = percent_change({n: load_data(n, tf, None, None, bars)["close"] for n in names})
+        if frame.empty:
+            raise typer.BadParameter("the symbols have no candles in common")
+        print(render_lines({n: frame[n] for n in names}, f"{', '.join(names)} {tf}: change in %"))
+        return
+
+    algorithm = make_algo(algo, param, members, entry, exit, fills, sizing, direction) if algo else None
     inds = [parse_indicator(s) for s in indicator]
     if algorithm and not inds:
         inds = algorithm.chart_indicators()
     df = load_data(symbol, tf, None, None, bars + 250)  # extra history warms up indicators
-    print(render_chart(df, f"{symbol} {tf}", inds, algorithm, line, window=bars, volume=volume))
+    shown = None
+    title = f"{symbol} {tf}" + (f" ({kind})" if kind not in ("candles", "line") else "")
+    if kind == "heikin-ashi":
+        shown = heikin_ashi(df)
+    elif kind == "renko":  # bricks have their own time stamps: no indicators, signals or volume next to them
+        try:
+            df, inds, algorithm, volume = renko(df.tail(bars), brick), [], None, False
+        except ValueError as e:
+            raise typer.BadParameter(str(e), param_hint="--brick") from None
+    print(render_chart(df, title, inds, algorithm, line or kind == "line", window=bars, volume=volume, shown=shown))
 
 
 @app.command()
@@ -246,6 +327,11 @@ def backtest(
     exit: Exit = None,
     fills: Fills = None,
     sizing: Sizing = None,
+    direction: Direction = None,
+    leverage: Leverage = 1.0,
+    maintenance_margin: MaintenanceMargin = 0.005,
+    borrow_fee: BorrowFee = 0.0,
+    funding: Funding = None,
     fee: Annotated[float, typer.Option(help="Fee per side, fraction")] = 0.001,
     slippage: Slippage = None,
     capital: float = 10_000.0,
@@ -285,18 +371,29 @@ def backtest(
     from tradebot.backtest import backtest as run_backtest, baselines
     from tradebot.cli.charts import render_chart
 
-    algorithm = make_algo(algo, param, members, entry, exit, fills, sizing)
+    algorithm = make_algo(algo, param, members, entry, exit, fills, sizing, direction)
+    margin = _margin(leverage, maintenance_margin, borrow_fee, funding)
     if portfolio or max_positions or watchlist:
+        if algorithm.allow_short or margin is not None or funding:
+            raise typer.BadParameter("the portfolio backtest is long-only without leverage (no --direction, "
+                                     "--leverage, --borrow-fee or --funding)")
         _backtest_portfolio(_symbols(symbol, watchlist), algorithm, tf, start, end, bars, fee, capital, slippage,
                             max_positions, allocation, rebalance, plot, trades_csv, report)
         return
     symbols = _symbols(symbol, [])
     if len(symbols) > 1:
-        _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount, slippage)
+        _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount, slippage, margin, funding)
         return
     df = load_data(symbol, tf, start, end, bars)
     slip = _slippage(slippage, symbol)
-    res = run_backtest(df, algorithm, fee=fee, initial_capital=capital, slippage=slip)
+    try:
+        res = run_backtest(df, algorithm, fee=fee, initial_capital=capital, slippage=slip, margin=margin,
+                           funding=_funding_history(funding, symbol, df))
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+    if res.liquidations is not None and res.liquidations.any():
+        when = ", ".join(f"{t:%Y-%m-%d}" for t in res.liquidations.index[res.liquidations.to_numpy()][:5])
+        console.print(f"[bold red]liquidated {int(res.liquidations.sum())} time(s)[/]: {when}")
     if plot:
         print(render_chart(df, f"{symbol} {tf} · {algorithm!r}", algorithm.chart_indicators(), algorithm, equity=res.equity))
     bl = baselines(df, res, fee=fee, initial_capital=capital, amount=dca_amount, slippage=slip)
@@ -393,7 +490,8 @@ def _slippage(value: str | None, symbol: str | None) -> float:
         raise typer.BadParameter(str(exc), param_hint="--slippage") from None
 
 
-def _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount, slippage=None) -> None:
+def _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount, slippage=None, margin=None,
+                   funding=None) -> None:
     """One row per symbol: the strategy's return, Sharpe, XIRR and lead over each baseline."""
     from tradebot.backtest import backtest as run_backtest, baselines
     from tradebot.backtest.metrics import fmt
@@ -404,7 +502,8 @@ def _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_a
     beats = {}
     for s, df in _load_many(symbols, tf, start, end, bars).items():
         slip = _slippage(slippage, s)
-        res = run_backtest(df, algorithm, fee=fee, initial_capital=capital, slippage=slip)
+        res = run_backtest(df, algorithm, fee=fee, initial_capital=capital, slippage=slip, margin=margin,
+                           funding=_funding_history(funding, s, df))
         bl = baselines(df, res, fee=fee, initial_capital=capital, amount=dca_amount, slippage=slip)
         lead = [f"[{'green' if v > 0 else 'red'}]{fmt('vs buy & hold', v)}[/]" for v in bl.excess.values()]
         for name in bl.excess:
@@ -477,6 +576,11 @@ def optimize(
     exit: Exit = None,
     fills: Fills = None,
     sizing: Sizing = None,
+    direction: Direction = None,
+    leverage: Leverage = 1.0,
+    maintenance_margin: MaintenanceMargin = 0.005,
+    borrow_fee: BorrowFee = 0.0,
+    funding: Funding = None,
     pool: Annotated[Optional[str], typer.Option(
         help="Comma-separated strategies and indicators the optimizer picks from (default: all)",
         autocompletion=complete.pool_members)] = None,
@@ -559,15 +663,16 @@ def optimize(
     symbols = _symbols(symbol, watchlist)
     if algo in (None, "pool"):
         algorithm = _make_pool(pool or members, min_members, max_members)
-        if sizing:
+        if sizing or direction:
+            from tradebot.algorithms.direction import directed
             from tradebot.algorithms.sizing import sized
 
-            algorithm = sized(algorithm, sizing)
+            algorithm = sized(directed(algorithm, direction), sizing)
         algo = "pool"
     elif pool or min_members != 1 or max_members is not None:
         raise typer.BadParameter("--pool, --min-members and --max-members need the pool: leave out the algorithm")
     else:
-        algorithm = make_algo(algo, [], members, entry, exit, fills, sizing)
+        algorithm = make_algo(algo, [], members, entry, exit, fills, sizing, direction)
     if len(symbols) == 1:
         df = load_data(symbols[0], tf, start, end, bars)
         size = f"{len(df)} candles"
@@ -580,6 +685,11 @@ def optimize(
                   backend=select_backend(backend), fee=fee, slippage=_slippage(slippage, symbols[0]), seed=seed, fixed=parse_kv(fix), min_trades=min_trades,
                   dca_amount=dca_amount, aggregate=aggregate, align=align, min_symbols_beating=min_symbols_beating,
                   samples=samples, sample_length=sample_length)
+    if funding == "history":
+        raise typer.BadParameter("the optimizer takes a constant rate per 8 hours; historical funding is for "
+                                 "backtest", param_hint="--funding")
+    if (margin := _margin(leverage, maintenance_margin, borrow_fee, funding)) is not None:
+        kwargs["margin"] = margin
     n_genes = len([k for k in algorithm.param_space() if k not in kwargs["fixed"]])
     console.print(f"backend: [bold]{kwargs['backend'].description}[/] · {size} · {n_genes} parameters"
                   + (f" · {samples} random windows of {sample_length} candles per symbol and generation" if samples else ""))
@@ -1128,15 +1238,20 @@ def _reused(algorithm, params: dict) -> dict:
 def _reuse_command(symbol: str, algorithm, params: dict) -> str:
     flags = " ".join(f"-p {k}={v:g}" for k, v in _reused(algorithm, params).items())
     members = f" --members {','.join(algorithm.selected(params))}" if hasattr(algorithm, "selected") else ""
-    base = getattr(algorithm, "inner", algorithm)  # a sized algorithm (#147): the sizing model is a flag
+    from tradebot.algorithms.direction import Directed
+    from tradebot.algorithms.sizing import Sized
+
+    base, wrappers = algorithm, ""  # sizing (#147) and direction (#149) wrappers are flags
+    while isinstance(base, (Sized, Directed)):
+        wrappers += f" --sizing {base.model}" if isinstance(base, Sized) else f" --direction {base.direction}"
+        base = base.inner
     if type(base).__name__ == "Combo":  # the generic combo: its rules aren't saved anywhere
         import shlex
 
         members = f" --entry {shlex.quote(base.entry)}" + (f" --exit {shlex.quote(base.exit)}" if base.exit else "")
     if getattr(base, "fills", "close") != "close":
         members += f" --fills {base.fills}"
-    if base is not algorithm:
-        members += f" --sizing {algorithm.model}"
+    members += wrappers
     return f"tradebot backtest {symbol} {algorithm.name}{members} {flags}"
 
 

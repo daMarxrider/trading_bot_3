@@ -27,6 +27,29 @@ The chart reopens with the symbol, timeframe, indicators and signal you had when
 
 The app remembers all three toggles between sessions.
 
+## Chart types
+
+The **type** box next to the timeframe changes how the price is drawn:
+
+* **Standard**: candles, or a line with the **Line** toggle.
+* **Heikin-Ashi**: smoothed candles (close = average of open/high/low/close, open = midpoint of the previous
+  candle), so a trend shows as a run of same-coloured candles. **Line** draws their close.
+* **Renko**: bricks of a fixed size (the ATR over 14 candles) that only form when the close moves a full brick; a
+  reversal needs two bricks of movement. Time is not an axis in Renko, so each brick sits at the time of the candle
+  that completed it and several bricks from one candle share its width. **Line** is ignored.
+* **Compare**: type symbols in the **vs** box (`ETH/USDT, SOL/USDT`) and press Enter. The charted symbol and those
+  are drawn as percent change from the first time they all have, so everything starts at 0 %. Overlay indicators and
+  signal markers are hidden (they are prices), indicator panes still show.
+* **Ratio**: the charted symbol divided by the first symbol in **vs** (`KO` and `PEP` chart `KO:PEP`, see
+  [Pairs](pairs.md)). Indicators and signals then run on the ratio, since that is what you are looking at.
+
+Heikin-Ashi and Renko are only drawings: indicators, signals and backtests keep using the real candles. The
+crosshair readout shows the real O/H/L/C. The type (except Compare and Ratio) is remembered between sessions.
+
+In the terminal: `tradebot chart SYMBOL --type heikin-ashi|renko [--brick 50]`, and
+`tradebot chart BTC/USDT --compare ETH/USDT --compare SOL/USDT` for the percent-change comparison. In the terminal,
+Renko shows bricks only (no indicators, signals or volume).
+
 ## Indicators
 
 **Indicators ▾** lists every registered indicator: the built-ins and [your plugins](extending.md). Each one is drawn on

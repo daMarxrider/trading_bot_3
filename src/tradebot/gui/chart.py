@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
     QWidgetAction,
 )
 
+from tradebot.analysis.charttypes import heikin_ashi, percent_change, renko
 from tradebot.algorithms import ALGORITHMS, algorithm_names, build_algorithm
 from tradebot.config import Settings
 from tradebot.core.series import volume_of
@@ -461,6 +462,9 @@ class VolumeBarsItem(CandlestickItem):
         return [(style, None, _rects(x[m], l[m], h[m], width)) for style, m in ((0, rising), (1, ~rising)) if m.any()]
 
 
+CHART_TYPES = ("Standard", "Heikin-Ashi", "Renko", "Compare", "Ratio")
+
+
 class ChartView(QWidget):
     status = pyqtSignal(str)
 
@@ -507,6 +511,19 @@ class ChartView(QWidget):
         load.clicked.connect(self.load)
         self.style_btn = QToolButton(text="Line", checkable=True)
         self.style_btn.toggled.connect(lambda _: self.redraw())
+        # how the price is drawn (#163): Heikin-Ashi and Renko are display transforms, Compare overlays other symbols as
+        # percent change, Ratio charts this symbol divided by the "vs" one. Strategies always use the real candles.
+        self.type_box = QComboBox(toolTip="Chart type. Heikin-Ashi and Renko only change the drawing; Compare overlays "
+                                          "the symbols in 'vs' as percent change; Ratio charts symbol / vs")
+        self.type_box.addItems(CHART_TYPES)
+        self._type = CHART_TYPES[0]
+        self.type_box.currentTextChanged.connect(self._type_changed)
+        self.versus = QLineEdit(placeholderText="vs: ETH/USDT, SOL/USDT", toolTip="Symbols to compare with, or the "
+                                "second symbol of a ratio (comma separated)")
+        self.versus.setFixedWidth(190)
+        self.versus.returnPressed.connect(self.load)
+        self.versus.setVisible(False)
+        self.compare: dict[str, pd.DataFrame] = {}  # the other symbols' candles in Compare mode
 
         self.ind_btn = QToolButton(text="Indicators ▾")
         self.ind_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -544,7 +561,7 @@ class ChartView(QWidget):
 
         # three groups that wrap onto a second row on narrow windows; the tools (… Clear, Loadouts) stay top right
         bar = FlowLayout(spacing=12, last_right=True)
-        for group in ((self.symbol, self.tf, self.bars, self.dates, load), (self.style_btn, self.ind_btn, self.algo_box),
+        for group in ((self.symbol, self.tf, self.bars, self.dates, load), (self.type_box, self.versus, self.style_btn, self.ind_btn, self.algo_box),
                       (*tool_group, clear, self.loadout_btn)):
             bar.addWidget(toolbar_group(*group))
 
@@ -657,8 +674,16 @@ class ChartView(QWidget):
         symbol, tf, bars = self.symbol.text().strip(), self.tf.currentText(), int(self.bars.currentText())
         if not symbol:
             return
-        self.status.emit(f"loading {symbol} {tf} …")
         start, end = self.dates.range()
+        others = self._others()
+        if self._type == "Ratio" and others:  # the engine builds "A:B" from both legs
+            symbol = f"{symbol}:{others[0]}"
+        self.status.emit(f"loading {symbol} {tf} …")
+        self.compare = {k: v for k, v in self.compare.items() if k in others and self._type == "Compare"}
+        if self._type == "Compare":
+            for other in others:
+                run_async(lambda o=other: self.engine.get_ohlc(o, tf, start=start, end=end, bars=bars),
+                          lambda df, o=other: self._compared(o, df), lambda err, o=other: self.status.emit(f"{o}: {err}"))
         cached = self.engine.peek(symbol, tf, start=start, end=end, bars=bars)  # from disk, no network (#63)
         if cached is not None:
             self._loaded(symbol, cached, " · from the cache, updating …")
@@ -666,6 +691,24 @@ class ChartView(QWidget):
                   lambda df: self._loaded(symbol, df, shortfall(df, bars, start) + _offline_note(df),
                                           refresh=cached is not None),
                   lambda err: self.status.emit(f"{symbol}: {err}"))
+
+    def _others(self) -> list[str]:
+        return [t for t in (p.strip() for p in self.versus.text().split(",")) if t]
+
+    def _type_changed(self, kind: str):
+        old, self._type = self._type, kind
+        self.versus.setVisible(kind in ("Compare", "Ratio"))
+        if self.settings is not None and kind not in ("Compare", "Ratio"):
+            self.settings.set("chart.type", kind)
+        if "Ratio" in (old, kind) or kind == "Compare" and self._others():
+            self.load()  # other data is needed (or the plain symbol again)
+        else:
+            self.redraw()
+
+    def _compared(self, symbol: str, df: pd.DataFrame):
+        if self._type == "Compare" and symbol in self._others():
+            self.compare[symbol] = df
+            self.redraw()
 
     def _loaded(self, symbol, df, note="", refresh=False):
         """Show loaded candles; ``refresh``: newer candles for what the chart already shows from the cache,
@@ -899,7 +942,8 @@ class ChartView(QWidget):
         direction = t.up if row.close >= row.open else t.down
         ohlc = " ".join(f"{muted(k)}{colored(row[c], direction)}" for k, c in
                         (("O", "open"), ("H", "high"), ("L", "low"), ("C", "close")))
-        head = [f"<span style='color:{t.text}'>{escape(self._title)}</span>" if self._title else "", ohlc]
+        title = self._title + (f" · {self._type}" if self._type in ("Heikin-Ashi", "Renko", "Compare") else "")
+        head = [f"<span style='color:{t.text}'>{escape(title)}</span>" if self._title else "", ohlc]
         if i > 0:
             prev = self.df["close"].iloc[i - 1]
             diff = row.close - prev
@@ -948,23 +992,41 @@ class ChartView(QWidget):
         width = (np.median(np.diff(x)) if len(x) > 1 else 86400) * 0.7
         o, h, l, c = (df[k].to_numpy() for k in ("open", "high", "low", "close"))
         positive = bool((l > 0).all())
-        self._set_log(self.log_btn.isChecked() and positive)
-        if self.log_btn.isChecked() and not positive:
+        self._set_log(self.log_btn.isChecked() and positive and self._type != "Compare")  # percent change can be < 0
+        if self.log_btn.isChecked() and not positive and self._type != "Compare":
             self.status.emit("log scale needs prices above 0: showing a linear scale")
         ty = self._ty
-        if self.style_btn.isChecked():
-            self.price.addItem(Curve(x, ty(c), pen=pg.mkPen(qcolor(t.accent), width=2)))
-            self._fit_series[self.price] = [ty(c)]
+        kind = self._type
+        compare = kind == "Compare"
+        if compare:  # percent change lines instead of candles; overlays on the real price would not fit the scale
+            self._draw_compare(df, x, t)
         else:
-            self._fit_series[self.price] = [ty(l), ty(h)]
-            candles = CandlestickItem()
-            candles.set_data(x, ty(o), ty(h), ty(l), ty(c), width, qcolor(t.up), qcolor(t.down))
-            self.price.addItem(candles)
+            # what is drawn: Heikin-Ashi/Renko replace the candles; indicators and signals below keep the real ones
+            shown = heikin_ashi(df) if kind == "Heikin-Ashi" else df
+            if kind == "Renko":
+                try:
+                    shown = renko(df)
+                except ValueError:
+                    shown = df.iloc[0:0]
+            sx = epoch_seconds(shown.index) if len(shown) else np.empty(0)
+            sw = (np.median(np.diff(sx)) if len(sx) > 1 else 86400) * 0.7
+            so, sh, sl, sc = (shown[k].to_numpy() for k in ("open", "high", "low", "close"))
+            if self.style_btn.isChecked() and kind != "Renko":
+                self.price.addItem(Curve(sx, ty(sc), pen=pg.mkPen(qcolor(t.accent), width=2)))
+                self._fit_series[self.price] = [ty(sc)]
+            else:
+                # bricks are not one per candle: the fit covers the real range (they follow the close)
+                self._fit_series[self.price] = [ty(l), ty(h)] if kind == "Renko" else [ty(sl), ty(sh)]
+                candles = CandlestickItem()
+                candles.set_data(sx, ty(so), ty(sh), ty(sl), ty(sc), sw, qcolor(t.up), qcolor(t.down))
+                self.price.addItem(candles)
 
         if self.volume_overlay and np.isfinite(volume_of(df)).any():
             self._draw_volume_overlay(x, volume_of(df), o, c, width, t)
 
         for ind in self.indicators:
+            if compare and ind.overlay:
+                continue
             note = ""
             try:
                 frame = ind(df)
@@ -1030,7 +1092,7 @@ class ChartView(QWidget):
                         target.addItem(item)
             self._draw_shades(ind, frame, x, width, t)
         self._drop_panes(spare)
-        if self.algorithm is not None:
+        if self.algorithm is not None and not compare:
             self._positions = self.algorithm.run(df).to_numpy()
             change = np.diff(np.r_[0.0, self._positions])
             for mask, symbol, color, anchor in ((change > 0, "t1", t.up, l * 0.995), (change < 0, "t", t.down, h * 1.005)):
@@ -1045,6 +1107,22 @@ class ChartView(QWidget):
             self.reset_view()
         else:
             self.fit_y()
+
+    def _draw_compare(self, df, x, t):
+        """The charted symbol and ``self.compare`` as percent change from the first time they all have (#163)."""
+        name = self._loaded_symbol or "symbol"
+        frame = percent_change({name: df["close"], **{k: v["close"] for k, v in self.compare.items()}})
+        frame = frame.reindex(df.index)  # the bars of the chart, so the crosshair and values line up
+        for k, col in enumerate(frame.columns):
+            y = frame[col].to_numpy()
+            ok = np.isfinite(y)
+            color = qcolor(t.series[k % len(t.series)])
+            self.price.addItem(Curve(x[ok], y[ok], pen=pg.mkPen(color, width=2), name=col))
+            self._fit_series.setdefault(self.price, []).append(y)
+            fmt = lambda v: "–" if not np.isfinite(v) else f"{v:+.2f}%"  # noqa: E731
+            self._rows[self.price].append((col, [(y, color.name(), fmt)]))
+        if not self.compare:
+            self.status.emit("Compare: type the symbols to compare with in the 'vs' box and press Enter")
 
     def _new_pane(self):
         """An empty indicator pane below the last one, x-linked to the price pane."""
@@ -1576,6 +1654,12 @@ class ChartView(QWidget):
                 widget.blockSignals(False)
         if session.get("symbol"):
             self.symbol.setText(session["symbol"])
+        kind = self.settings.get("chart.type", "Standard")
+        if kind in CHART_TYPES and kind not in ("Compare", "Ratio"):
+            self.type_box.blockSignals(True)
+            self.type_box.setCurrentText(kind)
+            self.type_box.blockSignals(False)
+            self._type = kind
         self._pending_note = self._apply_setup(session)
 
     def clear_drawings(self):
