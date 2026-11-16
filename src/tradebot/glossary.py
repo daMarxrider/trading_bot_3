@@ -255,6 +255,9 @@ TERMS = {
                        "red lost; the stronger the colour, the bigger the move.",
     "underwater": "How far below its previous high the money was at each moment, in percent. The deepest dip is "
                   "the maximum drawdown.",
+    "regime_table": "How the strategy did in each market regime: bull, bear or sideways (the close up or down more "
+                    "than a threshold over the trend period) and high or low volatility (ATR above or below its "
+                    "longer average). A bar counts with the regime known when its position was taken.",
     "export_trades": "Saves the list of trades (entry, exit, side, return, days held) as a CSV file for a "
                      "spreadsheet.",
     "export_report": "Saves one HTML page with the metrics, equity curve, underwater plot, monthly returns and "
@@ -269,6 +272,20 @@ TERMS = {
     "fills_intrabar": "Stops, take-profits and limit buys fill inside the candle at their level, or at the open "
                       "when it gaps past it. A stop and a take-profit in one candle: the stop counts, the worse "
                       "case, since the order inside the candle is unknown.",
+    "sizing": "How much to put on at each entry, on top of what the strategy signals. Full size puts on the "
+              "whole stake; the models below put on less, never more (no leverage). The sizing settings show "
+              "up as size.* in the parameters and the optimizer can tune them. Compare exposure and maximum "
+              "drawdown with and without.",
+    "sizing_none": "Every entry uses the whole stake, as in earlier versions.",
+    "sizing_fixed": "A fixed share of the capital at each entry, e.g. 50%.",
+    "sizing_vol": "Volatility target: the position is sized so its annual volatility is about the target. "
+                  "Quiet markets get a bigger position, wild ones a smaller one.",
+    "sizing_risk": "Fixed risk per trade: the stop sits a number of ATRs below the entry and the position is "
+                   "sized so that being stopped out loses a set share of the capital, e.g. 1%. A wider stop "
+                   "means a smaller position. The size is fixed at the entry.",
+    "sizing_kelly": "Fractional Kelly: the share of the capital that grows it fastest given the strategy's "
+                    "recent winners and losers, scaled down (half Kelly by default). Zero when the recent "
+                    "returns show no edge.",
     "limit_entry": "limit_pct(1) or limit_atr(0.5) in the entry rule, joined with &: when the rest holds, place "
                    "a buy order 1% (0.5 ATRs) below the close for the next candle. Not filled if the price "
                    "doesn't come down to it.",

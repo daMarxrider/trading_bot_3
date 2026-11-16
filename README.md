@@ -216,6 +216,11 @@ tradebot cache info                 # cache folder, size, number of cached serie
 tradebot cache clear [--ohlc|--symbols]
 tradebot notify test                # send a test message to every notification channel
 tradebot scan --alert cross_up --notify   # send the scan's matches to the channels
+tradebot alert price BTC/USDT ">=100000"  # tell me when BTC reaches 100k (also: <=, >, <; --every 5 minutes, --repeat)
+tradebot alert indicator AAPL -i rsi --where "value < 30" --tf 1d   # indicator values or --alert NAME conditions
+tradebot alert scan -i ma_cross --alert cross_up --index sp500       # scheduled scan, reports only new matches
+tradebot alert list; tradebot alert rm <id>
+tradebot watch                      # headless: run the alerts and scheduled scans until Ctrl-C (--once for cron)
 ```
 
 `--bars N` returns exactly N candles, also for stocks, whose markets close on
@@ -259,6 +264,18 @@ currencies 1 bp). A default goes into `config.toml` (`[backtest] slippage_bps = 
 class `slippage_bps = { crypto = 5, stock = 2 }`); the Backtest lab and Evolve page have a
 "Slippage / side" field (initialised from the config). Multi-symbol searches use one value, taken
 from the first symbol's asset class for `auto`/the config table.
+
+**Position sizing.** An algorithm says when to be in the market; `--sizing` decides how much to put on, as
+a layer over any strategy (`backtest`, `optimize`, `chart`, `bot run`; the Backtest lab has a "Position sizing"
+box). Models: `fixed` (a fraction of the capital), `vol` (volatility target: the position's annual volatility
+aims at `size.target_vol`, bigger in quiet markets), `risk` (fixed risk per trade: the stop sits
+`size.stop_atr` ATRs below the entry and the size makes a stop-out cost `size.risk` of the capital; fixed at
+the entry) and `kelly` (`size.kelly_fraction` of the Kelly fraction of the strategy's recent returns). The
+settings are normal parameters named `size.*`: set them with `-p size.target_vol=0.15`, fix them with
+`--fix`, or let the optimizer tune them. There is no leverage (the size is at most 1), so sizing only
+lowers exposure; compare the `exposure` and `max_drawdown` metrics with and without. The live bot follows the
+strategy's signal and buys `stake` times the size. Example:
+`tradebot backtest BTC/USDT sma_cross --sizing vol -p size.target_vol=0.2`.
 
 **Baselines.** `backtest` and `optimize` (in- and out-of-sample) show the strategy
 next to two things it has to beat, on the same candles and with the same fee:
@@ -787,6 +804,18 @@ sends to every enabled channel. Code raises an event with
 `tradebot.notify.notify("risk", title, text)` and adds a channel type with
 `@notify.channel(...)`.
 
+#### Background alerts
+
+Price alerts, indicator alerts and scheduled scanner runs (`tradebot alert ...`, see above) are stored in
+`alerts.json` in the OS config folder and delivered through these channels (event `alert`, or `scanner` for
+scans). In the app, right-click a level on the chart and choose "Alert me at ..."; the sidebar's Alerts button
+lists, disables and removes them, and the app checks them every 30 s while it is open. Without the app run
+`tradebot watch`; run only one of the two, or alerts fire twice. Each alert has `--every N` minutes or
+`--every close` (once per finished candle of its timeframe). A price or indicator alert fires when its
+condition turns true, then switches off, or with `--repeat` waits until the condition was false again. A
+scheduled scan reports only matches that are new since its last run. The price is the last close of the alert's
+timeframe (default 1m; delayed by the data provider).
+
 Settings the app remembers by itself (such as the chart's auto-fit toggle) are
 saved in `settings.json` in the OS config folder, not in `config.toml`:
 `$XDG_CONFIG_HOME/tradebot/` (usually `~/.config/tradebot/`) on Linux,
@@ -804,7 +833,7 @@ src/tradebot/
   core/        ops (NumPy/torch time-series primitives), OHLC container, registry + plugin loader, models
   indicators/  BaseIndicator + built-ins (SMA, EMA, RSI, MACD, Bollinger, ATR, Stochastic, Donchian, Ichimoku,
                Elliott waves, Bitcoin halving cycle, ADX, Supertrend, Parabolic SAR, Keltner, CCI, Williams %R, ROC,
-               momentum, pivots, volume profile, anchored VWAP)
+               momentum, pivots, volume profile, anchored VWAP, market regime)
   algorithms/  BaseAlgorithm + built-ins (rsi_threshold, macd_cross, ichimoku_cloud, sma_cross,
                bollinger_reversion, range, vote ensemble, elliott_wave, halving_cycle)
   analysis/    loop-based pattern detection (Elliott waves), Bitcoin halving schedule and forecast
@@ -901,6 +930,20 @@ Each match gets a Fibonacci conformity score from 0 to 1. Charts draw the zigzag
 - **Wave-5 setup** (`trade_wave5`): the same logic after a valid wave 1–4.
 - **Optimization:** all parameters can be tuned with `tradebot optimize … elliott_wave --method both`.
 - **Speed:** the strategy needs a loop over the bars, so the optimizer evaluates it on the CPU (about 3.5 ms per candidate for 1,500 candles).
+
+## Market regimes
+
+The `regime` indicator classifies every candle: bull, bear or sideways trend (the close up or down more than
+`threshold` percent over `period` candles) and high or low volatility (ATR above or below its average over five
+times `vol_period`). It uses only earlier candles. Parameters: `period` (50), `threshold` (5), `vol_period` (14).
+
+- Chart: add `regime` and the background is shaded green (bull), red (bear) and amber (high volatility).
+- Combinator filter: `--entry "rsi_threshold & regime.bull"`, `regime.low_vol`, `regime(100, 10).sideways`, or the
+  numeric trend, `regime > 0`. Outputs: `bull`, `bear`, `sideways`, `high_vol`, `low_vol`, `trend` (-1/0/1),
+  `volatility` (0/1).
+- `evolve` offers `regime.trend` and `regime.volatility` as primitives like any other indicator output.
+- `tradebot backtest SYMBOL combo ... --regimes` prints return, Sharpe, exposure and trades per regime; the HTML
+  report and the Lab's report card show the same table.
 
 ## Bitcoin halving cycle
 
