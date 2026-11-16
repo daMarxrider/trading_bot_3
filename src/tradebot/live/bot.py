@@ -8,6 +8,9 @@ algorithm's target position is evaluated and the bot buys/sells to match it.
 ``max_trading_value``). Dry-run is the default; nothing is sent unless
 ``dry_run=False``.
 
+With a sizing model (``tradebot.algorithms.sizing``, #147) the entry buys ``stake`` times the size instead of
+the whole stake; the target it follows is the algorithm's own signal.
+
 A target above 0.5 buys; once in, a lower target sells that share of the holding (a combo's take-profits in
 steps scale out, #150) and a target of 0 sells everything. The bot follows the same rules as the backtest
 (the algorithm decides on the closed candles), but acts at the close: a combo's intrabar stop that the
@@ -111,7 +114,12 @@ class TradingBot:
 
     def step(self) -> BotEvent:
         df = self.closed_candles()
-        target = float(self.algorithm.run(df).iloc[-1])
+        size = 1.0
+        if hasattr(self.algorithm, "run_sized"):  # position sizing (#147): follow the signal, size the entry
+            signal, sizes = self.algorithm.run_sized(df)
+            target, size = float(signal.iloc[-1]), float(sizes.iloc[-1])
+        else:
+            target = float(self.algorithm.run(df).iloc[-1])
         price = float(df["close"].iloc[-1])
         event = BotEvent(datetime.now(timezone.utc), self.symbol, target, "hold", price, dry_run=self.dry_run)
         fraction = self.fraction if self.fraction > 0 else 1.0
@@ -122,7 +130,9 @@ class TradingBot:
             if self.risk.close_on_halt and self.holding > 0:
                 self._sell(event)
         elif target > 0.5 and self.holding <= 0:
-            event.action, event.amount = "buy", self.stake / price
+            event.action, event.amount = "buy", self.stake * size / price
+            if size < 1:
+                event.note = f"sized to {size:.0%} of the stake"
             if self.guard:
                 market = self.broker.get_ticker(self.symbol).last if self.risk.price_band else None
                 veto = self.guard.check_entry(event.amount, price, self.holding, market)
