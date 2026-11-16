@@ -58,6 +58,7 @@ import pandas as pd
 
 from tradebot.algorithms.base import BaseAlgorithm
 from tradebot.backtest import BacktestResult, Baselines, Fills, backtest, baselines, batch_fitness, simulate
+from tradebot.backtest.margin import Margin
 from tradebot.backtest.metrics import infer_periods_per_year
 from tradebot.core import ops
 from tradebot.core.series import OHLC, unix_seconds, volume_of
@@ -217,10 +218,12 @@ class PopulationOptimizer(ABC):
         samples: int = 0,
         sample_length: int = 250,
         split_at: pd.Timestamp | None = None,
+        margin: Margin | None = None,
     ):
         self.algorithm = algorithm
         self.dca_amount = dca_amount  # monthly investing baseline; None = capital / months
         self.fee, self.slippage, self.objective = fee, slippage, objective
+        self.margin = margin  # shorts and leverage (#149): liquidation, borrow fee and constant funding
         self.population, self.generations = population, generations
         self.min_trades = min_trades
         if backend == "auto" and not getattr(algorithm, "vectorized", True):
@@ -419,7 +422,7 @@ class PopulationOptimizer(ABC):
                     zero = np.zeros_like(runs[0][0])
                     fills = Fills(back([zero if f is None else f.adjust for _, f in runs]),
                                   back([zero if f is None else f.turnover for _, f in runs]))
-            fits = self._score(w.ohlc.close, pos, w.ppy, w.warmup, len(group), fills)
+            fits = self._score(w.ohlc, pos, w.ppy, w.warmup, len(group), fills)
             fits = fits.cpu().numpy() if ops.is_torch(fits) else np.asarray(fits)
             symbol, buy_hold = w.symbol, w.buy_hold
         else:
@@ -434,13 +437,14 @@ class PopulationOptimizer(ABC):
 
     def _symbol_fitness(self, d: _Data, group: list[dict]) -> np.ndarray:
         pos, fills = self._positions(d, group)
-        fit = self._score(d.ohlc.close, pos, d.ppy, 0, len(group), fills)
+        fit = self._score(d.ohlc, pos, d.ppy, 0, len(group), fills)
         return fit.cpu().numpy() if ops.is_torch(fit) else np.asarray(fit)
 
-    def _score(self, close, pos, ppy, warmup: int, n: int, fills: Fills | None = None):
-        """Fitness of positions on ``close``: ``[T]`` -> ``[n]``, or stacked windows ``[K, 1, T]`` -> ``[K, n]``.
-        The first ``warmup`` candles only warm up the indicators and are not scored. ``fills``: intrabar fills
-        shaped like ``pos``."""
+    def _score(self, o: OHLC, pos, ppy, warmup: int, n: int, fills: Fills | None = None):
+        """Fitness of positions on the candles ``o``: ``[T]`` -> ``[n]``, or stacked windows ``[K, 1, T]`` ->
+        ``[K, n]``. The first ``warmup`` candles only warm up the indicators and are not scored. ``fills``: intrabar
+        fills shaped like ``pos``."""
+        close, low, high = o.close, o.low[..., warmup:], o.high[..., warmup:]
         lo = -1.0 if self.algorithm.allow_short else 0.0
         pos = ops.nan_to_num(pos)
         pos = pos.clamp(lo, 1.0) if ops.is_torch(pos) else np.clip(pos, lo, 1.0)
@@ -453,7 +457,9 @@ class PopulationOptimizer(ABC):
             fills = fills.map(lambda x: fit_shape(ops.nan_to_num(x))[..., warmup:])
             first = ops.asarray(np.r_[0.0, np.ones(pos.shape[-1] - 1)], pos)
             fills = fills.map(lambda x: x * first)
-        returns = simulate(close, pos, self.fee, self.slippage, fills)
+        bar_ppy = ppy if getattr(ppy, "ndim", 0) == 0 else ppy[..., None]  # [K, 1] -> [K, 1, 1] against [K, n, T]
+        returns = simulate(close, pos, self.fee, self.slippage, fills, margin=self.margin, low=low, high=high,
+                           periods_per_year=bar_ppy)
         fit = batch_fitness(returns, ppy, self.objective)
         changes = ops.abs_(pos - ops.shift(pos, 1, fill=0.0)) > 0
         n_trades = changes.sum(-1) / 2
@@ -480,8 +486,8 @@ class PopulationOptimizer(ABC):
                                   skipped=self.skipped, aggregate=self.aggregate, objective=self.objective)
 
     def _symbol_result(self, d: _Data, tuned: BaseAlgorithm) -> SymbolResult:
-        train = backtest(d.train_df, tuned, self.fee, periods_per_year=d.ppy, slippage=self.slippage)
-        test = backtest(d.test_df, tuned, self.fee, periods_per_year=d.ppy, slippage=self.slippage) if len(d.test_df) > 2 else None
+        train = backtest(d.train_df, tuned, self.fee, periods_per_year=d.ppy, slippage=self.slippage, margin=self.margin)
+        test = backtest(d.test_df, tuned, self.fee, periods_per_year=d.ppy, slippage=self.slippage, margin=self.margin) if len(d.test_df) > 2 else None
         kw = dict(fee=self.fee, slippage=self.slippage, amount=self.dca_amount, periods_per_year=d.ppy)
         return SymbolResult(d.symbol, train, test, baselines(d.train_df, train, **kw),
                             baselines(d.test_df, test, **kw) if test is not None else None)

@@ -65,6 +65,10 @@ class IchimokuCloud(BaseAlgorithm):
         ich = Ichimoku.compute(o, **p)
         return ops.where((o.close > ich["span_a"]) & (o.close > ich["span_b"]), 1.0, 0.0)
 
+    def short_signals(self, o, p, long):  # short below the cloud, flat inside it
+        ich = Ichimoku.compute(o, **p)
+        return ops.where((o.close < ich["span_a"]) & (o.close < ich["span_b"]), 1.0, 0.0)
+
     def chart_indicators(self):
         return [Ichimoku(**self.values)]
 
@@ -100,6 +104,10 @@ class BollingerReversion(BaseAlgorithm):
     def signals(self, o, p):
         bb = Bollinger.compute(o, period=p["period"], width=p["width"])
         return ops.latch(o.close < bb["lower"], o.close > bb["middle"])
+
+    def short_signals(self, o, p, long):  # the mirror: short a close above the upper band, cover at the middle
+        bb = Bollinger.compute(o, period=p["period"], width=p["width"])
+        return ops.latch(o.close > bb["upper"], o.close < bb["middle"])
 
     def chart_indicators(self):
         return [Bollinger(**self.values)]

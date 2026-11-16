@@ -272,10 +272,20 @@ aims at `size.target_vol`, bigger in quiet markets), `risk` (fixed risk per trad
 `size.stop_atr` ATRs below the entry and the size makes a stop-out cost `size.risk` of the capital; fixed at
 the entry) and `kelly` (`size.kelly_fraction` of the Kelly fraction of the strategy's recent returns). The
 settings are normal parameters named `size.*`: set them with `-p size.target_vol=0.15`, fix them with
-`--fix`, or let the optimizer tune them. There is no leverage (the size is at most 1), so sizing only
-lowers exposure; compare the `exposure` and `max_drawdown` metrics with and without. The live bot follows the
+`--fix`, or let the optimizer tune them. Sizing itself never adds leverage (the size is at most 1; see
+`--leverage` below), so it only lowers exposure; compare the `exposure` and `max_drawdown` metrics with and without. The live bot follows the
 strategy's signal and buys `stake` times the size. Example:
 `tradebot backtest BTC/USDT sma_cross --sizing vol -p size.target_vol=0.2`.
+
+**Shorts and leverage.** `--direction short` or `long_short` trades any built-in strategy or combo short on
+its sell signal (`backtest`, `optimize`, `chart`; the Backtest lab has a "Direction" box). `--leverage`,
+`--maintenance-margin`, `--borrow-fee` (yearly, stock shorts) and `--funding` (perpetuals: a rate per 8 hours,
+or `history` for the exchange's historical rates) set the costs. Shorts and leveraged positions hold a fixed
+number of units and are **liquidated** when the candle's low (high for a short) reaches the liquidation
+price: the margin is lost, so leverage is never free. A short without leverage is liquidated when the price
+about doubles. The live bot does not open shorts. Details:
+[docs/shorts-and-leverage.md](docs/shorts-and-leverage.md). Example:
+`tradebot backtest BTC/USDT macd_cross --direction long_short --leverage 3 --funding history`.
 
 **Portfolio backtest.** `backtest --portfolio` trades a strategy on several symbols from one shared account
 instead of one backtest per symbol: at most `--max-positions` positions at once, the capital shared
