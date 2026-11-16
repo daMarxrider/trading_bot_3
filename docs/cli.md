@@ -116,10 +116,13 @@ tradebot paper show                 # paper account: cash, positions, P&L, lates
 tradebot paper reset --balance 5000
 tradebot positions --broker kucoin
 tradebot portfolio --broker scalable --broker binance
+tradebot journal show               # trade journal: realised P&L per year, fees, latest fills
+tradebot journal note 12 --note "news-driven" --tags swing,eth
+tradebot journal export lots_2026.csv --lots --year 2026   # FIFO tax lots
 tradebot notify test                # send a test message to every notification channel
 ```
 
-The first `bot run ... --live` shows the risk notice and asks you to accept it. Everything about brokers, the risk
+The first `bot run ... --live` shows the risk notice and asks you to accept it. Bots record every order in the [journal](journal.md) (`--no-journal` switches it off). Everything about brokers, the risk
 guards and notifications: [Brokers and live trading](live-trading.md).
 
 ## Tab completion

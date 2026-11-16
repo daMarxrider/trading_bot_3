@@ -27,6 +27,7 @@ from tradebot.backtest.pairs import next_side
 from tradebot.brokers.base import BaseBroker
 from tradebot.core.models import Order, Side
 from tradebot.core.timeframes import to_timedelta
+from tradebot.journal import Journal
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ class PairBot:
     side: float = 0.0  #: +1 long A / short B, -1 the reverse, 0 flat
     amounts: tuple[float, float] = (0.0, 0.0)  #: what the open pair holds in each leg
     events: list[PairEvent] = field(default_factory=list)
+    journal: Journal | None = None  #: every order is stored here (#159)
 
     def __post_init__(self):
         if not 0 <= self.exit < self.entry < self.stop:
@@ -84,15 +86,25 @@ class PairBot:
         both = pd.concat([ca, cb], axis=1, join="inner").dropna()
         return both.iloc[:, 0], both.iloc[:, 1]
 
+    def _place(self, symbol: str, side: Side, amount: float, note: str = "") -> Order:
+        order = self.broker.place_order(symbol, side, amount)
+        if self.journal:
+            try:
+                mode = "paper" if getattr(self.broker, "simulated", False) else "live"
+                self.journal.record_order(order, self.broker, mode=mode, bot=f"pair {self.name}", note=note)
+            except Exception:  # a broken journal must never stop the bot
+                log.exception("journal write failed for %s", symbol)
+        return order
+
     def _trade(self, buy_leg: int, amount_buy: float, amount_sell: float) -> list[Order]:
         """Buy leg ``buy_leg`` and sell the other. If the second order fails the first is undone."""
         buy, sell = self.legs[buy_leg], self.legs[1 - buy_leg]
-        first = self.broker.place_order(buy, Side.BUY, amount_buy)
+        first = self._place(buy, Side.BUY, amount_buy)
         try:
-            second = self.broker.place_order(sell, Side.SELL, amount_sell)
+            second = self._place(sell, Side.SELL, amount_sell)
         except Exception:
             log.error("%s: selling %s failed, undoing the purchase of %s", self.name, sell, buy)
-            self.broker.place_order(buy, Side.SELL, amount_buy)
+            self._place(buy, Side.SELL, amount_buy, "undo")
             raise
         return [first, second]
 

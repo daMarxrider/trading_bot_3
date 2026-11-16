@@ -130,6 +130,10 @@ Sends run in the background with a 10 s timeout; a failure is only logged (never
 `tradebot notify test` or the test button sends to every enabled channel. Code raises an event with
 `tradebot.notify.notify("risk", title, text)` and adds a channel type with `@notify.channel(...)`.
 
+## Journal
+
+Every order a bot places or simulates is stored in the [journal](journal.md); `--no-journal` switches that off.
+
 ## Pairs
 
 `tradebot bot pair-run LEG_A LEG_B` trades the gap of two assets, long one and short the other: see

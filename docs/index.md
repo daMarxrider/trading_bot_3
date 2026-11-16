@@ -31,6 +31,7 @@ bots, a desktop app (PyQt6) and a terminal CLI. It is licensed under the GNU GPL
 * [Evolve](evolve.md): strategies written from scratch by genetic programming
 * [Pairs](pairs.md)
 * [Portfolio](portfolio.md)
+* [Journal](journal.md): every order the bots placed, realised P&L, tax lots
 * [News](news.md)
 * [Settings](settings.md)
 

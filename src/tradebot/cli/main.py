@@ -1102,8 +1102,10 @@ def bot_run(
     cooldown_minutes: Annotated[float, typer.Option(help="Length of that pause")] = 60.0,
     close_on_halt: Annotated[bool, typer.Option(help="Sell the open position when a limit halts the bot")] = False,
     paper: Annotated[bool, typer.Option(help="Trade a simulated account that survives restarts (see `tradebot paper`)")] = False,
+    journal: Annotated[bool, typer.Option(help="Store every order in the trade journal (`tradebot journal`)")] = True,
 ):
     """Run an algorithm live against a broker (dry run unless --live or --paper). Limits are off at 0; `bot kill` stops it."""
+    from tradebot.journal import Journal
     from tradebot.live import RiskLimits, TradingBot
 
     if paper:
@@ -1117,7 +1119,7 @@ def bot_run(
     limits = RiskLimits(max_daily_loss or None, max_drawdown or None, max_exposure or None, max_order or None,
                         price_band or None, cooldown_losses, cooldown_minutes, close_on_halt)
     bot = TradingBot(b, make_algo(algo, param, members, entry, exit, fills), symbol, tf, stake,
-                     dry_run=not (live or broker == "paper"), risk=limits, on_risk=lambda e: console.print(f"[red]risk guard {e.kind}:[/] {e.message}"),
+                     dry_run=not (live or broker == "paper"), risk=limits, journal=Journal() if journal else None, on_risk=lambda e: console.print(f"[red]risk guard {e.kind}:[/] {e.message}"),
                      on_event=lambda e: console.print(
                          f"[dim]{e.time:%Y-%m-%d %H:%M}[/] {symbol} target={e.target:.2f} "
                          f"price={e.price:.6g} → [bold]{e.action}[/] {e.amount:.6g}"
@@ -1187,6 +1189,60 @@ def paper_reset(balance: Annotated[float, typer.Option(help="New starting balanc
     console.print(f"paper account reset to {b.cash:,.2f} {b.currency}")
 
 
+journal_app = typer.Typer(help="The trade journal: every order the bots placed (#159).", no_args_is_help=True)
+app.add_typer(journal_app, name="journal")
+Mode = Annotated[str, typer.Option(help="live, paper, dry (dry runs) or real (live + paper)")]
+
+
+@journal_app.command("show")
+def journal_show(mode: Mode = "real", symbol: Annotated[Optional[str], typer.Option(help="Only this symbol")] = None,
+                 tag: Annotated[Optional[str], typer.Option(help="Only fills with this tag")] = None,
+                 limit: Annotated[int, typer.Option(help="How many recent fills to list (0: none)")] = 20):
+    """Realised P&L, fees and the latest fills with their ids, notes and tags."""
+    from tradebot.journal import Journal, yearly_summary
+
+    j = Journal()
+    s = j.summary(mode)
+    wr = "–" if s["win_rate"] is None else f"{s['win_rate']:.0%}"
+    console.print(f"[bold]journal[/] ({j.path}) · {s['fills']} fills · {s['lots']} closed lots · win rate {wr}")
+    console.print(f"realised {s['realised']:+,.2f} · fees {s['fees']:,.2f} · {s['open']} open piece(s)"
+                  " (unrealised P&L needs prices: see the Journal tab)")
+    for y in yearly_summary(j.lots(mode)):
+        console.print(f"  {y['year']}: net {y['net']:+,.2f} (gains {y['gains']:,.2f}, losses {y['losses']:,.2f}, "
+                      f"short-term {y['short_term']:+,.2f}, long-term {y['long_term']:+,.2f}) in {y['lots']} lots")
+    for f in (j.trades(mode, symbol, tag)[-limit:] if limit > 0 else []):
+        console.print(f"[dim]#{f['id']} {f['time'][:16]}[/] {f['mode']} {f['side']} {f['amount']:.6g} {f['symbol']} @ "
+                      f"{f['price']:.6g} fee {f['fee']:.4g}" + (f" P&L {f['pnl']:+.2f}" if f["pnl"] is not None else "")
+                      + (f" [{escape(f['tags'])}]" if f["tags"] else "") + (f" {escape(f['note'])}" if f["note"] else ""))
+
+
+@journal_app.command("note")
+def journal_note(fill_id: Annotated[int, typer.Argument(help="Fill id, as shown by `journal show`")],
+                 note: Annotated[Optional[str], typer.Option(help="Note text")] = None,
+                 tags: Annotated[Optional[str], typer.Option(help="Comma-separated tags (replaces the old ones)")] = None):
+    """Set the note and/or tags of a fill."""
+    from tradebot.journal import Journal
+
+    if note is None and tags is None:
+        raise typer.BadParameter("give --note and/or --tags")
+    if not Journal().annotate(fill_id, note, tags):
+        raise typer.BadParameter(f"no fill #{fill_id}")
+    console.print(f"fill #{fill_id} updated")
+
+
+@journal_app.command("export")
+def journal_export(path: Annotated[Path, typer.Argument(help="CSV file to write")],
+                   lots: Annotated[bool, typer.Option(help="Write the FIFO tax lots instead of the fills")] = False,
+                   year: Annotated[Optional[int], typer.Option(help="With --lots: only lots closed in this year")] = None,
+                   mode: Mode = "real"):
+    """Export the fills (with notes, tags, realised P&L) or, with --lots, the FIFO tax lots per year as CSV."""
+    from tradebot.journal import Journal
+
+    j = Journal()
+    n = j.export_lots(path, mode, year) if lots else j.export_trades(path, mode)
+    console.print(f"{n} {'lots' if lots else 'fills'} written to {path}")
+
+
 @bot_app.command("pair-run")
 def bot_pair_run(
     leg_a: Annotated[str, typer.Argument(help="First leg, e.g. BTC/USDT:USDT")],
@@ -1202,11 +1258,13 @@ def bot_pair_run(
     live: Annotated[bool, typer.Option(help="Actually place orders (default: dry run)")] = False,
     sandbox: Annotated[bool, typer.Option(help="Use the exchange testnet (ccxt brokers)")] = False,
     once: Annotated[bool, typer.Option(help="Evaluate a single candle and exit")] = False,
+    journal: Annotated[bool, typer.Option(help="Store every order in the trade journal (`tradebot journal`)")] = True,
 ):
     """Trade the gap of two assets live: long one and short the other (dry run unless --live).
 
     The short leg is a plain sell, so the broker needs margin or futures for it: give the legs as symbols it
     can short. The bot doesn't remember an open pair across a restart."""
+    from tradebot.journal import Journal
     from tradebot.live import PairBot
 
     legs, symbol = (leg_a, leg_b), f"{leg_a} / {leg_b}"
@@ -1216,6 +1274,7 @@ def bot_pair_run(
         raise typer.BadParameter(f"{broker} is read-only")
     try:
         bot = PairBot(b, legs, tf, stake, window, entry, exit, stop, method, dry_run=not live,
+                      journal=Journal() if journal else None,
                       on_event=lambda e: console.print(
                           f"[dim]{e.time:%Y-%m-%d %H:%M}[/] {e.pair} z={e.z:+.2f} β={e.beta:.2f} → [bold]{e.action}[/]"
                           + (f" {e.amount_a:.6g} {legs[0]} / {e.amount_b:.6g} {legs[1]}" if e.action != "hold" else "")
@@ -1670,7 +1729,7 @@ def notify_test():
 
     chans = notifications.channels()
     if not chans:
-        console.print("no channels: add [notify.<name>] tables to config.toml (see the README)")
+        console.print("no channels: add [notify.<name>] tables to config.toml (see docs/settings.md)")
         raise typer.Exit(1)
     failed = 0
     for name, error in notifications.test_all().items():

@@ -326,6 +326,7 @@ Arguments: `SYMBOL`, `ALGO`
 | `--cooldown-minutes` | `60.0` | Length of that pause |
 | `--close-on-halt`, `--no-close-on-halt` |  | Sell the open position when a limit halts the bot |
 | `--paper`, `--no-paper` |  | Trade a simulated account that survives restarts (see `tradebot paper`) |
+| `--journal`, `--no-journal` | `True` | Store every order in the trade journal (`tradebot journal`) |
 
 ## `tradebot bot kill`
 
@@ -354,6 +355,7 @@ Arguments: `LEG_A`, `LEG_B`
 | `--live`, `--no-live` |  | Actually place orders (default: dry run) |
 | `--sandbox`, `--no-sandbox` |  | Use the exchange testnet (ccxt brokers) |
 | `--once`, `--no-once` |  | Evaluate a single candle and exit |
+| `--journal`, `--no-journal` | `True` | Store every order in the trade journal (`tradebot journal`) |
 
 ## `tradebot cache`
 
@@ -428,3 +430,41 @@ Throw away positions and order history and start again with a fresh balance.
 |---|---|---|
 | `--balance` |  | New starting balance (default: keep the current one) |
 | `--yes`, `-y` |  | Don't ask |
+
+## `tradebot journal`
+
+The trade journal: every order the bots placed (#159).
+
+## `tradebot journal show`
+
+Realised P&L, fees and the latest fills with their ids, notes and tags.
+
+| Option | Default | Description |
+|---|---|---|
+| `--mode` | `real` | live, paper, dry (dry runs) or real (live + paper) |
+| `--symbol` |  | Only this symbol |
+| `--tag` |  | Only fills with this tag |
+| `--limit` | `20` | How many recent fills to list (0: none) |
+
+## `tradebot journal note`
+
+Set the note and/or tags of a fill.
+
+Arguments: `FILL_ID`
+
+| Option | Default | Description |
+|---|---|---|
+| `--note` |  | Note text |
+| `--tags` |  | Comma-separated tags (replaces the old ones) |
+
+## `tradebot journal export`
+
+Export the fills (with notes, tags, realised P&L) or, with --lots, the FIFO tax lots per year as CSV.
+
+Arguments: `PATH`
+
+| Option | Default | Description |
+|---|---|---|
+| `--lots`, `--no-lots` |  | Write the FIFO tax lots instead of the fills |
+| `--year` |  | With --lots: only lots closed in this year |
+| `--mode` | `real` | live, paper, dry (dry runs) or real (live + paper) |

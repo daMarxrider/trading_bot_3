@@ -7,7 +7,7 @@
 | `config.toml` | `~/.config/tradebot/` | `~/.config/tradebot/` | `%USERPROFILE%\.config\tradebot\` |
 | `combos.toml` (saved combos) | next to `config.toml` | same | same |
 | `plugins/`, `themes/` | `~/.config/tradebot/plugins/`, `.../themes/` | same | same |
-| `settings.json`, `paper_account.json`, `KILL` (kill switch) | `$XDG_CONFIG_HOME/tradebot/` (usually `~/.config/tradebot/`) | `~/Library/Application Support/tradebot/` | `%APPDATA%\tradebot\` |
+| `settings.json`, `paper_account.json`, `journal.sqlite`, `KILL` (kill switch) | `$XDG_CONFIG_HOME/tradebot/` (usually `~/.config/tradebot/`) | `~/Library/Application Support/tradebot/` | `%APPDATA%\tradebot\` |
 | Cache (candles, symbol lists) | `$XDG_CACHE_HOME/tradebot/` (usually `~/.cache/tradebot/`) | `~/Library/Caches/tradebot/` | `%LOCALAPPDATA%\tradebot\Cache\` |
 | Shell completion lookups | in the cache folder | same | same |
 
@@ -20,6 +20,7 @@ delete. Saved evolver results (`--save`) go to the first plugin folder.
 |---|---|
 | `TRADEBOT_CONFIG` | path of `config.toml` (its folder also holds `combos.toml`) |
 | `TRADEBOT_PLUGIN_DIR` | plugin folder(s), separated like `PATH`; replaces `~/.config/tradebot/plugins` |
+| `TRADEBOT_JOURNAL` | path of the trade journal database (default `journal.sqlite` in the config folder) |
 | `TRADEBOT_CACHE_DIR` | cache folder, overriding the OS default |
 | `TRADEBOT_<BROKER>_<KEY>` | a broker credential, e.g. `TRADEBOT_BINANCE_SECRET`, `TRADEBOT_KUCOIN_PASSWORD`; wins over `config.toml` |
 | `ALPHAVANTAGE_API_KEY`, `FMP_API_KEY` | keys of the optional data providers (without a key they are skipped) |
@@ -114,7 +115,7 @@ UI state the app saves by itself on every change. Delete the file to reset it. K
 
 Commands: `list`, `chart`, `backtest`, `montecarlo`, `optimize`, `evolve`, `positions`, `portfolio`, `screen`, `scan`, `news`,
 `pair`, `pair-backtest`, `pair-scan`, `halving`, `device`, `gui`, and the groups `bot` (`run`, `kill`, `resume`,
-`pair-run`), `cache` (`info`, `clear`), `combo` (`save`, `list`, `delete`), `notify` (`test`), `paper` (`show`, `reset`).
+`pair-run`), `cache` (`info`, `clear`), `journal` (`show`, `note`, `export`), `combo` (`save`, `list`, `delete`), `notify` (`test`), `paper` (`show`, `reset`).
 All options: [CLI reference](cli-reference.md).
 
 ## Built-in names
