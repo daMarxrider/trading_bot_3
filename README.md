@@ -204,6 +204,9 @@ tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50 --live  
 tradebot bot run ETH/USDT sma_cross --tf 1h --stake 50 --paper                   # simulated account that survives restarts
 tradebot paper show                 # paper account: cash, positions, P&L, latest orders
 tradebot paper reset --balance 5000 # start over
+tradebot journal show               # trade journal: realised P&L per year, fees, latest fills
+tradebot journal note 12 --note "news-driven" --tags swing,eth   # annotate fill #12
+tradebot journal export lots_2026.csv --lots --year 2026         # FIFO tax lots (or without --lots: all fills)
 tradebot positions --broker kucoin
 tradebot portfolio --broker scalable --broker binance
 tradebot screen -f "rsi < 35" -f "close > sma200"
@@ -857,6 +860,22 @@ fee = 0.001
 ```
 
 The fill price goes through `PaperBroker.fill_price`, the place to add a slippage model later. There is no GUI view yet.
+
+## Trade journal
+
+Every order `bot run` and `bot pair-run` place or simulate goes into a local SQLite database, `journal.sqlite` in the
+app's config folder (`$TRADEBOT_JOURNAL` overrides the path; `--no-journal` switches it off). A fill stores broker,
+mode (`live`, `paper`, or `dry` for the intended fills of a dry run), symbol, side, amount, price, fee (as the
+exchange or the paper account reports it), a note and tags. The **Journal** tab shows them with the realised P&L,
+fees, win rate and the unrealised P&L of what is still open (at the latest price); select a trade to edit its
+note and tags. Views and exports default to live and paper trades, dry runs are a separate filter.
+
+Realised P&L matches fills first-in-first-out per symbol. Every closed piece is a tax lot with open and close
+date, cost, proceeds, fees and profit (fees count in full, split by amount); a sell without holdings opens a
+short lot (futures legs). `tradebot journal export --lots` writes the lots with their closing year and a
+short/long-term flag (held over 365 days); `--year` keeps one year. Without `--lots` it writes every fill with
+notes, tags and realised P&L. `tradebot journal show` prints the net result per year. The lots are a bookkeeping aid,
+not tax advice: check the rules of your country.
 
 ## Elliott waves
 

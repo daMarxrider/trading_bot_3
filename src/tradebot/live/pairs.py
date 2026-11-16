@@ -28,6 +28,7 @@ the bot with the pending trade kept in the file.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
@@ -47,6 +48,7 @@ from tradebot.backtest.pairs import next_side
 from tradebot.brokers.base import BaseBroker
 from tradebot.core.models import Order, OrderStatus, Side
 from tradebot.core.timeframes import to_timedelta
+from tradebot.journal import Journal
 
 log = logging.getLogger(__name__)
 STATE_VERSION = 1
@@ -61,13 +63,15 @@ class PairStateError(RuntimeError):
 
 
 def pair_state_path(broker: str, legs: tuple[str, str], sandbox: bool = False) -> Path:
-    """Where ``bot pair-run --live`` keeps the open pair: one file per broker (testnet apart) and pair."""
+    """Where ``bot pair-run --live`` keeps the open pair: one file per broker (testnet apart) and pair, in
+    ``$TRADEBOT_PAIR_STATE_DIR`` or the ``pair_bots`` folder of the OS config dir."""
     from tradebot.config import os_config_dir
 
     def safe(s: str) -> str:
         return re.sub(r"[^A-Za-z0-9._-]+", "-", s).strip("-")
 
-    return os_config_dir() / "pair_bots" / f"{safe(broker)}{'-testnet' if sandbox else ''}_{safe(legs[0])}_{safe(legs[1])}.json"
+    folder = os.environ.get("TRADEBOT_PAIR_STATE_DIR")
+    return (Path(folder).expanduser() if folder else os_config_dir() / "pair_bots") /f"{safe(broker)}{'-testnet' if sandbox else ''}_{safe(legs[0])}_{safe(legs[1])}.json"
 
 
 def _now() -> str:
@@ -171,6 +175,7 @@ class PairBot:
     closing: bool = False  #: a close that didn't finish: the rest is closed at the next candle
     opened: str | None = None  #: when the open pair was opened (ISO time)
     halted: str = ""  #: why the bot stopped trading (an outcome it can't know); a restart needs a check
+    journal: Journal | None = None  #: every order is stored here (#159)
 
     def __post_init__(self):
         if not 0 <= self.exit < self.entry < self.stop:
@@ -277,13 +282,21 @@ class PairBot:
                 time.sleep(self.poll_seconds)
             got = self.broker.get_order(o.id, o.symbol)
             known, o = got is not None, got or o
-        if o.status in (OrderStatus.CLOSED, OrderStatus.PENDING_MANUAL) or (not known and o.filled <= 0):
-            if not known:
-                log.warning("%s: can't look up order %s; assuming it filled", self.name, o.id)
+        if not known:  # still open and the broker can't tell how much filled: no guessing with real money
+            raise PairStateError(f"order {o.id} ({o.symbol}) is open and the broker can't look it up")
+        if o.status in (OrderStatus.CLOSED, OrderStatus.PENDING_MANUAL):
             return o.filled if o.filled > 0 else (o.amount or requested)
         return o.filled  # cancelled (or the rest cancelled): what filled
 
-    def _place(self, symbol: str, side: Side, amount: float, pending: dict) -> tuple[Order, float]:
+    def _journal(self, order: Order, note: str) -> None:
+        if self.journal:
+            try:
+                mode = "paper" if getattr(self.broker, "simulated", False) else "live"
+                self.journal.record_order(order, self.broker, mode=mode, bot=f"pair {self.name}", note=note)
+            except Exception:  # a broken journal must never stop the bot
+                log.exception("journal write failed for %s", order.symbol)
+
+    def _place(self, symbol: str, side: Side, amount: float, pending: dict, note: str = "") -> tuple[Order, float]:
         rec = {"symbol": symbol, "side": side.value, "amount": amount, "id": None, "filled": None}
         pending["orders"].append(rec)
         self._save(pending)
@@ -300,9 +313,12 @@ class PairBot:
         try:
             filled = self._fill(order, amount)
         except Exception as exc:
+            self._journal(order, (note + " " if note else "") + "fill unknown")
             raise self._halt(pending, f"can't tell how much of order {order.id} ({side.value} {symbol}) filled: "
                                       f"{exc}") from exc
         rec["filled"] = filled
+        if filled > 0:
+            self._journal(dataclasses.replace(order, filled=filled), note)
         try:
             self._save(pending)
         except OSError as exc:
@@ -337,7 +353,7 @@ class PairBot:
         except Exception as exc:
             log.error("%s: selling %s failed (%s), undoing the purchase of %.8g %s", self.name, sell, exc, f1, buy)
             try:
-                undo, fu = self._place(buy, Side.SELL, f1, pending)
+                undo, fu = self._place(buy, Side.SELL, f1, pending, "undo")
             except PairStateError:
                 raise
             except Exception as exc2:

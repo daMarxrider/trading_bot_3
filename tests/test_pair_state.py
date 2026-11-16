@@ -17,8 +17,7 @@ LEGS = ("AAA/USDT:USDT", "BBB/USDT:USDT")
 
 
 @pytest.fixture(autouse=True)
-def _private_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+def _quiet(monkeypatch):
     monkeypatch.setattr(lp.notify, "notify", lambda *a, **k: 0)
 
 
@@ -126,7 +125,8 @@ def test_restart_after_a_crash_mid_trade_refuses_until_checked(tmp_path, broker,
 
     r = CliRunner()
     out = r.invoke(app, ["bot", "pair-state", *LEGS, "--broker", "fake"])
-    assert out.exit_code == 0 and "unfinished trade" in out.output and "may have been placed" in out.output
+    text = " ".join(out.output.split())  # rich wraps at the terminal width
+    assert out.exit_code == 0 and "unfinished trade" in text and "may have been placed" in text
     assert r.invoke(app, ["bot", "pair-state", *LEGS, "--broker", "fake", "--keep", "--forget"]).exit_code != 0
     assert r.invoke(app, ["bot", "pair-state", *LEGS, "--broker", "fake", "--keep", "-y"]).exit_code == 0
     assert make(broker, path).side == 0.0  # the last finished state: flat
@@ -154,7 +154,7 @@ def test_cli_forget_fixes_a_corrupt_file(broker):
 
     path = lp.pair_state_path("fake", LEGS, sandbox=True)
     assert path != lp.pair_state_path("fake", LEGS) and "/" not in path.name and ":" not in path.name
-    path.parent.mkdir(parents=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("garbage")
     r = CliRunner()
     assert r.invoke(app, ["bot", "pair-state", *LEGS, "--broker", "fake", "--sandbox"]).exit_code == 1
@@ -229,13 +229,30 @@ def test_a_timeout_while_placing_halts_because_the_order_may_exist(tmp_path, bro
     assert saved(tmp_path / "other.json")["pending"] is None and other.side == 0.0
 
 
-def test_open_order_that_cant_be_looked_up_counts_as_filled(tmp_path, broker, signal):
-    bot = make(broker, tmp_path / "pair.json", fill_timeout=60)
+def test_open_order_that_cant_be_looked_up_halts(tmp_path, broker, signal):
+    path = tmp_path / "pair.json"
+    bot = make(broker, path, fill_timeout=60)
     broker.can_lookup = False
     broker.fill_ratio[(LEGS[0], "buy")] = 0.0  # e.g. a market order reported as "open, filled 0"
     signal["side"] = 1.0
+    with pytest.raises(PairStateError, match="can't look it up"):
+        bot.step()
+    assert bot.halted and bot.side == 0.0 and len(broker.orders) == 1  # no second leg on a guess
+    p = saved(path)["pending"]
+    assert p["problem"] and p["orders"][0]["id"] == "1" and p["orders"][0]["filled"] is None
+
+
+def test_orders_go_to_the_journal_with_what_filled(tmp_path, broker, signal):
+    from tradebot.journal import Journal
+
+    j = Journal(tmp_path / "j.sqlite")
+    bot = make(broker, tmp_path / "pair.json", journal=j)
+    broker.fill_ratio[(LEGS[0], "buy")] = 0.5
+    signal["side"] = 1.0
     bot.step()
-    assert bot.amounts[0] == pytest.approx(broker.orders[0][2])
+    fills = j.fills()
+    assert [f["symbol"] for f in fills] == list(LEGS)
+    assert fills[0]["amount"] == pytest.approx(broker.orders[0][3])
 
 
 def test_reconcile_refuses_when_the_account_lost_the_pair(tmp_path, broker, signal):
