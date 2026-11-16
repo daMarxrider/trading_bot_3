@@ -21,7 +21,7 @@ Arguments: `KIND` (optional)
 
 ## `tradebot chart`
 
-Terminal OHLC chart with indicator overlays, volume and algorithm signals.
+Terminal OHLC chart with indicator overlays, volume and algorithm signals. ``--type heikin-ashi\|renko`` change how the candles are drawn; ``--compare ETH/USDT --compare SOL/USDT`` plots percent change of several symbols instead. A ratio chart is a symbol like ``ETH/USDT:BTC/USDT`` or ``KO:PEP``.
 
 Arguments: `SYMBOL`
 
@@ -39,6 +39,9 @@ Arguments: `SYMBOL`
 | `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15 |
 | `--line`, `--no-line` |  | Line chart instead of candles |
 | `--volume`, `--no-volume` | `True` | Volume bars under the candles (when the data has volume) |
+| `--type` | `candles` | candles \| line \| heikin-ashi \| renko (a display transform: signals and indicators still use the real candles) |
+| `--brick` |  | Renko brick size in price units (default: ATR 14) |
+| `--compare` |  | Overlay these symbols as percent change from the left edge (repeat the option); needs no indicators |
 
 ## `tradebot backtest`
 
