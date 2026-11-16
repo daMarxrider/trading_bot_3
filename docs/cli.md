@@ -134,6 +134,7 @@ tradebot paper show                 # paper account: cash, positions, P&L, lates
 tradebot paper reset --balance 5000
 tradebot positions --broker kucoin
 tradebot portfolio --broker scalable --broker binance
+tradebot portfolio-analytics --benchmark SPY --target "AAPL=60,MSFT=40"   # return vs benchmark, correlation, risk, rebalancing
 tradebot journal show               # trade journal: realised P&L per year, fees, latest fills
 tradebot journal note 12 --note "news-driven" --tags swing,eth
 tradebot journal export lots_2026.csv --lots --year 2026   # FIFO tax lots
