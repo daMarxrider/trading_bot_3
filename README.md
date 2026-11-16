@@ -197,6 +197,7 @@ tradebot pair-scan KO PEP PG MDLZ                              # find pairs: pic
 tradebot pair-scan KO PEP PG MDLZ --same-sector --correction bonferroni   # fewer pairs to test, stricter about chance finds
 tradebot pair-scan $(cat sp500.txt) --backend gpu               # big universes: all tests batched on a CUDA/ROCm GPU (auto picks it when there is one)
 tradebot bot pair-run BTC/USDT:USDT ETH/USDT:USDT --once       # live pair bot (dry run; --live to trade): long one, short the other
+tradebot bot pair-state BTC/USDT:USDT ETH/USDT:USDT            # the open pair a --live pair bot saved; --keep/--forget clear an unfinished trade
 tradebot halving --live                                        # Bitcoin halvings and the forecast of the next
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50          # dry run
 tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50 --live   # real orders

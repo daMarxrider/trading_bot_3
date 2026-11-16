@@ -104,6 +104,16 @@ class BaseBroker(ABC):
     @abstractmethod
     def get_balance(self) -> dict[str, Balance]: ...
 
+    def get_order(self, order_id: str, symbol: str | None = None) -> Order | None:
+        """The current state of an order (filled amount, status); ``None`` when the broker can't look it up."""
+        return None
+
+    def leg_position(self, symbol: str) -> float | None:
+        """Signed amount held in ``symbol`` (negative = short), ``None`` when the broker can't tell.
+
+        Used by the pair bot (#122) to check its saved pair against the account after a restart."""
+        return None
+
     def get_positions(self) -> list[Position]:
         """Non-zero holdings. Brokers with cost-basis data override this."""
         return [
