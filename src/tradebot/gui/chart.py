@@ -1327,6 +1327,8 @@ class ChartView(QWidget):
         if plot is self.price and self.df is not None:
             price = self.price_at(self.price.vb.mapSceneToView(scene_pos).y())
             menu.addAction(f"Add level at {price:.6g}", lambda: self._add_level(price))
+            if self._loaded_symbol:
+                menu.addAction(f"Alert me at {price:.6g}", lambda: self.add_price_alert(price))
         for key, btn in self.tools.items():
             if key != "hline":
                 menu.addAction(f"Draw {btn.text().split(' ', 1)[-1].lower()}", lambda k=key: self.tools[k].setChecked(True))
@@ -1350,6 +1352,19 @@ class ChartView(QWidget):
         menu.addAction("Hide volume" if self.vol_btn.isChecked() else "Show volume", self.vol_btn.toggle)
         menu.popup(global_pos)
         self._menu = menu  # keep a reference while open (and for tests)
+
+    def add_price_alert(self, price: float):
+        """A background price alert (#156): fires when the price reaches ``price`` from the side it is on now."""
+        from tradebot import alerts
+
+        last = float(self.df["close"].iloc[-1])
+        alert = alerts.Alert("price", [self._loaded_symbol], "1m", op=">=" if price >= last else "<=", value=price)
+        try:
+            alerts.add(alert)
+        except (ValueError, OSError) as exc:
+            self.status.emit(f"alert not saved: {exc}")
+            return
+        self.status.emit(f"alert added: {alert.describe()} (checked while the app or `tradebot watch` runs)")
 
     def _add_drawing(self, item, tool, save: bool = True):
         item._kind = tool

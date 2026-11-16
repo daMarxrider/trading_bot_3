@@ -30,6 +30,7 @@ from tradebot.core.registry import load_plugins
 from tradebot.data import MarketDataEngine
 from tradebot.data.cache import DiskCache
 from tradebot.data.providers import quiet_yfinance
+from tradebot.gui.alerts import AlertsDialog, AlertWatcher
 from tradebot.gui.chart import ChartView
 from tradebot.gui.common import run_async
 from tradebot.gui.evolve import EvolveView
@@ -103,6 +104,11 @@ class MainWindow(QMainWindow):
         self.kill_btn.setChecked(kill_active())
         self.kill_btn.toggled.connect(self.toggle_kill)  # #154
         side.addWidget(self.kill_btn)
+        self.alerts_btn = QPushButton("🔔  Alerts", objectName="Nav", toolTip="Price/indicator alerts and scheduled scans")
+        self.alerts_btn.clicked.connect(self.show_alerts)  # #156
+        side.addWidget(self.alerts_btn)
+        self.alert_watcher = AlertWatcher(self)
+        self.alert_watcher.fired.connect(lambda line: self.statusBar().showMessage(line, 15000))
         about = QPushButton("ⓘ  About", objectName="Nav")  # disclaimers and licence (#58)
         about.clicked.connect(self.show_about)
         side.addWidget(about)
@@ -170,6 +176,11 @@ class MainWindow(QMainWindow):
         set_kill(on, "gui")
         self.statusBar().showMessage("kill switch ON: live bots stop trading" if on else "kill switch off", 8000)
 
+    def show_alerts(self):
+        dialog = AlertsDialog(self)
+        self._alerts_dialog = dialog  # for tests
+        dialog.exec()
+
     def show_settings(self):
         dialog = SettingsDialog(self.themes, self.theme_key, self)
         dialog.theme_chosen.connect(self._theme_chosen)
@@ -217,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
     themes = ThemeManager(touch=mode == "on" or (mode == "auto" and has_touchscreen()))
     window = MainWindow(themes, config.get("theme", "glass"), Settings(), opengl=bool(config.get("gpu_rendering", False)))
     window.show()
+    window.alert_watcher.start()  # price/indicator alerts and scheduled scans while the app is open (#156)
     return app.exec()
 
 

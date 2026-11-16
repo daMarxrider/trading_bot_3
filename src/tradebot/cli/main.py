@@ -1680,6 +1680,147 @@ def notify_test():
         raise typer.Exit(1)
 
 
+# -- background alerts (#156) ------------------------------------------------------------------------
+alert_app = typer.Typer(help="Price and indicator alerts and scheduled scans, delivered through the notification "
+                             "channels while `tradebot watch` (or the app) runs.", no_args_is_help=True)
+app.add_typer(alert_app, name="alert")
+Every = Annotated[str, typer.Option("--every", help="Minutes between checks, or 'close' = once per finished candle")]
+Repeat = Annotated[bool, typer.Option("--repeat", help="Re-arm after the condition was false again "
+                                      "(default: fire once, then switch off)")]
+
+
+def _store_alert(alert):
+    from tradebot import alerts
+
+    try:
+        alerts.add(alert)
+    except (ValueError, KeyError) as exc:
+        raise typer.BadParameter(str(exc.args[0] if exc.args else exc)) from None
+    console.print(f"added {alert.id}: {escape(alert.describe())} "
+                  f"(every {alert.every}{'' if alert.every == 'close' else ' min'})")
+
+
+def _scan_params(items: list[str]) -> dict:
+    params = {}
+    for item in items:
+        key, _, value = item.partition("=")
+        try:
+            params[key] = float(value)
+        except ValueError:
+            raise typer.BadParameter(f"{item!r}: use name=number", param_hint="--param") from None
+    return params
+
+
+def _alert_filters(where: list[str], alert: list[str]) -> list[dict]:
+    return [parse_where(w) for w in where] + [{"alert": a.lstrip("!"), "state": not a.startswith("!")} for a in alert]
+
+
+@alert_app.command("price")
+def alert_price(symbol: Symbol,
+                condition: Annotated[str, typer.Argument(help="e.g. '>=100000' or '<=90000'")],
+                timeframe: Annotated[str, typer.Option("--tf", help="Candle the price is read from",
+                                                       autocompletion=complete.timeframes)] = "1m",
+                every: Every = "1", repeat: Repeat = False):
+    """Tell me when SYMBOL reaches a price."""
+    from tradebot import alerts
+
+    try:
+        op, value = alerts.parse_price(condition)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="CONDITION") from None
+    _store_alert(alerts.Alert("price", [symbol], timeframe, op=op, value=value, every=every, repeat=repeat))
+
+
+@alert_app.command("indicator")
+def alert_indicator(
+    symbol: Symbol,
+    indicator: Annotated[str, typer.Option("--indicator", "-i", autocompletion=complete.scannable)],
+    param: Annotated[list[str], typer.Option("--param", "-p", help="e.g. -p period=14")] = [],
+    where: Annotated[list[str], typer.Option("--where", help='e.g. --where "rsi < 30"')] = [],
+    alert: Annotated[list[str], typer.Option("--alert", help="Indicator alert that must be on; !NAME: off")] = [],
+    timeframe: Annotated[str, typer.Option("--tf", autocompletion=complete.timeframes)] = "1d",
+    every: Every = "close", repeat: Repeat = False,
+):
+    """Tell me when an indicator's values or alerts on SYMBOL match (all conditions)."""
+    from tradebot import alerts
+
+    _store_alert(alerts.Alert("indicator", [symbol], timeframe, indicator=indicator, params=_scan_params(param),
+                              filters=_alert_filters(where, alert), every=every, repeat=repeat))
+
+
+@alert_app.command("scan")
+def alert_scan(
+    symbols: Annotated[Optional[list[str]], typer.Argument(help="Defaults to the watchlists",
+                                                           autocompletion=complete.symbols)] = None,
+    indicator: Annotated[str, typer.Option("--indicator", "-i", autocompletion=complete.scannable)] = "ma_cross",
+    param: Annotated[list[str], typer.Option("--param", "-p")] = [],
+    where: Annotated[list[str], typer.Option("--where")] = [],
+    alert: Annotated[list[str], typer.Option("--alert")] = [],
+    timeframe: Annotated[str, typer.Option("--tf", autocompletion=complete.timeframes)] = "1d",
+    watchlist: Annotated[Optional[str], typer.Option("--watchlist", "-w", help=WATCHLIST_HELP)] = None,
+    index: Annotated[Optional[str], typer.Option("--index", autocompletion=complete.indices)] = None,
+    every: Every = "close",
+):
+    """Run a scan on a schedule and report only the matches that are new since the last run."""
+    from tradebot import alerts
+
+    if index:
+        if symbols or watchlist:
+            raise typer.BadParameter("use either symbols, --watchlist or --index", param_hint="--index")
+        symbols = _index_symbols(index)
+    symbols = symbols or _watchlist(watchlist)
+    _store_alert(alerts.Alert("scan", symbols, timeframe, indicator=indicator, params=_scan_params(param),
+                              filters=_alert_filters(where, alert), every=every))
+
+
+@alert_app.command("list")
+def alert_list():
+    """The stored alerts and their state."""
+    from tradebot import alerts
+
+    items = alerts.load()
+    if not items:
+        console.print("no alerts: add one with `tradebot alert price|indicator|scan`")
+        return
+    t = Table(title="alerts")
+    for c in ("id", "kind", "condition", "every", "state"):
+        t.add_column(c)
+    for a in items:
+        state = "off" if not a.enabled else "armed" if a.armed else "fired (waiting)"
+        t.add_row(a.id, a.kind, escape(a.describe()), str(a.every), state)
+    console.print(t)
+
+
+@alert_app.command("rm")
+def alert_rm(alert_id: Annotated[str, typer.Argument(help="Id from `tradebot alert list`")]):
+    """Delete an alert."""
+    from tradebot import alerts
+
+    if not alerts.remove(alert_id):
+        raise typer.BadParameter(f"no alert {alert_id!r}")
+    console.print(f"removed {alert_id}")
+
+
+@app.command()
+def watch(poll: Annotated[float, typer.Option(help="Seconds between passes over the alerts")] = 30.0,
+          once: Annotated[bool, typer.Option("--once", help="One pass, then exit (for cron)")] = False):
+    """Run the stored alerts and scheduled scans in the foreground (headless; Ctrl-C stops).
+
+    Don't run it next to the app's own alert timer: both would fire the same alert.
+    """
+    from tradebot import alerts
+
+    if once:
+        for line in alerts.run_due():
+            console.print(escape(line))
+        return
+    console.print(f"watching {len(alerts.load())} alerts every {poll:g} s (Ctrl-C to stop)")
+    try:
+        alerts.watch(poll, log_fn=lambda s: console.print(escape(s)))
+    except KeyboardInterrupt:
+        console.print("stopped")
+
+
 @cache_app.command("info")
 def cache_info():
     """Where the cache is, how big it is and what it holds."""

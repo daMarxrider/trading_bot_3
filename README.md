@@ -212,6 +212,11 @@ tradebot cache info                 # cache folder, size, number of cached serie
 tradebot cache clear [--ohlc|--symbols]
 tradebot notify test                # send a test message to every notification channel
 tradebot scan --alert cross_up --notify   # send the scan's matches to the channels
+tradebot alert price BTC/USDT ">=100000"  # tell me when BTC reaches 100k (also: <=, >, <; --every 5 minutes, --repeat)
+tradebot alert indicator AAPL -i rsi --where "value < 30" --tf 1d   # indicator values or --alert NAME conditions
+tradebot alert scan -i ma_cross --alert cross_up --index sp500       # scheduled scan, reports only new matches
+tradebot alert list; tradebot alert rm <id>
+tradebot watch                      # headless: run the alerts and scheduled scans until Ctrl-C (--once for cron)
 ```
 
 `--bars N` returns exactly N candles, also for stocks, whose markets close on
@@ -782,6 +787,18 @@ with the secrets) and can't stop a bot. `tradebot notify test` or the test butto
 sends to every enabled channel. Code raises an event with
 `tradebot.notify.notify("risk", title, text)` and adds a channel type with
 `@notify.channel(...)`.
+
+#### Background alerts
+
+Price alerts, indicator alerts and scheduled scanner runs (`tradebot alert ...`, see above) are stored in
+`alerts.json` in the OS config folder and delivered through these channels (event `alert`, or `scanner` for
+scans). In the app, right-click a level on the chart and choose "Alert me at ..."; the sidebar's Alerts button
+lists, disables and removes them, and the app checks them every 30 s while it is open. Without the app run
+`tradebot watch`; run only one of the two, or alerts fire twice. Each alert has `--every N` minutes or
+`--every close` (once per finished candle of its timeframe). A price or indicator alert fires when its
+condition turns true, then switches off, or with `--repeat` waits until the condition was false again. A
+scheduled scan reports only matches that are new since its last run. The price is the last close of the alert's
+timeframe (default 1m; delayed by the data provider).
 
 Settings the app remembers by itself (such as the chart's auto-fit toggle) are
 saved in `settings.json` in the OS config folder, not in `config.toml`:

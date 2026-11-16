@@ -30,7 +30,7 @@ Channels live in ``config.toml``, one table each; the table name is free, ``type
     type = "desktop"                # notify-send (Linux), osascript (macOS) or the app's tray icon
 
 Event kinds (:data:`KINDS`): ``trade`` (a bot bought/sold), ``error`` (a bot step failed), ``risk`` (a risk guard
-fired, the hook for #154: ``notify("risk", title, text)``), ``scanner`` and ``test``. ``enabled = false`` mutes a channel.
+fired, the hook for #154: ``notify("risk", title, text)``), ``scanner``, ``alert`` (price and indicator alerts, #156) and ``test``. ``enabled = false`` mutes a channel.
 
 :func:`notify` never blocks and never raises: each send runs in a daemon thread with a timeout, and a failure is
 only logged (without secrets). Add a channel type with :func:`channel`.
@@ -56,7 +56,7 @@ from tradebot.config import load_config
 
 log = logging.getLogger(__name__)
 
-KINDS = ("trade", "error", "risk", "scanner", "test")
+KINDS = ("trade", "error", "risk", "scanner", "alert", "test")
 TIMEOUT = 10.0  #: seconds for every network call
 
 #: Channel types: name -> (send function(options, kind, title, text), the options a channel needs)
