@@ -103,6 +103,20 @@ def render_chart(
     return str(fig.build())
 
 
+def render_lines(lines: dict[str, pd.Series], title: str, width: int | None = None, height: int | None = None) -> str:
+    """Several time series in one pane (e.g. a portfolio's equity next to its benchmark), as an ANSI string."""
+    term = shutil.get_terminal_size((120, 40))
+    fig = plt.figure
+    fig.clear()
+    fig.theme(THEME)
+    fig.plot_size(width or term.columns, height or max(16, min(term.lines - 2, 20)))
+    pane = _pane(fig, 1, 1)
+    for label, series in lines.items():
+        pane.draw(pane.signal(list(series.index.tz_convert(None)), series.tolist()).lines().label(label))
+    pane.title(title)
+    return str(fig.build())
+
+
 def _pane(fig, row: int, rows: int):
     pane = fig.subplot(row, 1) if rows > 1 else fig
     pane.theme(THEME)

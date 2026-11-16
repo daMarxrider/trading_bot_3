@@ -276,6 +276,13 @@ lowers exposure; compare the `exposure` and `max_drawdown` metrics with and with
 strategy's signal and buys `stake` times the size. Example:
 `tradebot backtest BTC/USDT sma_cross --sizing vol -p size.target_vol=0.2`.
 
+**Portfolio backtest.** `backtest --portfolio` trades a strategy on several symbols from one shared account
+instead of one backtest per symbol: at most `--max-positions` positions at once, the capital shared
+`equal`ly, by `signal` strength or by inverse `volatility`, optional `--rebalance` (week, month, ...), and
+compared with buy & hold of the same basket. The Basket page in the app is the same. Details:
+[docs/portfolio-backtest.md](docs/portfolio-backtest.md). Example:
+`tradebot backtest AAPL,MSFT,NVDA,KO,JNJ sma_cross --max-positions 3 --allocation volatility --rebalance month`.
+
 **Baselines.** `backtest` and `optimize` (in- and out-of-sample) show the strategy
 next to two things it has to beat, on the same candles and with the same fee:
 - *buy & hold*: everything invested on the first candle and held.
@@ -621,6 +628,9 @@ number of symbols, and `--permutations N` repeats the whole search N times.
 * **Pairs**: two assets normalised on one chart, their gap as a z-score, correlation, hedge ratio,
   half-life, an Engle-Granger cointegration test and a warning when a pair seems to have stopped working.
   The hedge ratio comes from a rolling regression or a Kalman filter.
+* **Basket**: a portfolio backtest: one account trading a strategy on several symbols, with a maximum number
+  of positions, allocation and rebalancing; equity next to buy & hold of the same basket, metrics and P&L per
+  symbol. See [docs/portfolio-backtest.md](docs/portfolio-backtest.md).
   `A:B` (e.g. `KO:PEP`) is also a symbol everywhere: candles of the ratio, converted into one currency.
 * **Volume** (#116): candles carry volume next to open/high/low/close (`o.volume` in indicators, scripts and
   algorithms; NaN when the symbol has none), with a volume pane in the chart (`vol` button, `--volume/--no-volume`

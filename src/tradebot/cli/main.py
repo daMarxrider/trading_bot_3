@@ -232,15 +232,40 @@ def backtest(
     trades_csv: Annotated[Optional[Path], typer.Option("--trades-csv", help="Write the trade list to this CSV file")] = None,
     report: Annotated[Optional[Path], typer.Option(help="Write a self-contained HTML report (metrics, equity, "
                                                         "underwater plot, monthly returns, trades)")] = None,
+    portfolio: Annotated[bool, typer.Option(
+        "--portfolio", help="Trade all the symbols from one shared account (#148) instead of one backtest per "
+                            "symbol; compared with buy & hold of the same basket")] = False,
+    watchlist: Annotated[list[str], typer.Option(
+        "--watchlist", "-w", help="Add the symbols of this watchlist (with --portfolio; 'all' = every list)",
+        autocompletion=complete.watchlists)] = [],
+    max_positions: Annotated[Optional[int], typer.Option(
+        min=1, help="Portfolio: most positions held at once, each slot 1/N of the account (default: one per "
+                    "symbol). Implies --portfolio")] = None,
+    allocation: Annotated[str, typer.Option(
+        help="Portfolio: how the held positions share the capital: equal, signal (by signal strength) or "
+             "volatility (inverse volatility)",
+        autocompletion=complete.choices(("equal", "same share each"), ("signal", "by signal strength"),
+                                        ("volatility", "inverse volatility")))] = "equal",
+    rebalance: Annotated[str, typer.Option(
+        help="Portfolio: set the positions back to their target weights: none, candle, week, month or quarter",
+        autocompletion=complete.choices(("none", "never"), ("candle", "every candle"), ("week", "weekly"),
+                                        ("month", "monthly"), ("quarter", "quarterly")))] = "none",
 ):
     """Backtest an algorithm on historical OHLC data, next to buy & hold and monthly investing.
 
     ``combo`` builds a strategy from rules: ``tradebot backtest AAPL combo --entry "elliott_wave &
-    close>sma(200)" --exit "macd_cross | stop_atr(2)"`` (see ``tradebot combo --help``)."""
+    close>sma(200)" --exit "macd_cross | stop_atr(2)"`` (see ``tradebot combo --help``).
+
+    ``--portfolio`` trades several symbols from one account: ``tradebot backtest AAPL,MSFT,NVDA,KO sma_cross
+    --max-positions 2 --allocation volatility --rebalance month``."""
     from tradebot.backtest import backtest as run_backtest, baselines
     from tradebot.cli.charts import render_chart
 
     algorithm = make_algo(algo, param, members, entry, exit, fills, sizing)
+    if portfolio or max_positions or watchlist:
+        _backtest_portfolio(_symbols(symbol, watchlist), algorithm, tf, start, end, bars, fee, capital, slippage,
+                            max_positions, allocation, rebalance, plot, trades_csv, report)
+        return
     symbols = _symbols(symbol, [])
     if len(symbols) > 1:
         _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount, slippage)
@@ -355,6 +380,50 @@ def _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_a
     console.print(t)
     n = len(t.rows)
     console.print(" · ".join(f"beats {k} on {v}/{n}" for k, v in beats.items()))
+
+
+def _backtest_portfolio(symbols, algorithm, tf, start, end, bars, fee, capital, slippage, max_positions, allocation,
+                        rebalance, plot=False, trades_csv=None, report=None) -> None:
+    """One account trading all ``symbols`` (#148): metrics next to the basket's buy & hold, then per symbol."""
+    from tradebot.backtest import report as rep
+    from tradebot.backtest.metrics import fmt
+    from tradebot.backtest.portfolio import ALLOCATIONS, REBALANCE, portfolio_backtest
+    from tradebot.cli.charts import render_lines
+
+    if allocation not in ALLOCATIONS:
+        raise typer.BadParameter(f"choose {', '.join(ALLOCATIONS)}", param_hint="--allocation")
+    if rebalance not in REBALANCE:
+        raise typer.BadParameter(f"choose {', '.join(REBALANCE)}", param_hint="--rebalance")
+    frames = _load_many(symbols, tf, start, end, bars)
+    slip = {s: _slippage(slippage, s) for s in frames}
+    try:
+        pf = portfolio_backtest(frames, algorithm, max_positions, allocation, rebalance, fee=fee, slippage=slip,
+                                initial_capital=capital)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+    res, idx = pf.result, pf.result.equity.index
+    if plot:
+        print(render_lines({"portfolio": res.equity, "buy & hold basket": pf.benchmark.equity},
+                           f"portfolio · {algorithm!r} · {tf}"))
+    s = pf.settings
+    console.print(f"[bold]{algorithm!r}[/] on {len(frames)} symbols {tf} ({idx[0]:%Y-%m-%d} → {idx[-1]:%Y-%m-%d}), "
+                  f"max {s['max_positions']} positions, {allocation} allocation, rebalance {rebalance}")
+    console.print(results_table("portfolio backtest", pf.columns()))
+    console.print(f"final equity [bold]{res.equity.iloc[-1]:,.2f}[/] (basket {pf.benchmark.equity.iloc[-1]:,.2f})")
+    t = Table(title="per symbol")
+    for col in ("symbol", "P&L", "time held", "avg weight", "trades"):
+        t.add_column(col, justify="left" if col == "symbol" else "right")
+    for sym, row in pf.per_symbol().iterrows():
+        color = "green" if row["contribution"] > 0 else "red"
+        t.add_row(sym, f"[{color}]{row['contribution']:+,.2f}[/]", fmt("exposure", row["time held"]),
+                  fmt("exposure", row["avg weight"]), str(int(row["trades"])))
+    console.print(t)
+    if trades_csv:
+        console.print(f"trades written to {rep.export_trades_csv(res, trades_csv)}")
+    if report:
+        console.print(f"report written to {rep.export_html(res, report, f'{algorithm!r} portfolio · {tf}')}")
+    if not pf.excess > 0:
+        console.print("[bold red]Over this period, the portfolio does not beat buy & hold of the same basket[/]")
 
 
 @app.command()
