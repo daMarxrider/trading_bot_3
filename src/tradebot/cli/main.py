@@ -106,9 +106,30 @@ def parse_kv(items: list[str]) -> dict:
 
 
 def parse_indicator(spec: str):
-    """``name`` or ``name:k=v,k=v`` -> indicator instance."""
+    """``name`` or ``name:k=v,k=v`` -> indicator instance; ``tf=1d`` computes it on a higher timeframe (#161)."""
     name, _, args = spec.partition(":")
-    return INDICATORS.get(name)(**parse_kv([a for a in args.split(",") if a]))
+    items = [a for a in args.split(",") if a]
+    tf = [a.partition("=")[2].strip() for a in items if a.partition("=")[0].strip() == "tf"]
+    items = [a for a in items if a.partition("=")[0].strip() != "tf"]
+    try:
+        return INDICATORS.get(name)(tf=tf[-1] if tf else None, **parse_kv(items))
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--indicator") from None
+
+
+def _higher_timeframes(text: str | None, base: str) -> tuple[str, ...]:
+    """``"1d,1w"`` -> ``("1d", "1w")``, each a known timeframe longer than ``base`` (#161)."""
+    from tradebot.core import mtf
+
+    out = tuple(dict.fromkeys(t.strip() for t in (text or "").split(",") if t.strip()))
+    for t in out:
+        try:
+            mtf.check(t)
+        except ValueError as e:
+            raise typer.BadParameter(str(e), param_hint="--higher-tf") from None
+        if base in mtf.TIMEFRAMES and mtf.seconds(t) <= mtf.seconds(base):
+            raise typer.BadParameter(f"{t} is not longer than the candles ({base})", param_hint="--higher-tf")
+    return out
 
 
 def load_data(symbol: str, tf: str, start: str | None, end: str | None, bars: int | None = None) -> pd.DataFrame:
@@ -185,7 +206,8 @@ def chart(
     symbol: Symbol,
     tf: TF = "1d",
     bars: Annotated[int, typer.Option(help="Number of candles")] = 150,
-    indicator: Annotated[list[str], typer.Option("--indicator", "-i", help="e.g. -i sma:period=50 -i rsi",
+    indicator: Annotated[list[str], typer.Option("--indicator", "-i", help="e.g. -i sma:period=50 -i rsi; "
+                                                 "tf= on a higher timeframe: -i sma:period=200,tf=1d",
                                                  autocompletion=complete.indicator_specs)] = [],
     algo: Annotated[Optional[str], typer.Option(help="Overlay this algorithm's buy/sell signals",
                                                 autocompletion=complete.algorithms)] = None,
@@ -863,6 +885,9 @@ def evolve(
     indicators: Annotated[Optional[str], typer.Option(
         help="Comma-separated indicators the rules may use (default: all, plugins included)",
         autocompletion=complete.indicators)] = None,
+    higher_tf: Annotated[Optional[str], typer.Option(
+        "--higher-tf", help="Comma-separated higher timeframes, e.g. 1d,1w: the rules may also use every indicator "
+        "computed on those candles (only closed ones, no look-ahead)")] = None,
     permutations: Annotated[Optional[int], typer.Option(
         help="Also run the search this many times on shuffled candles, to see whether it finds as much in noise "
         "(default 0, with --from-scratch 5)")] = None,
@@ -923,6 +948,9 @@ def evolve(
     for n in names or ():
         if n not in INDICATORS:
             raise typer.BadParameter(f"unknown indicator {n!r}", param_hint="--indicators")
+    higher = _higher_timeframes(higher_tf, tf)
+    if from_scratch and higher:
+        raise typer.BadParameter("from scratch uses no ready-made indicators", param_hint="--higher-tf")
     symbols = _symbols(symbol, watchlist)
     df = load_data(symbols[0], tf, start, end, bars) if len(symbols) == 1 else _load_many(symbols, tf, start, end, bars)
     if best_result or auto_settings:
@@ -935,6 +963,8 @@ def evolve(
             fixed = dict(fee=fee, slippage=_slippage(slippage, symbols[0]), align=align, dca_amount=dca_amount, state=state)
             if names:
                 fixed["indicators"] = names
+            if higher:
+                fixed["timeframes"] = higher
             from rich.progress import Progress as _Progress
 
             with _Progress(console=console) as bar:
@@ -970,7 +1000,7 @@ def evolve(
     kwargs = dict(**extra, population=population, generations=generations, max_depth=max_depth, max_size=max_size,
                   objective=objective, aggregate=aggregate, align=align, validation=validation, test=test,
                   segments=segments, min_trades=min_trades, parsimony=parsimony, state=state, indicators=names,
-                  fee=fee, slippage=_slippage(slippage, symbols[0]), dca_amount=dca_amount, seed=seed, from_scratch=from_scratch, islands=islands)
+                  timeframes=higher, fee=fee, slippage=_slippage(slippage, symbols[0]), dca_amount=dca_amount, seed=seed, from_scratch=from_scratch, islands=islands)
     with Progress(console=console) as progress:
         task = progress.add_task("evolving", total=generations)
         label = {"name": "evolving"}
@@ -1548,6 +1578,9 @@ def scan(
     param: Annotated[list[str], typer.Option("--param", "-p", help="e.g. -p fast=9 -p slow=21")] = [],
     timeframe: Annotated[str, typer.Option("--timeframe", "-t", autocompletion=complete.timeframes,
                                            help="1m 5m 15m 30m 1h 2h 4h 1d 1w 1mo")] = "1d",
+    indicator_tf: Annotated[Optional[str], typer.Option(
+        "--indicator-tf", autocompletion=complete.timeframes,
+        help="Run the indicator on this longer timeframe, its last closed candle (e.g. -t 1h --indicator-tf 1d)")] = None,
     where: Annotated[list[str], typer.Option("--where", help='e.g. --where "fast > slow" --where "rsi < 30"')] = [],
     alert: Annotated[list[str], typer.Option("--alert", help="Alert that must be on; !NAME: off. e.g. --alert cross_up")] = [],
     watchlist: Annotated[Optional[str], typer.Option("--watchlist", "-w", help=WATCHLIST_HELP)] = None,
@@ -1576,10 +1609,10 @@ def scan(
     symbols = symbols or _watchlist(watchlist)
     try:
         with console.status("scanning ..."):
-            result = scanner.scan(symbols, indicator, params, timeframe, filters)
+            result = scanner.scan(symbols, indicator, params, timeframe, filters, indicator_tf=indicator_tf)
     except (ValueError, KeyError, scanner.ScanBusy) as exc:
         raise typer.BadParameter(str(exc.args[0] if exc.args else exc)) from None
-    t = Table(title=f"scan: {indicator} {timeframe}")
+    t = Table(title=f"scan: {indicator}{f' ({indicator_tf})' if indicator_tf else ''} {timeframe}")
     for c in result.table.columns:
         t.add_column(c, justify="left" if c == "symbol" else "right")
     for _, row in result.table.iterrows():

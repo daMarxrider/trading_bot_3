@@ -634,9 +634,9 @@ class ChartView(QWidget):
         for i, ind in enumerate(self.indicators):
             if ind.name in names and type(ind) is not INDICATORS.get(ind.name):
                 try:
-                    self.indicators[i] = INDICATORS.get(ind.name)(**ind.values)
+                    self.indicators[i] = INDICATORS.get(ind.name)(tf=ind.tf, **ind.values)
                 except Exception:  # the inputs no longer fit the new version: its defaults
-                    self.indicators[i] = INDICATORS.get(ind.name)()
+                    self.indicators[i] = INDICATORS.get(ind.name)(tf=ind.tf)
                 changed = True
         if changed:
             self.redraw()
@@ -648,8 +648,8 @@ class ChartView(QWidget):
         self.tf.blockSignals(True)
         self.tf.setCurrentText(timeframe)
         self.tf.blockSignals(False)
-        ind = INDICATORS.get(indicator)(**params)
-        if not any(i.name == ind.name and i.values == ind.values for i in self.indicators):
+        ind = INDICATORS.get(indicator)(**params)  # params may hold "tf" (a higher timeframe, #161)
+        if not any(i.name == ind.name and i.values == ind.values and i.tf == ind.tf for i in self.indicators):
             self.indicators.append(ind)
         self.open_symbol(symbol)
 
@@ -729,7 +729,7 @@ class ChartView(QWidget):
             act.triggered.connect(lambda _, c=cls: self._add_indicator(c))
 
     def _add_indicator(self, cls):
-        values = ParamDialog.ask(cls.name, cls.params, parent=self)
+        values = ParamDialog.ask(cls.name, cls.params, parent=self, timeframe=True)
         if values is not None:
             self.indicators.append(cls(**values))
             self.redraw()
@@ -965,7 +965,13 @@ class ChartView(QWidget):
             self._draw_volume_overlay(x, volume_of(df), o, c, width, t)
 
         for ind in self.indicators:
-            frame = ind(df)
+            note = ""
+            try:
+                frame = ind(df)
+            except ValueError as e:  # e.g. a higher timeframe (#161) shorter than these candles: the candles' own
+                if not ind.tf:
+                    raise
+                frame, note = type(ind)(**ind.values)(df), f" · {e}"
             target = self.price
             if not ind.overlay:
                 target = spare.pop(0) if spare else self._new_pane()
@@ -976,7 +982,7 @@ class ChartView(QWidget):
                     target.addItem(pg.InfiniteLine(level, angle=0, pen=pen))
                 self.panes.append(target)
             values = []  # this indicator's drawn outputs for the value line
-            label = _spaced_label(ind.name, ind.values)
+            label = _spaced_label(ind.name, ind.values) + (f" · {ind.tf}" if ind.tf else "") + note
             if ind.uses_volume and not np.isfinite(volume_of(df)).any():
                 label += f" · no volume data for {self._loaded_symbol or 'this symbol'}"
             self._rows.setdefault(target, []).append((label, values))

@@ -256,6 +256,12 @@ class PopulationOptimizer(ABC):
             raise ValueError("samples must be 0 (off) or more, and sample_length at least 2 candles")
         self.samples, self.sample_length = samples, sample_length
         self.warmup = int(max((s.high for s in algorithm.param_space().values() if s.integer), default=0))
+        if hasattr(algorithm, "warmup_candles"):  # combos with higher timeframes (#161) warm up for longer
+            time = unix_seconds(self.data[0].train_df.index) if self.data else None
+            if time is not None:
+                from tradebot.core.mtf import spacing
+
+                self.warmup = max(self.warmup, algorithm.warmup_candles(spacing(time)))
         self._windows: _Windows | None = None
         if samples:
             total = self.warmup + sample_length

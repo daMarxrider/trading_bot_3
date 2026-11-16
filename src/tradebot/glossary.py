@@ -207,6 +207,9 @@ TERMS = {
                    "profit or a trailing stop.",
     "evo_indicators": "The indicators the rules may use. Fewer makes the search faster and the rules easier to "
                       "read.",
+    "evo_higher_tf": "Also offer every indicator computed on these longer candles, e.g. the daily SMA as a trend "
+                     "filter for hourly rules. Each candle sees the last closed longer candle only (no look-ahead). "
+                     "Timeframes not longer than the candles are ignored.",
     "from_scratch": "No ready-made indicators: rules are built from candles and plain maths (up and down moves, "
                     "sums, deviations, smoothing, + - × ÷ with units checked), so the search can invent RSI or "
                     "something new. Repeated parts become building blocks (m1, m2, …). Shuffled-price runs and "

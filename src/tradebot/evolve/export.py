@@ -115,7 +115,8 @@ def chart_indicators_source(program: Program) -> list[str]:
             p = node.prim
             if p.kind == "indicator":
                 ind, _, keys = p.indicator
-                kw = [f'{k}=v["{names[(rule, (*path, i))]}"]' for i, k in enumerate(keys)]
+                kw = [f'tf="{p.tf}"'] * bool(p.tf) + [f'{k}=v["{names[(rule, (*path, i))]}"]'
+                                                     for i, k in enumerate(keys)]
             elif p.family in ("sma", "ema") and node.args[0].prim is not None and node.args[0].prim.name == "close":
                 ind, kw = p.family, [f'period=v["{names[(rule, (*path, 1))]}"]']
             else:

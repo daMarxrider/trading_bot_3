@@ -955,6 +955,24 @@ times `vol_period`). It uses only earlier candles. Parameters: `period` (50), `t
 - `tradebot backtest SYMBOL combo ... --regimes` prints return, Sharpe, exposure and trades per regime; the HTML
   report and the Lab's report card show the same table.
 
+## Multi-timeframe indicators
+
+Any indicator, pool rule or strategy can run on longer candles than the ones you trade: `tf=` in a rule, e.g. a
+daily trend filter on an hourly strategy. Each candle only sees the last **closed** longer candle, so there is no
+look-ahead (the daily SMA changes on the 23:00 candle, which closes at midnight).
+
+```sh
+tradebot backtest BTC/USDT combo --tf 1h --entry "rsi(14) < 30 & close > sma(200, tf=1d)" --exit "rsi(14) > 70"
+tradebot chart BTC/USDT --tf 1h -i sma:period=50,tf=1d
+tradebot scan -t 1h -i rsi --indicator-tf 1d --where "value < 30"
+tradebot evolve BTC/USDT --tf 1h --higher-tf 1d,1w
+```
+
+Parameters get the timeframe in their name (`sma_1d.period`), so the optimizer tunes them like any other. In the
+app: the chart's indicator dialog has a timeframe box, the Scanner an "indicator:" timeframe, and the Evolve page
+"Also on" boxes. Longer candles need more history: `sma(200, tf=1d)` on hourly candles warms up for 4,800 candles.
+See [docs/multi-timeframe.md](docs/multi-timeframe.md).
+
 ## Bitcoin halving cycle
 
 Every 210,000 blocks the Bitcoin block reward halves. At the target of 600 s per block that is 1458.33 days,

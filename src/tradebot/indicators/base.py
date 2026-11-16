@@ -5,7 +5,8 @@
 Writing a new indicator::
 
     from tradebot.core import ops
-    from tradebot.core.registry import IntParam
+    from tradebot.core import mtf
+from tradebot.core.registry import IntParam
     from tradebot.indicators.base import BaseIndicator
 
     class Momentum(BaseIndicator):
@@ -40,6 +41,9 @@ numbers. The Scanner filters on them and uses the first two as filter templates.
 The strategy evolver (``tradebot evolve``, #83) builds rules from every indicator output whose value on a
 bar depends only on that bar and earlier ones (checked automatically), using :attr:`BaseIndicator.units`
 to know what an output can be compared with.
+
+Any indicator can run on a higher timeframe (#161): ``SMA(tf="1d", period=200)`` on hourly candles is the
+daily SMA, each hour seeing the last *closed* day only (:mod:`tradebot.core.mtf`); in rules ``sma(200, tf=1d)``.
 """
 
 from __future__ import annotations
@@ -51,6 +55,7 @@ from typing import ClassVar
 import numpy as np
 import pandas as pd
 
+from tradebot.core import mtf
 from tradebot.core.registry import Param, Registry, resolve_params
 from tradebot.core.series import OHLC
 
@@ -119,8 +124,11 @@ class BaseIndicator(ABC):
             cls.hidden = (*cls.hidden, *extra)
         INDICATORS.register(cls)
 
-    def __init__(self, **params):
+    def __init__(self, tf: str | None = None, **params):
         self.values = resolve_params(self.params, params)
+        #: a higher timeframe (``"1d"``) to compute on instead of the candles given, lined up without look-ahead
+        #: (#161, :mod:`tradebot.core.mtf`); None: the candles as given
+        self.tf = mtf.check(tf) if tf else None
 
     @classmethod
     @abstractmethod
@@ -129,7 +137,8 @@ class BaseIndicator(ABC):
 
     def __call__(self, df: pd.DataFrame) -> pd.DataFrame:
         """Compute on a pandas OHLC frame; columns are ``<name>_<output>``."""
-        out = self.compute(OHLC.from_frame(df), **self.values)
+        o = OHLC.from_frame(df)
+        out = mtf.compute(type(self), o, self.tf, **self.values) if self.tf else self.compute(o, **self.values)
         return pd.DataFrame({f"{self.name}_{k}": np.asarray(v) for k, v in out.items()}, index=df.index)
 
     def output_of(self, column: str) -> str:
@@ -147,7 +156,7 @@ class BaseIndicator(ABC):
 
     @property
     def label(self) -> str:
-        args = ",".join(str(v) for v in self.values.values())
+        args = ",".join([*(str(v) for v in self.values.values()), *([f"tf={self.tf}"] if self.tf else [])])
         return f"{self.name}({args})" if args else self.name
 
 
