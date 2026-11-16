@@ -36,6 +36,7 @@ from tradebot.gui.common import run_async
 from tradebot.gui.evolve import EvolveView
 from tradebot.gui.journal import JournalView
 from tradebot.gui.pairs import PairView
+from tradebot.gui.portfolio_backtest import PortfolioBacktestView
 from tradebot.gui.settings import SettingsDialog
 from tradebot.live.risk import kill_active, set_kill
 from tradebot.legal import NOT_AFFILIATED, NO_WARRANTY
@@ -70,13 +71,14 @@ class MainWindow(QMainWindow):
         self.news = NewsView(themes, lambda: list(dict.fromkeys(self.chart.watchlists.all_symbols()
                                                                 + self.portfolio_symbols)))
         self.pairs = PairView(engine, themes, symbols)
+        self.basket = PortfolioBacktestView(engine, themes, symbols)  # #148
         self.portfolio = PortfolioView(engine, themes)
         self.lab = BacktestView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)
         self.evolve = EvolveView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)
         self.journal = JournalView(engine, themes)
         pages = [("Chart", "📈", self.chart), ("Screener", "🔎", self.screener),
                  ("Scanner", "📡", self.scanner), ("Backtest", "🧪", self.lab),
-                 ("Evolve", "🧬", self.evolve), ("Pairs", "⚖", self.pairs), ("Portfolio", "💼", self.portfolio), ("Journal", "📒", self.journal), ("News", "📰", self.news)]
+                 ("Evolve", "🧬", self.evolve), ("Basket", "🧺", self.basket), ("Pairs", "⚖", self.pairs), ("Portfolio", "💼", self.portfolio), ("Journal", "📒", self.journal), ("News", "📰", self.news)]
 
         self.stack = QStackedWidget()
         sidebar = QWidget(objectName="Sidebar")
