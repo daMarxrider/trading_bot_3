@@ -34,6 +34,7 @@ from tradebot.gui.alerts import AlertsDialog, AlertWatcher
 from tradebot.gui.chart import ChartView
 from tradebot.gui.common import run_async
 from tradebot.gui.evolve import EvolveView
+from tradebot.gui.journal import JournalView
 from tradebot.gui.pairs import PairView
 from tradebot.gui.settings import SettingsDialog
 from tradebot.live.risk import kill_active, set_kill
@@ -72,9 +73,10 @@ class MainWindow(QMainWindow):
         self.portfolio = PortfolioView(engine, themes)
         self.lab = BacktestView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)
         self.evolve = EvolveView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)
+        self.journal = JournalView(engine, themes)
         pages = [("Chart", "📈", self.chart), ("Screener", "🔎", self.screener),
                  ("Scanner", "📡", self.scanner), ("Backtest", "🧪", self.lab),
-                 ("Evolve", "🧬", self.evolve), ("Pairs", "⚖", self.pairs), ("Portfolio", "💼", self.portfolio), ("News", "📰", self.news)]
+                 ("Evolve", "🧬", self.evolve), ("Pairs", "⚖", self.pairs), ("Portfolio", "💼", self.portfolio), ("Journal", "📒", self.journal), ("News", "📰", self.news)]
 
         self.stack = QStackedWidget()
         sidebar = QWidget(objectName="Sidebar")

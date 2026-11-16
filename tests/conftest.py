@@ -95,6 +95,12 @@ def _private_config(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _private_journal(tmp_path_factory, monkeypatch):
+    """Each test gets its own trade journal database (#159), never the user's."""
+    monkeypatch.setenv("TRADEBOT_JOURNAL", str(tmp_path_factory.mktemp("journal") / "journal.sqlite"))
+
+
+@pytest.fixture(autouse=True)
 def _no_warm_up(monkeypatch):
     """The GUI preloads the watchlist from the network after startup (#63); tests stay offline."""
     try:
