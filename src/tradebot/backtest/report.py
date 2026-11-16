@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from tradebot.backtest import metrics as m
+from tradebot.core.series import OHLC
 
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 _DAY = pd.Timedelta(days=1)
@@ -66,6 +67,54 @@ def report_stats(equity: pd.Series, trades: pd.DataFrame) -> dict:
         "longest_under_water_days": float(longest_uw),
         "avg_holding_days": float(hold.mean()) if len(hold) else 0.0,
     }
+
+
+def regime_table(res, df: pd.DataFrame, **params) -> pd.DataFrame:
+    """Per-regime metrics (#168): how the strategy did in bull / bear / sideways markets and in high / low volatility.
+
+    The regime of each bar comes from the ``regime`` indicator on ``df`` (``params`` override its defaults) and is
+    the one known when the position was taken, i.e. the bar before the return is earned. Columns: share of bars,
+    compounded return, mean return and Sharpe ratio per bar (annualised), share of bars in the market, and the
+    trades that were opened in the regime with their win rate.
+    """
+    from tradebot.indicators.regime import NAMES, Regime
+
+    out = Regime.compute(OHLC.from_frame(df), **{**{k: v.default for k, v in Regime.params.items()}, **params})
+    ret = res.returns
+    idx = ret.index
+    ppy = m.infer_periods_per_year(idx)
+    pos = res.positions.shift(1).reindex(idx).fillna(0.0).abs().to_numpy()  # held while the return is earned
+    trades = res.trades
+    rows = {}
+    for key, name in NAMES.items():
+        at = pd.Series(np.asarray(out[key], dtype=float), index=df.index).reindex(idx)  # regime on each bar
+        sel = (at.shift(1) == 1).to_numpy()  # the regime known when the position of the bar was taken
+        r = ret[sel]
+        n = int(sel.sum())
+        std = float(r.std(ddof=1)) if n > 1 else 0.0
+        entered = trades[trades["entry"].isin(idx[(at == 1).to_numpy()])]
+        rows[name] = {
+            "bars": n,
+            "share": n / len(idx) if len(idx) else 0.0,
+            "return": float((1 + r).prod() - 1) if n else 0.0,
+            "mean_return": float(r.mean()) if n else 0.0,
+            "sharpe": float(r.mean() / std * np.sqrt(ppy)) if std > 0 else 0.0,
+            "exposure": float(pos[sel].mean()) if n else 0.0,
+            "trades": len(entered),
+            "win_rate": float((entered["return"] > 0).mean()) if len(entered) else 0.0,
+        }
+    return pd.DataFrame(rows).T.rename_axis("regime")
+
+
+def fmt_regime(table: pd.DataFrame) -> pd.DataFrame:
+    """:func:`regime_table` as display strings."""
+    t = table.copy()
+    for c in ("share", "return", "mean_return", "exposure", "win_rate"):
+        t[c] = [f"{v * 100:.2f}%" for v in table[c]]
+    t["sharpe"] = [f"{v:.2f}" for v in table["sharpe"]]
+    for c in ("bars", "trades"):
+        t[c] = [str(int(v)) for v in table[c]]
+    return t
 
 
 def fmt_stat(key: str, value) -> str:
@@ -133,7 +182,7 @@ def monthly_heatmap_svg(table: pd.DataFrame) -> str:
     return "".join(out)
 
 
-def html_report(res, title: str = "") -> str:
+def html_report(res, title: str = "", regimes: pd.DataFrame | None = None) -> str:
     """A self-contained HTML page (inline SVG charts, no external files) with metrics, charts and the trade list."""
     eq, dd = res.equity, drawdown_series(res.equity)
     stats = report_stats(eq, res.trades)
@@ -148,6 +197,13 @@ def html_report(res, title: str = "") -> str:
     trade_rows = "".join(
         f"<tr><td>{a:%Y-%m-%d}</td><td>{b:%Y-%m-%d}</td><td>{s}</td><td>{r * 100:.2f}%</td><td>{d:.1f}</td></tr>"
         for a, b, s, r, d in trades[["entry", "exit", "side", "return", "holding_days"]].itertuples(index=False))
+    regime_html = ""
+    if regimes is not None and len(regimes):
+        f = fmt_regime(regimes)
+        head = "".join(f"<th>{html.escape(c.replace('_', ' '))}</th>" for c in f.columns)
+        body = "".join(f"<tr><td>{html.escape(str(n))}</td>" + "".join(f"<td>{v}</td>" for v in row) + "</tr>"
+                       for n, row in zip(f.index, f.itertuples(index=False)))
+        regime_html = f"<h2>By market regime</h2><table><tr><th>regime</th>{head}</tr>{body}</table>"
     equity_svg = _svg_line(eq.to_numpy(dtype=float), 800, 200, "#4aa3ff")
     dd_svg = _svg_line(dd.to_numpy(dtype=float), 800, 120, "#d64541", fill=True, lo=min(float(dd.min()), -1e-9), hi=0.0)
     return f"""<!DOCTYPE html>
@@ -160,11 +216,12 @@ td:first-child{{text-align:left}}svg{{background:#1d222c}}</style></head><body>
 <h2>Equity</h2><svg width="800" height="200">{equity_svg}</svg>
 <h2>Underwater (drawdown, worst {dd.min() * 100:.1f}%)</h2><svg width="800" height="120">{dd_svg}</svg>
 <h2>Monthly returns (%)</h2>{monthly_heatmap_svg(monthly)}
+{regime_html}
 <h2>Trades ({len(trades)})</h2><table><tr><th>entry</th><th>exit</th><th>side</th><th>return</th><th>days held</th></tr>{trade_rows}</table>
 </body></html>"""
 
 
-def export_html(res, path, title: str = "") -> Path:
+def export_html(res, path, title: str = "", regimes: pd.DataFrame | None = None) -> Path:
     path = Path(path)
-    path.write_text(html_report(res, title), encoding="utf-8")
+    path.write_text(html_report(res, title, regimes), encoding="utf-8")
     return path

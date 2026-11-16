@@ -49,13 +49,13 @@ tradebot bot run ETH/USDT sma_cross --tf 1h --stake 50 --paper
 * **Getting started**: [install, binary, GPU, first run, cache](docs/getting-started.md)
 * **Desktop app**: [Chart](docs/chart.md), [Screener](docs/screener.md), [Scanner](docs/scanner.md),
   [Backtest lab](docs/backtest-lab.md), [Evolve](docs/evolve.md), [Pairs](docs/pairs.md),
-  [Portfolio](docs/portfolio.md), [Journal](docs/journal.md), [News](docs/news.md), [Settings](docs/settings.md)
+  [Basket](docs/portfolio-backtest.md), [Portfolio](docs/portfolio.md), [Journal](docs/journal.md), [News](docs/news.md), [Settings](docs/settings.md)
 * **Command line**: [every command with examples](docs/cli.md), [CLI reference](docs/cli-reference.md), tab completion
 * **Extending**: [plugins, indicators, brokers](docs/extending.md),
   [turning an indicator into an algorithm](docs/indicators-as-algorithms.md), `examples/plugins/`
 * **Concepts**: [strategies](docs/strategies.md) (incl. Elliott waves and the halving cycle), [metrics](docs/metrics.md),
   [the optimizers](docs/optimizers.md), [data and the cache](docs/data.md),
-  [brokers, bots, paper trading and risk guards](docs/live-trading.md), [pairs trading](docs/pairs-trading.md)
+  [brokers, bots, paper trading and risk guards](docs/live-trading.md), [pairs trading](docs/pairs-trading.md), [regimes and position sizing](docs/regimes-and-sizing.md), [alerts](docs/alerts.md)
 * **Reference**: [config keys, settings.json, environment variables, file locations](docs/reference.md)
 * **Development**: [tests, CI, branches, releases](docs/development.md); [disclaimer and licence](docs/legal.md)
 

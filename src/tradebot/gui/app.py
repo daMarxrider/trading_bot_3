@@ -30,11 +30,13 @@ from tradebot.core.registry import load_plugins
 from tradebot.data import MarketDataEngine
 from tradebot.data.cache import DiskCache
 from tradebot.data.providers import quiet_yfinance
+from tradebot.gui.alerts import AlertsDialog, AlertWatcher
 from tradebot.gui.chart import ChartView
 from tradebot.gui.common import run_async
 from tradebot.gui.evolve import EvolveView
 from tradebot.gui.journal import JournalView
 from tradebot.gui.pairs import PairView
+from tradebot.gui.portfolio_backtest import PortfolioBacktestView
 from tradebot.gui.settings import SettingsDialog
 from tradebot.live.risk import kill_active, set_kill
 from tradebot.legal import NOT_AFFILIATED, NO_WARRANTY
@@ -69,13 +71,14 @@ class MainWindow(QMainWindow):
         self.news = NewsView(themes, lambda: list(dict.fromkeys(self.chart.watchlists.all_symbols()
                                                                 + self.portfolio_symbols)))
         self.pairs = PairView(engine, themes, symbols)
+        self.basket = PortfolioBacktestView(engine, themes, symbols)  # #148
         self.portfolio = PortfolioView(engine, themes)
         self.lab = BacktestView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)
         self.evolve = EvolveView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)
         self.journal = JournalView(engine, themes)
         pages = [("Chart", "📈", self.chart), ("Screener", "🔎", self.screener),
                  ("Scanner", "📡", self.scanner), ("Backtest", "🧪", self.lab),
-                 ("Evolve", "🧬", self.evolve), ("Pairs", "⚖", self.pairs), ("Portfolio", "💼", self.portfolio), ("Journal", "📒", self.journal), ("News", "📰", self.news)]
+                 ("Evolve", "🧬", self.evolve), ("Basket", "🧺", self.basket), ("Pairs", "⚖", self.pairs), ("Portfolio", "💼", self.portfolio), ("Journal", "📒", self.journal), ("News", "📰", self.news)]
 
         self.stack = QStackedWidget()
         sidebar = QWidget(objectName="Sidebar")
@@ -105,6 +108,11 @@ class MainWindow(QMainWindow):
         self.kill_btn.setChecked(kill_active())
         self.kill_btn.toggled.connect(self.toggle_kill)  # #154
         side.addWidget(self.kill_btn)
+        self.alerts_btn = QPushButton("🔔  Alerts", objectName="Nav", toolTip="Price/indicator alerts and scheduled scans")
+        self.alerts_btn.clicked.connect(self.show_alerts)  # #156
+        side.addWidget(self.alerts_btn)
+        self.alert_watcher = AlertWatcher(self)
+        self.alert_watcher.fired.connect(lambda line: self.statusBar().showMessage(line, 15000))
         about = QPushButton("ⓘ  About", objectName="Nav")  # disclaimers and licence (#58)
         about.clicked.connect(self.show_about)
         side.addWidget(about)
@@ -172,6 +180,11 @@ class MainWindow(QMainWindow):
         set_kill(on, "gui")
         self.statusBar().showMessage("kill switch ON: live bots stop trading" if on else "kill switch off", 8000)
 
+    def show_alerts(self):
+        dialog = AlertsDialog(self)
+        self._alerts_dialog = dialog  # for tests
+        dialog.exec()
+
     def show_settings(self):
         dialog = SettingsDialog(self.themes, self.theme_key, self)
         dialog.theme_chosen.connect(self._theme_chosen)
@@ -219,6 +232,7 @@ def main(argv: list[str] | None = None) -> int:
     themes = ThemeManager(touch=mode == "on" or (mode == "auto" and has_touchscreen()))
     window = MainWindow(themes, config.get("theme", "glass"), Settings(), opengl=bool(config.get("gpu_rendering", False)))
     window.show()
+    window.alert_watcher.start()  # price/indicator alerts and scheduled scans while the app is open (#156)
     return app.exec()
 
 

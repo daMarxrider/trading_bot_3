@@ -66,6 +66,11 @@ colour**, **edit its text** (notes) or **delete** it; **✕ Clear** removes all 
 menu on empty space also has *Reset zoom*, *Add level at <price>*, the drawing tools, *Add to watchlist* and the
 candles/line and volume toggles.
 
+## Alerts
+
+Right-click a level and choose *Alert me at ...* to create a price alert; the sidebar's **Alerts** button lists them. See
+[Alerts](alerts.md). The `regime` indicator shades the background by market regime ([regimes](regimes-and-sizing.md#market-regimes)).
+
 ## Loadouts
 
 **Loadouts ▾** (top right) saves the current indicators and signal under a name you choose (**Save Current**) and

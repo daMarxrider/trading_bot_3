@@ -52,6 +52,14 @@ Fills = Annotated[Optional[str], typer.Option(
          "inside the candle against its high/low, at the open on a gap; stop first when both are hit)",
     autocompletion=complete.choices(("close", "fill at the close"), ("intrabar", "fill against high/low"))
 )]
+Sizing = Annotated[Optional[str], typer.Option(
+    help="Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility "
+         "target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional "
+         "Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15",
+    autocompletion=complete.choices(("none", "full size"), ("fixed", "fixed fraction"),
+                                    ("vol", "volatility target"), ("risk", "fixed risk per trade"),
+                                    ("kelly", "fractional Kelly"))
+)]
 TF = Annotated[str, typer.Option("--tf", help="Timeframe: 1m 5m 15m 30m 1h 4h 1d 1w", autocompletion=complete.timeframes)]
 Symbol = Annotated[str, typer.Argument(help="e.g. AAPL, SAP.DE, BTC/USDT", autocompletion=complete.symbols)]
 Algo = Annotated[str, typer.Argument(help="Algorithm name (tradebot list)", autocompletion=complete.algorithms)]
@@ -118,9 +126,15 @@ def load_data(symbol: str, tf: str, start: str | None, end: str | None, bars: in
 
 
 def make_algo(name: str, params: list[str], members: str | None, entry: str | None = None, exit: str | None = None,
-              fills: str | None = None):
+              fills: str | None = None, sizing: str | None = None):
+    from tradebot.algorithms.sizing import PREFIX, sized
+
     try:
-        return build_algorithm(name, parse_kv(params), members.split(",") if members else None, entry, exit, fills)
+        given = parse_kv(params)
+        size = {k: v for k, v in given.items() if k.startswith(PREFIX)}
+        algo = build_algorithm(name, {k: v for k, v in given.items() if k not in size},
+                               members.split(",") if members else None, entry, exit, fills)
+        return sized(algo, sizing, **size)
     except ValueError as e:
         raise typer.BadParameter(str(e)) from None
 
@@ -180,13 +194,14 @@ def chart(
     entry: Entry = None,
     exit: Exit = None,
     fills: Fills = None,
+    sizing: Sizing = None,
     line: Annotated[bool, typer.Option(help="Line chart instead of candles")] = False,
     volume: Annotated[bool, typer.Option(help="Volume bars under the candles (when the data has volume)")] = True,
 ):
     """Terminal OHLC chart with indicator overlays, volume and algorithm signals."""
     from tradebot.cli.charts import render_chart
 
-    algorithm = make_algo(algo, param, members, entry, exit, fills) if algo else None
+    algorithm = make_algo(algo, param, members, entry, exit, fills, sizing) if algo else None
     inds = [parse_indicator(s) for s in indicator]
     if algorithm and not inds:
         inds = algorithm.chart_indicators()
@@ -208,6 +223,7 @@ def backtest(
     entry: Entry = None,
     exit: Exit = None,
     fills: Fills = None,
+    sizing: Sizing = None,
     fee: Annotated[float, typer.Option(help="Fee per side, fraction")] = 0.001,
     slippage: Slippage = None,
     capital: float = 10_000.0,
@@ -216,15 +232,42 @@ def backtest(
     trades_csv: Annotated[Optional[Path], typer.Option("--trades-csv", help="Write the trade list to this CSV file")] = None,
     report: Annotated[Optional[Path], typer.Option(help="Write a self-contained HTML report (metrics, equity, "
                                                         "underwater plot, monthly returns, trades)")] = None,
+    portfolio: Annotated[bool, typer.Option(
+        "--portfolio", help="Trade all the symbols from one shared account (#148) instead of one backtest per "
+                            "symbol; compared with buy & hold of the same basket")] = False,
+    watchlist: Annotated[list[str], typer.Option(
+        "--watchlist", "-w", help="Add the symbols of this watchlist (with --portfolio; 'all' = every list)",
+        autocompletion=complete.watchlists)] = [],
+    max_positions: Annotated[Optional[int], typer.Option(
+        min=1, help="Portfolio: most positions held at once, each slot 1/N of the account (default: one per "
+                    "symbol). Implies --portfolio")] = None,
+    allocation: Annotated[str, typer.Option(
+        help="Portfolio: how the held positions share the capital: equal, signal (by signal strength) or "
+             "volatility (inverse volatility)",
+        autocompletion=complete.choices(("equal", "same share each"), ("signal", "by signal strength"),
+                                        ("volatility", "inverse volatility")))] = "equal",
+    rebalance: Annotated[str, typer.Option(
+        help="Portfolio: set the positions back to their target weights: none, candle, week, month or quarter",
+        autocompletion=complete.choices(("none", "never"), ("candle", "every candle"), ("week", "weekly"),
+                                        ("month", "monthly"), ("quarter", "quarterly")))] = "none",
+    regimes: Annotated[bool, typer.Option("--regimes", help="Break the result down by market regime (bull / bear / "
+                                                            "sideways, high / low volatility)")] = False,
 ):
     """Backtest an algorithm on historical OHLC data, next to buy & hold and monthly investing.
 
     ``combo`` builds a strategy from rules: ``tradebot backtest AAPL combo --entry "elliott_wave &
-    close>sma(200)" --exit "macd_cross | stop_atr(2)"`` (see ``tradebot combo --help``)."""
+    close>sma(200)" --exit "macd_cross | stop_atr(2)"`` (see ``tradebot combo --help``).
+
+    ``--portfolio`` trades several symbols from one account: ``tradebot backtest AAPL,MSFT,NVDA,KO sma_cross
+    --max-positions 2 --allocation volatility --rebalance month``."""
     from tradebot.backtest import backtest as run_backtest, baselines
     from tradebot.cli.charts import render_chart
 
-    algorithm = make_algo(algo, param, members, entry, exit, fills)
+    algorithm = make_algo(algo, param, members, entry, exit, fills, sizing)
+    if portfolio or max_positions or watchlist:
+        _backtest_portfolio(_symbols(symbol, watchlist), algorithm, tf, start, end, bars, fee, capital, slippage,
+                            max_positions, allocation, rebalance, plot, trades_csv, report)
+        return
     symbols = _symbols(symbol, [])
     if len(symbols) > 1:
         _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount, slippage)
@@ -242,10 +285,20 @@ def backtest(
 
     stats = rep.report_stats(res.equity, res.trades)
     console.print("  ".join(f"{k.replace('_', ' ')} [bold]{rep.fmt_stat(k, v)}[/]" for k, v in stats.items()))
+    by_regime = rep.regime_table(res, df) if regimes or report else None
+    if regimes:
+        f = rep.fmt_regime(by_regime)
+        tbl = Table(title="by market regime")
+        tbl.add_column("regime")
+        for c in f.columns:
+            tbl.add_column(c.replace("_", " "), justify="right")
+        for name, row in zip(f.index, f.itertuples(index=False)):
+            tbl.add_row(name, *row)
+        console.print(tbl)
     if trades_csv:
         console.print(f"trades written to {rep.export_trades_csv(res, trades_csv)}")
     if report:
-        console.print(f"report written to {rep.export_html(res, report, f'{algorithm!r} on {symbol} {tf}')}")
+        console.print(f"report written to {rep.export_html(res, report, f'{algorithm!r} on {symbol} {tf}', by_regime)}")
     warn_not_beaten(bl, "Over this period")
 
 
@@ -341,6 +394,50 @@ def _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_a
     console.print(" · ".join(f"beats {k} on {v}/{n}" for k, v in beats.items()))
 
 
+def _backtest_portfolio(symbols, algorithm, tf, start, end, bars, fee, capital, slippage, max_positions, allocation,
+                        rebalance, plot=False, trades_csv=None, report=None) -> None:
+    """One account trading all ``symbols`` (#148): metrics next to the basket's buy & hold, then per symbol."""
+    from tradebot.backtest import report as rep
+    from tradebot.backtest.metrics import fmt
+    from tradebot.backtest.portfolio import ALLOCATIONS, REBALANCE, portfolio_backtest
+    from tradebot.cli.charts import render_lines
+
+    if allocation not in ALLOCATIONS:
+        raise typer.BadParameter(f"choose {', '.join(ALLOCATIONS)}", param_hint="--allocation")
+    if rebalance not in REBALANCE:
+        raise typer.BadParameter(f"choose {', '.join(REBALANCE)}", param_hint="--rebalance")
+    frames = _load_many(symbols, tf, start, end, bars)
+    slip = {s: _slippage(slippage, s) for s in frames}
+    try:
+        pf = portfolio_backtest(frames, algorithm, max_positions, allocation, rebalance, fee=fee, slippage=slip,
+                                initial_capital=capital)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+    res, idx = pf.result, pf.result.equity.index
+    if plot:
+        print(render_lines({"portfolio": res.equity, "buy & hold basket": pf.benchmark.equity},
+                           f"portfolio · {algorithm!r} · {tf}"))
+    s = pf.settings
+    console.print(f"[bold]{algorithm!r}[/] on {len(frames)} symbols {tf} ({idx[0]:%Y-%m-%d} → {idx[-1]:%Y-%m-%d}), "
+                  f"max {s['max_positions']} positions, {allocation} allocation, rebalance {rebalance}")
+    console.print(results_table("portfolio backtest", pf.columns()))
+    console.print(f"final equity [bold]{res.equity.iloc[-1]:,.2f}[/] (basket {pf.benchmark.equity.iloc[-1]:,.2f})")
+    t = Table(title="per symbol")
+    for col in ("symbol", "P&L", "time held", "avg weight", "trades"):
+        t.add_column(col, justify="left" if col == "symbol" else "right")
+    for sym, row in pf.per_symbol().iterrows():
+        color = "green" if row["contribution"] > 0 else "red"
+        t.add_row(sym, f"[{color}]{row['contribution']:+,.2f}[/]", fmt("exposure", row["time held"]),
+                  fmt("exposure", row["avg weight"]), str(int(row["trades"])))
+    console.print(t)
+    if trades_csv:
+        console.print(f"trades written to {rep.export_trades_csv(res, trades_csv)}")
+    if report:
+        console.print(f"report written to {rep.export_html(res, report, f'{algorithm!r} portfolio · {tf}')}")
+    if not pf.excess > 0:
+        console.print("[bold red]Over this period, the portfolio does not beat buy & hold of the same basket[/]")
+
+
 @app.command()
 def optimize(
     symbol: Annotated[Optional[str], typer.Argument(
@@ -357,6 +454,7 @@ def optimize(
     entry: Entry = None,
     exit: Exit = None,
     fills: Fills = None,
+    sizing: Sizing = None,
     pool: Annotated[Optional[str], typer.Option(
         help="Comma-separated strategies and indicators the optimizer picks from (default: all)",
         autocompletion=complete.pool_members)] = None,
@@ -439,11 +537,15 @@ def optimize(
     symbols = _symbols(symbol, watchlist)
     if algo in (None, "pool"):
         algorithm = _make_pool(pool or members, min_members, max_members)
+        if sizing:
+            from tradebot.algorithms.sizing import sized
+
+            algorithm = sized(algorithm, sizing)
         algo = "pool"
     elif pool or min_members != 1 or max_members is not None:
         raise typer.BadParameter("--pool, --min-members and --max-members need the pool: leave out the algorithm")
     else:
-        algorithm = make_algo(algo, [], members, entry, exit, fills)
+        algorithm = make_algo(algo, [], members, entry, exit, fills, sizing)
     if len(symbols) == 1:
         df = load_data(symbols[0], tf, start, end, bars)
         size = f"{len(df)} candles"
@@ -996,13 +1098,15 @@ def _reused(algorithm, params: dict) -> dict:
 def _reuse_command(symbol: str, algorithm, params: dict) -> str:
     flags = " ".join(f"-p {k}={v:g}" for k, v in _reused(algorithm, params).items())
     members = f" --members {','.join(algorithm.selected(params))}" if hasattr(algorithm, "selected") else ""
-    if type(algorithm).__name__ == "Combo":  # the generic combo: its rules aren't saved anywhere
+    base = getattr(algorithm, "inner", algorithm)  # a sized algorithm (#147): the sizing model is a flag
+    if type(base).__name__ == "Combo":  # the generic combo: its rules aren't saved anywhere
         import shlex
 
-        members = f" --entry {shlex.quote(algorithm.entry)}" + (f" --exit {shlex.quote(algorithm.exit)}"
-                                                                 if algorithm.exit else "")
-    if getattr(algorithm, "fills", "close") != "close":
-        members += f" --fills {algorithm.fills}"
+        members = f" --entry {shlex.quote(base.entry)}" + (f" --exit {shlex.quote(base.exit)}" if base.exit else "")
+    if getattr(base, "fills", "close") != "close":
+        members += f" --fills {base.fills}"
+    if base is not algorithm:
+        members += f" --sizing {algorithm.model}"
     return f"tradebot backtest {symbol} {algorithm.name}{members} {flags}"
 
 
@@ -1090,6 +1194,7 @@ def bot_run(
     entry: Entry = None,
     exit: Exit = None,
     fills: Fills = None,
+    sizing: Sizing = None,
     live: Annotated[bool, typer.Option(help="Actually place orders (default: dry run)")] = False,
     sandbox: Annotated[bool, typer.Option(help="Use the exchange testnet (ccxt brokers)")] = False,
     once: Annotated[bool, typer.Option(help="Evaluate a single candle and exit")] = False,
@@ -1118,7 +1223,7 @@ def bot_run(
         raise typer.BadParameter(f"{broker} is read-only")
     limits = RiskLimits(max_daily_loss or None, max_drawdown or None, max_exposure or None, max_order or None,
                         price_band or None, cooldown_losses, cooldown_minutes, close_on_halt)
-    bot = TradingBot(b, make_algo(algo, param, members, entry, exit, fills), symbol, tf, stake,
+    bot = TradingBot(b, make_algo(algo, param, members, entry, exit, fills, sizing), symbol, tf, stake,
                      dry_run=not (live or broker == "paper"), risk=limits, journal=Journal() if journal else None, on_risk=lambda e: console.print(f"[red]risk guard {e.kind}:[/] {e.message}"),
                      on_event=lambda e: console.print(
                          f"[dim]{e.time:%Y-%m-%d %H:%M}[/] {symbol} target={e.target:.2f} "
@@ -1263,9 +1368,10 @@ def bot_pair_run(
     """Trade the gap of two assets live: long one and short the other (dry run unless --live).
 
     The short leg is a plain sell, so the broker needs margin or futures for it: give the legs as symbols it
-    can short. The bot doesn't remember an open pair across a restart."""
+    can short. With --live the open pair is saved (`bot pair-state` shows it) and picked up after a restart;
+    a trade that didn't finish makes the next start refuse until the account has been checked."""
     from tradebot.journal import Journal
-    from tradebot.live import PairBot
+    from tradebot.live import PairBot, PairStateError, pair_state_path
 
     legs, symbol = (leg_a, leg_b), f"{leg_a} / {leg_b}"
     confirm_live_risk(live)
@@ -1274,19 +1380,88 @@ def bot_pair_run(
         raise typer.BadParameter(f"{broker} is read-only")
     try:
         bot = PairBot(b, legs, tf, stake, window, entry, exit, stop, method, dry_run=not live,
+                      state_path=pair_state_path(broker, legs, sandbox) if live else None,
                       journal=Journal() if journal else None,
                       on_event=lambda e: console.print(
                           f"[dim]{e.time:%Y-%m-%d %H:%M}[/] {e.pair} z={e.z:+.2f} β={e.beta:.2f} → [bold]{e.action}[/]"
                           + (f" {e.amount_a:.6g} {legs[0]} / {e.amount_b:.6g} {legs[1]}" if e.action != "hold" else "")
-                          + (" [yellow](dry run)[/]" if e.dry_run else "")))
+                          + (" [yellow](dry run)[/]" if e.dry_run else "")
+                          + (f" [yellow]({e.note})[/]" if e.note else "")))
     except ValueError as e:
         raise typer.BadParameter(str(e)) from None
+    except PairStateError as e:
+        console.print(f"[bold red]not starting:[/] {e}")
+        raise typer.Exit(1) from None
     mode = "[red]LIVE[/]" if live else "[yellow]dry run[/]"
     console.print(f"pair bot {symbol} on {broker} {tf}, stake {stake} · {mode} · {b.execution_mode.value}")
+    if bot.side:
+        console.print(f"resumed the open pair: {'long' if bot.side > 0 else 'short'} {bot.amounts[0]:.8g} {legs[0]} / "
+                      f"{bot.amounts[1]:.8g} {legs[1]} (since {bot.opened})")
     try:
         bot.run(max_steps=1 if once else None)
     except KeyboardInterrupt:
         console.print("stopped")
+    except PairStateError as e:
+        console.print(f"[bold red]halted:[/] {e}")
+        raise typer.Exit(1) from None
+
+
+@bot_app.command("pair-state")
+def bot_pair_state(
+    leg_a: Annotated[str, typer.Argument(help="First leg, as given to pair-run")],
+    leg_b: Annotated[str, typer.Argument(help="Second leg")],
+    broker: Broker = "binance",
+    sandbox: Annotated[bool, typer.Option(help="The testnet state (pair-run --sandbox)")] = False,
+    keep: Annotated[bool, typer.Option(help="Drop an unfinished trade, keep the last saved pair (it matches the account)")] = False,
+    forget: Annotated[bool, typer.Option(help="Mark the pair flat (you closed both legs at the broker)")] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask")] = False,
+):
+    """Show what `bot pair-run --live` remembers for a pair; --keep / --forget clear an unfinished trade (#122)."""
+    from datetime import datetime, timezone
+
+    from tradebot.live.pairs import (
+        STATE_VERSION,
+        PairStateError,
+        describe_pending,
+        pair_state_path,
+        read_pair_state,
+        write_json_atomic,
+    )
+
+    if keep and forget:
+        raise typer.BadParameter("use --keep or --forget, not both")
+    where = f"{broker}{' testnet' if sandbox else ''}"
+    path = pair_state_path(broker, (leg_a, leg_b), sandbox)
+    try:
+        s = read_pair_state(path)
+    except PairStateError as e:
+        console.print(f"[bold red]{e}[/]")
+        if not forget:
+            raise typer.Exit(1) from None
+        s = None
+    if s is None and not forget:
+        console.print(f"no saved pair for {leg_a} / {leg_b} on {where} ({path})")
+        return
+    if s is not None:
+        side = {1.0: "long", -1.0: "short"}.get(s["side"], "flat")
+        held = f" {s['amounts'][0]:.8g} {leg_a} / {s['amounts'][1]:.8g} {leg_b} since {s.get('opened')}" if s["side"] else ""
+        console.print(f"[bold]{leg_a} / {leg_b}[/] on {where} ({path})")
+        console.print(f"{side}{held}" + (" · closing" if s["closing"] else "") + f" · updated {s.get('updated')}")
+        if s.get("pending"):
+            console.print(f"[bold red]unfinished trade:[/] {describe_pending(s)}")
+    if not (keep or forget):
+        return
+    if keep and s is not None and not s.get("pending"):
+        console.print("nothing to clear")
+        return
+    if not yes:
+        typer.confirm("Mark the pair flat?" if forget else "Keep the saved pair and drop the unfinished trade?", abort=True)
+    if forget:
+        s = {"version": STATE_VERSION, "legs": [leg_a, leg_b], "side": 0.0, "amounts": [0.0, 0.0], "closing": False,
+             "opened": None}
+    s["pending"], s["updated"] = None, datetime.now(timezone.utc).isoformat()
+    write_json_atomic(path, s)
+    console.print("pair marked flat" if forget else "unfinished trade dropped; the saved pair stays")
 
 
 @app.command()
@@ -1737,6 +1912,147 @@ def notify_test():
         console.print(f"[red]✗[/] {name}: {escape(error)}" if error else f"[green]✓[/] {name}")
     if failed:
         raise typer.Exit(1)
+
+
+# -- background alerts (#156) ------------------------------------------------------------------------
+alert_app = typer.Typer(help="Price and indicator alerts and scheduled scans, delivered through the notification "
+                             "channels while `tradebot watch` (or the app) runs.", no_args_is_help=True)
+app.add_typer(alert_app, name="alert")
+Every = Annotated[str, typer.Option("--every", help="Minutes between checks, or 'close' = once per finished candle")]
+Repeat = Annotated[bool, typer.Option("--repeat", help="Re-arm after the condition was false again "
+                                      "(default: fire once, then switch off)")]
+
+
+def _store_alert(alert):
+    from tradebot import alerts
+
+    try:
+        alerts.add(alert)
+    except (ValueError, KeyError) as exc:
+        raise typer.BadParameter(str(exc.args[0] if exc.args else exc)) from None
+    console.print(f"added {alert.id}: {escape(alert.describe())} "
+                  f"(every {alert.every}{'' if alert.every == 'close' else ' min'})")
+
+
+def _scan_params(items: list[str]) -> dict:
+    params = {}
+    for item in items:
+        key, _, value = item.partition("=")
+        try:
+            params[key] = float(value)
+        except ValueError:
+            raise typer.BadParameter(f"{item!r}: use name=number", param_hint="--param") from None
+    return params
+
+
+def _alert_filters(where: list[str], alert: list[str]) -> list[dict]:
+    return [parse_where(w) for w in where] + [{"alert": a.lstrip("!"), "state": not a.startswith("!")} for a in alert]
+
+
+@alert_app.command("price")
+def alert_price(symbol: Symbol,
+                condition: Annotated[str, typer.Argument(help="e.g. '>=100000' or '<=90000'")],
+                timeframe: Annotated[str, typer.Option("--tf", help="Candle the price is read from",
+                                                       autocompletion=complete.timeframes)] = "1m",
+                every: Every = "1", repeat: Repeat = False):
+    """Tell me when SYMBOL reaches a price."""
+    from tradebot import alerts
+
+    try:
+        op, value = alerts.parse_price(condition)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="CONDITION") from None
+    _store_alert(alerts.Alert("price", [symbol], timeframe, op=op, value=value, every=every, repeat=repeat))
+
+
+@alert_app.command("indicator")
+def alert_indicator(
+    symbol: Symbol,
+    indicator: Annotated[str, typer.Option("--indicator", "-i", autocompletion=complete.scannable)],
+    param: Annotated[list[str], typer.Option("--param", "-p", help="e.g. -p period=14")] = [],
+    where: Annotated[list[str], typer.Option("--where", help='e.g. --where "rsi < 30"')] = [],
+    alert: Annotated[list[str], typer.Option("--alert", help="Indicator alert that must be on; !NAME: off")] = [],
+    timeframe: Annotated[str, typer.Option("--tf", autocompletion=complete.timeframes)] = "1d",
+    every: Every = "close", repeat: Repeat = False,
+):
+    """Tell me when an indicator's values or alerts on SYMBOL match (all conditions)."""
+    from tradebot import alerts
+
+    _store_alert(alerts.Alert("indicator", [symbol], timeframe, indicator=indicator, params=_scan_params(param),
+                              filters=_alert_filters(where, alert), every=every, repeat=repeat))
+
+
+@alert_app.command("scan")
+def alert_scan(
+    symbols: Annotated[Optional[list[str]], typer.Argument(help="Defaults to the watchlists",
+                                                           autocompletion=complete.symbols)] = None,
+    indicator: Annotated[str, typer.Option("--indicator", "-i", autocompletion=complete.scannable)] = "ma_cross",
+    param: Annotated[list[str], typer.Option("--param", "-p")] = [],
+    where: Annotated[list[str], typer.Option("--where")] = [],
+    alert: Annotated[list[str], typer.Option("--alert")] = [],
+    timeframe: Annotated[str, typer.Option("--tf", autocompletion=complete.timeframes)] = "1d",
+    watchlist: Annotated[Optional[str], typer.Option("--watchlist", "-w", help=WATCHLIST_HELP)] = None,
+    index: Annotated[Optional[str], typer.Option("--index", autocompletion=complete.indices)] = None,
+    every: Every = "close",
+):
+    """Run a scan on a schedule and report only the matches that are new since the last run."""
+    from tradebot import alerts
+
+    if index:
+        if symbols or watchlist:
+            raise typer.BadParameter("use either symbols, --watchlist or --index", param_hint="--index")
+        symbols = _index_symbols(index)
+    symbols = symbols or _watchlist(watchlist)
+    _store_alert(alerts.Alert("scan", symbols, timeframe, indicator=indicator, params=_scan_params(param),
+                              filters=_alert_filters(where, alert), every=every))
+
+
+@alert_app.command("list")
+def alert_list():
+    """The stored alerts and their state."""
+    from tradebot import alerts
+
+    items = alerts.load()
+    if not items:
+        console.print("no alerts: add one with `tradebot alert price|indicator|scan`")
+        return
+    t = Table(title="alerts")
+    for c in ("id", "kind", "condition", "every", "state"):
+        t.add_column(c)
+    for a in items:
+        state = "off" if not a.enabled else "armed" if a.armed else "fired (waiting)"
+        t.add_row(a.id, a.kind, escape(a.describe()), str(a.every), state)
+    console.print(t)
+
+
+@alert_app.command("rm")
+def alert_rm(alert_id: Annotated[str, typer.Argument(help="Id from `tradebot alert list`")]):
+    """Delete an alert."""
+    from tradebot import alerts
+
+    if not alerts.remove(alert_id):
+        raise typer.BadParameter(f"no alert {alert_id!r}")
+    console.print(f"removed {alert_id}")
+
+
+@app.command()
+def watch(poll: Annotated[float, typer.Option(help="Seconds between passes over the alerts")] = 30.0,
+          once: Annotated[bool, typer.Option("--once", help="One pass, then exit (for cron)")] = False):
+    """Run the stored alerts and scheduled scans in the foreground (headless; Ctrl-C stops).
+
+    Don't run it next to the app's own alert timer: both would fire the same alert.
+    """
+    from tradebot import alerts
+
+    if once:
+        for line in alerts.run_due():
+            console.print(escape(line))
+        return
+    console.print(f"watching {len(alerts.load())} alerts every {poll:g} s (Ctrl-C to stop)")
+    try:
+        alerts.watch(poll, log_fn=lambda s: console.print(escape(s)))
+    except KeyboardInterrupt:
+        console.print("stopped")
 
 
 @cache_app.command("info")

@@ -59,7 +59,7 @@ tradebot bot run ETH/USDT sma_cross --once                                      
 
 The first `--live` run shows the risk notice and asks you to accept it; your answer is saved as
 `live_risk_accepted = "<date>"` in `config.toml`, so it asks only once. Parameters, `--members`, `--entry`/`--exit` and
-`--fills` work as in `backtest`. The bot doesn't remember an open position across a restart: check the broker's positions
+`--fills` work as in `backtest`. A single-symbol `bot run` doesn't remember an open position across a restart: check the broker's positions
 before starting again.
 
 ## Paper trading
@@ -137,4 +137,9 @@ Every order a bot places or simulates is stored in the [journal](journal.md); `-
 ## Pairs
 
 `tradebot bot pair-run LEG_A LEG_B` trades the gap of two assets, long one and short the other: see
-[Pairs trading](pairs-trading.md#live).
+[Pairs trading](pairs-trading.md#live), including how it remembers an open pair across restarts.
+
+## Position sizing
+
+`bot run --sizing MODEL` buys `stake` times the size the sizing model gives: see
+[Market regimes and position sizing](regimes-and-sizing.md#position-sizing).

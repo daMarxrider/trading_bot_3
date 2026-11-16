@@ -31,6 +31,7 @@ bots, a desktop app (PyQt6) and a terminal CLI. It is licensed under the GNU GPL
 * [Evolve](evolve.md): strategies written from scratch by genetic programming
 * [Pairs](pairs.md)
 * [Portfolio](portfolio.md)
+* [Basket](portfolio-backtest.md): one account trading a strategy on several symbols (portfolio backtest)
 * [Journal](journal.md): every order the bots placed, realised P&L, tax lots
 * [News](news.md)
 * [Settings](settings.md)
@@ -53,6 +54,8 @@ bots, a desktop app (PyQt6) and a terminal CLI. It is licensed under the GNU GPL
 * [Data providers, timeframes and the cache](data.md)
 * [Brokers and live trading](live-trading.md): brokers, bots, paper trading, risk guards, notifications
 * [Pairs trading](pairs-trading.md)
+* [Market regimes and position sizing](regimes-and-sizing.md)
+* [Alerts](alerts.md): price, indicator and scheduled-scan alerts
 
 **Reference**
 

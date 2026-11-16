@@ -1022,6 +1022,7 @@ class ChartView(QWidget):
                                                   brush=pg.mkBrush(qcolor(resolve_color(t, fill.color or "muted"))))
                         item.setZValue(-5)
                         target.addItem(item)
+            self._draw_shades(ind, frame, x, width, t)
         self._drop_panes(spare)
         if self.algorithm is not None:
             self._positions = self.algorithm.run(df).to_numpy()
@@ -1068,6 +1069,24 @@ class ChartView(QWidget):
             self._slots[id(ind)] = self._next_slot
             self._next_slot += len(ind.plot_outputs())
         return self._slots[id(ind)]
+
+    def _draw_shades(self, ind, frame, x, width, t):
+        """Background shades behind the candles (``ind.shades``, e.g. the market regime): one band per run of bars."""
+        for output, colors in ind.shades.items():
+            col = f"{ind.name}_{output}"
+            if col not in frame:
+                continue
+            codes = frame[col].to_numpy()
+            half = width / 0.7 / 2  # half a candle slot
+            for code, css in colors.items():
+                on = np.r_[False, codes == code, False]
+                edges = np.flatnonzero(on[1:] != on[:-1])
+                brush = pg.mkBrush(qcolor(resolve_color(t, css)))
+                for a, b in zip(edges[::2], edges[1::2]):
+                    band = pg.LinearRegionItem((x[a] - half, x[b - 1] + half), movable=False, brush=brush,
+                                               pen=pg.mkPen(None))
+                    band.setZValue(-10)
+                    self.price.addItem(band, ignoreBounds=True)
 
     def _draw_labels(self, target, ind, frame, col, x, close, t):
         """Text labels of an indicator output (e.g. Elliott wave numbers) at its anchor values."""
@@ -1327,6 +1346,8 @@ class ChartView(QWidget):
         if plot is self.price and self.df is not None:
             price = self.price_at(self.price.vb.mapSceneToView(scene_pos).y())
             menu.addAction(f"Add level at {price:.6g}", lambda: self._add_level(price))
+            if self._loaded_symbol:
+                menu.addAction(f"Alert me at {price:.6g}", lambda: self.add_price_alert(price))
         for key, btn in self.tools.items():
             if key != "hline":
                 menu.addAction(f"Draw {btn.text().split(' ', 1)[-1].lower()}", lambda k=key: self.tools[k].setChecked(True))
@@ -1350,6 +1371,19 @@ class ChartView(QWidget):
         menu.addAction("Hide volume" if self.vol_btn.isChecked() else "Show volume", self.vol_btn.toggle)
         menu.popup(global_pos)
         self._menu = menu  # keep a reference while open (and for tests)
+
+    def add_price_alert(self, price: float):
+        """A background price alert (#156): fires when the price reaches ``price`` from the side it is on now."""
+        from tradebot import alerts
+
+        last = float(self.df["close"].iloc[-1])
+        alert = alerts.Alert("price", [self._loaded_symbol], "1m", op=">=" if price >= last else "<=", value=price)
+        try:
+            alerts.add(alert)
+        except (ValueError, OSError) as exc:
+            self.status.emit(f"alert not saved: {exc}")
+            return
+        self.status.emit(f"alert added: {alert.describe()} (checked while the app or `tradebot watch` runs)")
 
     def _add_drawing(self, item, tool, save: bool = True):
         item._kind = tool

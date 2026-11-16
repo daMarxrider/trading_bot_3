@@ -37,6 +37,9 @@ tradebot backtest AAPL macd_cross --bars 2000 -p fast=8 -p slow=21
 tradebot backtest AAPL,MSFT,NVDA macd_cross -p fast=8       # one row per symbol
 tradebot backtest AAPL vote --members rsi_threshold,sma_cross
 tradebot backtest AAPL combo --entry "close > sma(200) & rsi(14) < 35" --exit "stop_pct(5) | rsi(14) > 55"
+tradebot backtest AAPL,MSFT,NVDA,KO,JNJ sma_cross --max-positions 3 --allocation volatility --rebalance month   # one shared account, see portfolio-backtest.md
+tradebot backtest BTC/USDT sma_cross --sizing vol -p size.target_vol=0.2   # position sizing
+tradebot backtest AAPL combo --entry "rsi_threshold & regime.bull" --regimes   # result per market regime
 tradebot backtest AAPL macd_cross --slippage 5 --fee 0.001
 tradebot backtest AAPL macd_cross --report aapl.html --trades-csv aapl.csv --no-plot
 tradebot montecarlo AAPL macd_cross --runs 2000 --method block --seed 1
@@ -67,6 +70,20 @@ tradebot evolve AAPL,MSFT,NVDA --generations 60 --save my_rule  # evolve a whole
 What the options do: [How the optimizers work](optimizers.md) and [Evolve](evolve.md). `optimize` tunes on the first
 70 % of the data (`--train`) and reports the rest out-of-sample; candidates with fewer than `--min-trades` round trips
 are rejected. `--backend auto|gpu|cuda|rocm|cpu|numpy` picks the compute backend.
+
+## Alerts
+
+```sh
+tradebot alert price BTC/USDT ">=100000" --every 5 --repeat
+tradebot alert indicator AAPL -i rsi --where "value < 30" --tf 1d
+tradebot alert scan -i ma_cross --alert cross_up --index sp500
+tradebot alert list
+tradebot alert rm ID
+tradebot watch                      # run the alerts until Ctrl-C (--once for cron)
+```
+
+See [Alerts](alerts.md). Portfolio backtests are described in [Basket](portfolio-backtest.md), `--sizing` and `--regimes` in
+[Market regimes and position sizing](regimes-and-sizing.md).
 
 ## Combos
 
@@ -110,6 +127,7 @@ tradebot bot run ETH/USDT sma_cross --broker binance --tf 1h --stake 50 --live  
 tradebot bot run ETH/USDT sma_cross --tf 1h --stake 50 --paper                   # simulated account that survives restarts
 tradebot bot run ETH/USDT sma_cross --stake 50 --max-daily-loss 20 --max-drawdown 10 --cooldown-losses 3
 tradebot bot pair-run BTC/USDT:USDT ETH/USDT:USDT --once
+tradebot bot pair-state BTC/USDT:USDT ETH/USDT:USDT   # the open pair a --live pair bot saved (--keep / --forget)
 tradebot bot kill                   # every running bot stops at its next check
 tradebot bot resume
 tradebot paper show                 # paper account: cash, positions, P&L, latest orders

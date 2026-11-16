@@ -23,6 +23,8 @@ divider resets them.
     members**;
   * `combo`: **Combo builder**, entry and exit rules as text, filled by picking a block, a logic and a threshold, with
     an *Intrabar* switch for fills and **Save combo**.
+* **Position sizing**: a layer that decides how much to put on (fixed, volatility target, fixed risk, Kelly); see
+  [Market regimes and position sizing](regimes-and-sizing.md#position-sizing).
 * **Parameters**: a form generated from the strategy, with the range the optimizer searches.
 
 ## 2. Run
@@ -72,6 +74,10 @@ The footer of the Optimizer card shows the **compute backend** (`tradebot device
 * **Monte Carlo card**: set the number of runs, the method (bootstrap trades, shuffle trades, block bootstrap of candles)
   and a drawdown threshold, then **Run Monte Carlo**. The 5 % to 95 % band of final return and drawdown and the fan of
   curves show how much of the result is luck in the order of the trades.
+
+* **Regime breakdown**: the report card shows return, Sharpe, exposure and trades per market regime
+  ([regimes](regimes-and-sizing.md#market-regimes)).
+* **Several symbols on one account**: the **Basket** page, see [Basket](portfolio-backtest.md).
 
 ## Fills
 

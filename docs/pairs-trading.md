@@ -48,5 +48,14 @@ cointegrated by chance, so it works in two steps:
 `tradebot bot pair-run LEG_A LEG_B` runs the rule live (dry run unless `--live`). The short leg is an ordinary SELL,
 so the broker needs margin or futures for it: pass symbols that broker can short, for example perpetual contracts
 `BTC/USDT:USDT`. A spot account rejects the sale; the bot then undoes the leg already placed and stops trading that
-step. The bot doesn't remember an open pair across a restart, so check the broker's positions before starting again.
+step.
+
+**Remembering the open pair.** With `--live` the bot writes the open pair (side, amount in each leg) to a JSON file,
+atomically, and picks it up after a restart (`$TRADEBOT_PAIR_STATE_DIR`, default the `pair_bots` folder of the config
+folder; one file per broker and legs). Every trade is written ahead: recorded as *pending* before the first order and after
+each fill, cleared only when the trade finished. A restart that finds a pending trade (a crash mid-trade, a failed undo)
+refuses to trade until you have checked the account and run `tradebot bot pair-state LEG_A LEG_B --keep` or `--forget`.
+On start the saved pair is also checked against the broker's positions where the broker can report them. A partly filled
+first leg shrinks the second to keep the hedge; a partly filled close is finished at the next candle. Anything whose
+outcome the bot can't know (a timeout placing an order, a failed undo) halts the bot with the pending trade kept.
 See [Brokers and live trading](live-trading.md).

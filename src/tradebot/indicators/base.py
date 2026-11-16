@@ -90,6 +90,9 @@ class BaseIndicator(ABC):
     #: Shaded areas between two outputs: ``[(output_a, output_b, Style(color=...))]``, drawn behind the lines.
     #: Use a translucent colour such as ``"rgba(76, 201, 240, 0.08)"``. Fills don't count towards the y auto-fit.
     fills: ClassVar[tuple[tuple[str, str, Style], ...]] = ()
+    #: Background shades on the price pane: ``{output: {code: colour}}``; every run of bars where the output has
+    #: that code is shaded (colours as for :class:`Style`). Used by the market regime indicator (#168).
+    shades: ClassVar[dict[str, dict[float, str]]] = {}
     #: Outputs that are computed (for algorithms/screeners) but not drawn.
     hidden: ClassVar[tuple[str, ...]] = ()
     #: How outputs are drawn: ``{output: Style(...)}``; outputs without a colour use the theme palette.

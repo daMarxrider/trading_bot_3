@@ -36,12 +36,13 @@ Arguments: `SYMBOL`
 | `--entry` |  | Combo entry rule (with the 'combo' strategy), e.g. "elliott_wave & close>sma(200)" or "weighted(rsi_threshold:0.5, macd_cross:0.5) >= 0.6" |
 | `--exit` |  | Combo exit rule, e.g. "macd_cross \| stop_atr(2)" (default: when the entry rule stops holding) |
 | `--fills` |  | Combo fills: close (stops, take-profits and limit entries checked on the close) or intrabar (filled inside the candle against its high/low, at the open on a gap; stop first when both are hit) |
+| `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15 |
 | `--line`, `--no-line` |  | Line chart instead of candles |
 | `--volume`, `--no-volume` | `True` | Volume bars under the candles (when the data has volume) |
 
 ## `tradebot backtest`
 
-Backtest an algorithm on historical OHLC data, next to buy & hold and monthly investing. ``combo`` builds a strategy from rules: ``tradebot backtest AAPL combo --entry "elliott_wave & close>sma(200)" --exit "macd_cross \| stop_atr(2)"`` (see ``tradebot combo --help``).
+Backtest an algorithm on historical OHLC data, next to buy & hold and monthly investing. ``combo`` builds a strategy from rules: ``tradebot backtest AAPL combo --entry "elliott_wave & close>sma(200)" --exit "macd_cross \| stop_atr(2)"`` (see ``tradebot combo --help``). ``--portfolio`` trades several symbols from one account: ``tradebot backtest AAPL,MSFT,NVDA,KO sma_cross --max-positions 2 --allocation volatility --rebalance month``.
 
 Arguments: `SYMBOL`, `ALGO`
 
@@ -56,6 +57,7 @@ Arguments: `SYMBOL`, `ALGO`
 | `--entry` |  | Combo entry rule (with the 'combo' strategy), e.g. "elliott_wave & close>sma(200)" or "weighted(rsi_threshold:0.5, macd_cross:0.5) >= 0.6" |
 | `--exit` |  | Combo exit rule, e.g. "macd_cross \| stop_atr(2)" (default: when the entry rule stops holding) |
 | `--fills` |  | Combo fills: close (stops, take-profits and limit entries checked on the close) or intrabar (filled inside the candle against its high/low, at the open on a gap; stop first when both are hit) |
+| `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15 |
 | `--fee` | `0.001` | Fee per side, fraction |
 | `--slippage` |  | Slippage per side in basis points (5 = 0.05%), charged on top of the fee; 'auto' = suggested for the asset class (crypto 5, stock 2). Default: [backtest] slippage_bps in config.toml, else 0 |
 | `--capital` | `10000.0` |  |
@@ -63,6 +65,12 @@ Arguments: `SYMBOL`, `ALGO`
 | `--plot`, `--no-plot` | `True` | Show chart with signals and equity |
 | `--trades-csv` |  | Write the trade list to this CSV file |
 | `--report` |  | Write a self-contained HTML report (metrics, equity, underwater plot, monthly returns, trades) |
+| `--portfolio` |  | Trade all the symbols from one shared account (#148) instead of one backtest per symbol; compared with buy & hold of the same basket |
+| `--watchlist`, `-w` |  | Add the symbols of this watchlist (with --portfolio; 'all' = every list) |
+| `--max-positions` |  | Portfolio: most positions held at once, each slot 1/N of the account (default: one per symbol). Implies --portfolio |
+| `--allocation` | `equal` | Portfolio: how the held positions share the capital: equal, signal (by signal strength) or volatility (inverse volatility) |
+| `--rebalance` | `none` | Portfolio: set the positions back to their target weights: none, candle, week, month or quarter |
+| `--regimes` |  | Break the result down by market regime (bull / bear / sideways, high / low volatility) |
 
 ## `tradebot montecarlo`
 
@@ -104,6 +112,7 @@ Arguments: `SYMBOL` (optional), `ALGO` (optional)
 | `--entry` |  | Combo entry rule (with the 'combo' strategy), e.g. "elliott_wave & close>sma(200)" or "weighted(rsi_threshold:0.5, macd_cross:0.5) >= 0.6" |
 | `--exit` |  | Combo exit rule, e.g. "macd_cross \| stop_atr(2)" (default: when the entry rule stops holding) |
 | `--fills` |  | Combo fills: close (stops, take-profits and limit entries checked on the close) or intrabar (filled inside the candle against its high/low, at the open on a gap; stop first when both are hit) |
+| `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15 |
 | `--pool` |  | Comma-separated strategies and indicators the optimizer picks from (default: all) |
 | `--min-members` | `1` | Use at least this many pool members |
 | `--max-members` |  | Use at most this many pool members |
@@ -294,6 +303,15 @@ Show which compute backend the optimizer will use.
 
 Launch the desktop application.
 
+## `tradebot watch`
+
+Run the stored alerts and scheduled scans in the foreground (headless; Ctrl-C stops). Don't run it next to the app's own alert timer: both would fire the same alert.
+
+| Option | Default | Description |
+|---|---|---|
+| `--poll` | `30.0` | Seconds between passes over the alerts |
+| `--once` |  | One pass, then exit (for cron) |
+
 ## `tradebot bot`
 
 Automated trading bots.
@@ -314,6 +332,7 @@ Arguments: `SYMBOL`, `ALGO`
 | `--entry` |  | Combo entry rule (with the 'combo' strategy), e.g. "elliott_wave & close>sma(200)" or "weighted(rsi_threshold:0.5, macd_cross:0.5) >= 0.6" |
 | `--exit` |  | Combo exit rule, e.g. "macd_cross \| stop_atr(2)" (default: when the entry rule stops holding) |
 | `--fills` |  | Combo fills: close (stops, take-profits and limit entries checked on the close) or intrabar (filled inside the candle against its high/low, at the open on a gap; stop first when both are hit) |
+| `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15 |
 | `--live`, `--no-live` |  | Actually place orders (default: dry run) |
 | `--sandbox`, `--no-sandbox` |  | Use the exchange testnet (ccxt brokers) |
 | `--once`, `--no-once` |  | Evaluate a single candle and exit |
@@ -338,7 +357,7 @@ Turn the kill switch off. A bot that already halted needs a restart.
 
 ## `tradebot bot pair-run`
 
-Trade the gap of two assets live: long one and short the other (dry run unless --live). The short leg is a plain sell, so the broker needs margin or futures for it: give the legs as symbols it can short. The bot doesn't remember an open pair across a restart.
+Trade the gap of two assets live: long one and short the other (dry run unless --live). The short leg is a plain sell, so the broker needs margin or futures for it: give the legs as symbols it can short. With --live the open pair is saved (`bot pair-state` shows it) and picked up after a restart; a trade that didn't finish makes the next start refuse until the account has been checked.
 
 Arguments: `LEG_A`, `LEG_B`
 
@@ -356,6 +375,20 @@ Arguments: `LEG_A`, `LEG_B`
 | `--sandbox`, `--no-sandbox` |  | Use the exchange testnet (ccxt brokers) |
 | `--once`, `--no-once` |  | Evaluate a single candle and exit |
 | `--journal`, `--no-journal` | `True` | Store every order in the trade journal (`tradebot journal`) |
+
+## `tradebot bot pair-state`
+
+Show what `bot pair-run --live` remembers for a pair; --keep / --forget clear an unfinished trade (#122).
+
+Arguments: `LEG_A`, `LEG_B`
+
+| Option | Default | Description |
+|---|---|---|
+| `--broker` | `binance` | Registered broker name |
+| `--sandbox`, `--no-sandbox` |  | The testnet state (pair-run --sandbox) |
+| `--keep`, `--no-keep` |  | Drop an unfinished trade, keep the last saved pair (it matches the account) |
+| `--forget`, `--no-forget` |  | Mark the pair flat (you closed both legs at the broker) |
+| `--yes`, `-y` |  | Don't ask |
 
 ## `tradebot cache`
 
@@ -468,3 +501,62 @@ Arguments: `PATH`
 | `--lots`, `--no-lots` |  | Write the FIFO tax lots instead of the fills |
 | `--year` |  | With --lots: only lots closed in this year |
 | `--mode` | `real` | live, paper, dry (dry runs) or real (live + paper) |
+
+## `tradebot alert`
+
+Price and indicator alerts and scheduled scans, delivered through the notification channels while `tradebot watch` (or the app) runs.
+
+## `tradebot alert price`
+
+Tell me when SYMBOL reaches a price.
+
+Arguments: `SYMBOL`, `CONDITION`
+
+| Option | Default | Description |
+|---|---|---|
+| `--tf` | `1m` | Candle the price is read from |
+| `--every` | `1` | Minutes between checks, or 'close' = once per finished candle |
+| `--repeat` |  | Re-arm after the condition was false again (default: fire once, then switch off) |
+
+## `tradebot alert indicator`
+
+Tell me when an indicator's values or alerts on SYMBOL match (all conditions).
+
+Arguments: `SYMBOL`
+
+| Option | Default | Description |
+|---|---|---|
+| `--indicator`, `-i` |  |  |
+| `--param`, `-p` |  | e.g. -p period=14 |
+| `--where` |  | e.g. --where "rsi < 30" |
+| `--alert` |  | Indicator alert that must be on; !NAME: off |
+| `--tf` | `1d` |  |
+| `--every` | `close` | Minutes between checks, or 'close' = once per finished candle |
+| `--repeat` |  | Re-arm after the condition was false again (default: fire once, then switch off) |
+
+## `tradebot alert scan`
+
+Run a scan on a schedule and report only the matches that are new since the last run.
+
+Arguments: `SYMBOLS` (optional)
+
+| Option | Default | Description |
+|---|---|---|
+| `--indicator`, `-i` | `ma_cross` |  |
+| `--param`, `-p` |  |  |
+| `--where` |  |  |
+| `--alert` |  |  |
+| `--tf` | `1d` |  |
+| `--watchlist`, `-w` |  | Without symbols: only this watchlist's (default: all watchlists) |
+| `--index` |  |  |
+| `--every` | `close` | Minutes between checks, or 'close' = once per finished candle |
+
+## `tradebot alert list`
+
+The stored alerts and their state.
+
+## `tradebot alert rm`
+
+Delete an alert.
+
+Arguments: `ALERT_ID`
