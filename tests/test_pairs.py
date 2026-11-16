@@ -349,7 +349,10 @@ def test_pair_bot_dry_run_places_nothing_and_a_failed_short_is_undone():
             data.upto = k
             live.step()
     (s1, d1, x1), (s2, d2, x2) = spot.orders[-2:]
-    assert (s1, d1, d2) == ("AAA", "buy", "sell") and s2 == "AAA" and x1 == x2  # bought AAA, short failed: undone
+    if live.closing:  # closing a short gap: AAA bought back, selling BBB failed; the rest closes next candle (#122)
+        assert (s2, d2) == ("AAA", "buy") and live.amounts[0] == 0.0 and live.amounts[1] > 0
+    else:  # opening: bought AAA, the short failed: undone
+        assert (s1, d1, d2) == ("AAA", "buy", "sell") and s2 == "AAA" and x1 == x2
     with pytest.raises(ValueError):
         PairBot(spot, ("AAA", "BBB"), entry=1, exit=2)
 
