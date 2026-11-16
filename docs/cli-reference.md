@@ -37,6 +37,7 @@ Arguments: `SYMBOL`
 | `--exit` |  | Combo exit rule, e.g. "macd_cross \| stop_atr(2)" (default: when the entry rule stops holding) |
 | `--fills` |  | Combo fills: close (stops, take-profits and limit entries checked on the close) or intrabar (filled inside the candle against its high/low, at the open on a gap; stop first when both are hit) |
 | `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15 |
+| `--direction` |  | Trade direction (#149): long (default), short (short on the strategy's sell signal) or long_short (long on its buy signal, short on its sell signal). Shorts are backtested with liquidation and --borrow-fee / --funding; the live bot does not open shorts |
 | `--line`, `--no-line` |  | Line chart instead of candles |
 | `--volume`, `--no-volume` | `True` | Volume bars under the candles (when the data has volume) |
 | `--type` | `candles` | candles \| line \| heikin-ashi \| renko (a display transform: signals and indicators still use the real candles) |
@@ -61,6 +62,11 @@ Arguments: `SYMBOL`, `ALGO`
 | `--exit` |  | Combo exit rule, e.g. "macd_cross \| stop_atr(2)" (default: when the entry rule stops holding) |
 | `--fills` |  | Combo fills: close (stops, take-profits and limit entries checked on the close) or intrabar (filled inside the candle against its high/low, at the open on a gap; stop first when both are hit) |
 | `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15 |
+| `--direction` |  | Trade direction (#149): long (default), short (short on the strategy's sell signal) or long_short (long on its buy signal, short on its sell signal). Shorts are backtested with liquidation and --borrow-fee / --funding; the live bot does not open shorts |
+| `--leverage` | `1.0` | Leverage (#149): each position is this many times its margin. Positions are liquidated (the margin is lost) when the price reaches the liquidation price |
+| `--maintenance-margin` | `0.005` | Maintenance margin rate, fraction of the notional (0.005 = 0.5%); liquidation below it |
+| `--borrow-fee` |  | Yearly borrow fee of a short, fraction (stocks ~0.01-0.05, perpetuals 0) |
+| `--funding` |  | Funding of a perpetual future: a rate per 8 hours (0.0001 = 0.01%, longs pay shorts when positive) or 'history' for the exchange's historical rates (crypto) |
 | `--fee` | `0.001` | Fee per side, fraction |
 | `--slippage` |  | Slippage per side in basis points (5 = 0.05%), charged on top of the fee; 'auto' = suggested for the asset class (crypto 5, stock 2). Default: [backtest] slippage_bps in config.toml, else 0 |
 | `--capital` | `10000.0` |  |
@@ -116,6 +122,11 @@ Arguments: `SYMBOL` (optional), `ALGO` (optional)
 | `--exit` |  | Combo exit rule, e.g. "macd_cross \| stop_atr(2)" (default: when the entry rule stops holding) |
 | `--fills` |  | Combo fills: close (stops, take-profits and limit entries checked on the close) or intrabar (filled inside the candle against its high/low, at the open on a gap; stop first when both are hit) |
 | `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15 |
+| `--direction` |  | Trade direction (#149): long (default), short (short on the strategy's sell signal) or long_short (long on its buy signal, short on its sell signal). Shorts are backtested with liquidation and --borrow-fee / --funding; the live bot does not open shorts |
+| `--leverage` | `1.0` | Leverage (#149): each position is this many times its margin. Positions are liquidated (the margin is lost) when the price reaches the liquidation price |
+| `--maintenance-margin` | `0.005` | Maintenance margin rate, fraction of the notional (0.005 = 0.5%); liquidation below it |
+| `--borrow-fee` |  | Yearly borrow fee of a short, fraction (stocks ~0.01-0.05, perpetuals 0) |
+| `--funding` |  | Funding of a perpetual future: a rate per 8 hours (0.0001 = 0.01%, longs pay shorts when positive) or 'history' for the exchange's historical rates (crypto) |
 | `--pool` |  | Comma-separated strategies and indicators the optimizer picks from (default: all) |
 | `--min-members` | `1` | Use at least this many pool members |
 | `--max-members` |  | Use at most this many pool members |

@@ -1,7 +1,8 @@
 # Strategies
 
 A **strategy** (the code calls it an *algorithm*) turns candles into a target position per candle: `1` long, `0` flat,
-`-1` short (only for strategies that allow it). `tradebot list algorithms` prints the strategies of your installation,
+`-1` short (only for strategies that allow it; `--direction` trades any of them short, see
+[Shorts and leverage](shorts-and-leverage.md)). `tradebot list algorithms` prints the strategies of your installation,
 with their parameters and ranges. Plugins add more ([Extending](extending.md)); strategies saved by
 [`evolve`](evolve.md) or the combo builder appear here too.
 

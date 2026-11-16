@@ -55,6 +55,7 @@ bots, a desktop app (PyQt6) and a terminal CLI. It is licensed under the GNU GPL
 * [Brokers and live trading](live-trading.md): brokers, bots, paper trading, risk guards, notifications
 * [Pairs trading](pairs-trading.md)
 * [Market regimes and position sizing](regimes-and-sizing.md)
+* [Shorts and leverage](shorts-and-leverage.md): long/short strategies, leverage, liquidation, borrow fees, funding
 * [Alerts](alerts.md): price, indicator and scheduled-scan alerts
 
 **Reference**

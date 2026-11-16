@@ -25,6 +25,8 @@ divider resets them.
     an *Intrabar* switch for fills and **Save combo**.
 * **Position sizing**: a layer that decides how much to put on (fixed, volatility target, fixed risk, Kelly); see
   [Market regimes and position sizing](regimes-and-sizing.md#position-sizing).
+* **Direction**, **Leverage**, **Borrow fee**, **Funding**: trade the strategy short or long and short, with leverage
+  (liquidation is modelled) and the costs of holding the position; see [Shorts and leverage](shorts-and-leverage.md).
 * **Parameters**: a form generated from the strategy, with the range the optimizer searches.
 
 ## 2. Run
