@@ -42,6 +42,7 @@ from PyQt6.QtWidgets import (
 from tradebot.algorithms import ALGORITHMS, algorithm_names, build_algorithm
 from tradebot.algorithms.builtin import VotingEnsemble
 from tradebot.algorithms.combo import FILLS, LIMITS, LOGIC, RISK, Combo, check, combine, save_combo, terms
+from tradebot.algorithms.sizing import DESCRIPTIONS as SIZING_MODELS, sized
 from tradebot.algorithms.pool import RULES, PoolEnsemble, default_pool
 from tradebot.backtest.baselines import BUY_HOLD, MONTHLY, baselines, buy_and_hold, monthly_investing
 from tradebot.backtest import report as rep
@@ -640,6 +641,12 @@ class BacktestView(QWidget):
         self.algo = QComboBox()
         self.algo.addItems(algorithm_names())
         self.algo.currentTextChanged.connect(self._algo_changed)
+        self.sizing = QComboBox()  # position sizing (#147)
+        self.sizing.addItem("Full size", "none")
+        for key, text in SIZING_MODELS.items():
+            self.sizing.addItem(text.split(":")[0], key)
+        _explain_choices(self.sizing, explain("sizing"), {k: explain(f"sizing_{k}") for k in ("none", *SIZING_MODELS)})
+        self.sizing.currentIndexChanged.connect(lambda _: self._members_changed())
         self.params = ParamForm({})
         self.members = MemberPicker()
         self.members.changed.connect(self._members_changed)
@@ -746,7 +753,8 @@ class BacktestView(QWidget):
         for label, w, term in (("Symbols", symbol_row, "symbol"), ("Timeframe", self.tf, "timeframe"),
                                ("Candles", self.bars, "candles"), ("Dates", self.dates, "dates"),
                                ("Fee / side", self.fee, "fee"), ("Slippage / side", self.slippage, "slippage"),
-                               ("Monthly amount", self.dca_amount, "dca_amount"), ("Algorithm", self.algo, "algorithm")):
+                               ("Monthly amount", self.dca_amount, "dca_amount"), ("Algorithm", self.algo, "algorithm"),
+                               ("Position sizing", self.sizing, "sizing")):
             _explained_row(form, label, w, term)
         opt_form = QFormLayout()
         for label, w, term in (("Method", self.method, "method"), ("Population / swarm", self.population, "population"),
@@ -988,6 +996,9 @@ class BacktestView(QWidget):
     def _build(self):
         """The selected algorithm with default parameters; a vote or a pool with the checked members."""
         name = self.algo.currentText()
+        return sized(self._build_inner(name), self.sizing.currentData())
+
+    def _build_inner(self, name: str):
         if ALGORITHMS.get(name) is PoolEnsemble:
             lo, hi = self.min_members.value(), self.max_members.value()
             return PoolEnsemble(self.pool.selected(), min_members=lo, max_members=max(lo, hi) if hi else None)
@@ -1562,7 +1573,7 @@ class BacktestView(QWidget):
         self._draw()
         self._lock_view()
         self.reset_view()
-        if params and isinstance(selection_algo, PoolEnsemble):
+        if params and hasattr(selection_algo, "reuse_params"):
             params = selection_algo.reuse_params(params)  # the selected members' parameters
         self.status.emit("done" + (f" · best params {params}" if params else ""))
 
@@ -1733,6 +1744,7 @@ class BacktestView(QWidget):
 
     def _show_selection(self, algo, results: dict[str, dict]):
         """Which pool members each method used and which it dropped; with two methods, whether they agree (#21)."""
+        algo = getattr(algo, "inner", algo)  # a sized pool (#147)
         if not isinstance(algo, PoolEnsemble):
             self.selection_card.hide()
             return

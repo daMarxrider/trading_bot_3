@@ -264,6 +264,18 @@ class `slippage_bps = { crypto = 5, stock = 2 }`); the Backtest lab and Evolve p
 "Slippage / side" field (initialised from the config). Multi-symbol searches use one value, taken
 from the first symbol's asset class for `auto`/the config table.
 
+**Position sizing.** An algorithm says when to be in the market; `--sizing` decides how much to put on, as
+a layer over any strategy (`backtest`, `optimize`, `chart`, `bot run`; the Backtest lab has a "Position sizing"
+box). Models: `fixed` (a fraction of the capital), `vol` (volatility target: the position's annual volatility
+aims at `size.target_vol`, bigger in quiet markets), `risk` (fixed risk per trade: the stop sits
+`size.stop_atr` ATRs below the entry and the size makes a stop-out cost `size.risk` of the capital; fixed at
+the entry) and `kelly` (`size.kelly_fraction` of the Kelly fraction of the strategy's recent returns). The
+settings are normal parameters named `size.*`: set them with `-p size.target_vol=0.15`, fix them with
+`--fix`, or let the optimizer tune them. There is no leverage (the size is at most 1), so sizing only
+lowers exposure; compare the `exposure` and `max_drawdown` metrics with and without. The live bot follows the
+strategy's signal and buys `stake` times the size. Example:
+`tradebot backtest BTC/USDT sma_cross --sizing vol -p size.target_vol=0.2`.
+
 **Baselines.** `backtest` and `optimize` (in- and out-of-sample) show the strategy
 next to two things it has to beat, on the same candles and with the same fee:
 - *buy & hold*: everything invested on the first candle and held.
