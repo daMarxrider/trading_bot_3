@@ -255,6 +255,9 @@ TERMS = {
                        "red lost; the stronger the colour, the bigger the move.",
     "underwater": "How far below its previous high the money was at each moment, in percent. The deepest dip is "
                   "the maximum drawdown.",
+    "regime_table": "How the strategy did in each market regime: bull, bear or sideways (the close up or down more "
+                    "than a threshold over the trend period) and high or low volatility (ATR above or below its "
+                    "longer average). A bar counts with the regime known when its position was taken.",
     "export_trades": "Saves the list of trades (entry, exit, side, return, days held) as a CSV file for a "
                      "spreadsheet.",
     "export_report": "Saves one HTML page with the metrics, equity curve, underwater plot, monthly returns and "

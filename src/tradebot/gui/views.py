@@ -864,6 +864,11 @@ class BacktestView(QWidget):
         self.report_stats.setToolTip("<qt>" + "<br>".join(f"<b>{k.replace('_', ' ')}</b>: {explain(k)}" for k in (
             "expectancy", "avg_win", "avg_loss", "longest_losing_streak", "time_under_water",
             "longest_under_water_days", "avg_holding_days")) + "</qt>")
+        self._report_regimes = None  # per-regime table of the report (#168)
+        self.regime_stats = QLabel(wordWrap=True)
+        self.regime_stats.setTextFormat(Qt.TextFormat.RichText)
+        self.regime_stats.setToolTip(tooltip(explain("regime_table")))
+        self.regime_stats.hide()
         self.underwater = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem()})
         self.underwater.setMinimumHeight(110)
         self.underwater.showGrid(x=True, y=True, alpha=0.15)
@@ -881,7 +886,7 @@ class BacktestView(QWidget):
         export_row = QHBoxLayout()
         export_row.addWidget(self.export_csv)
         export_row.addWidget(self.export_html)
-        self.report_card = card(self.report_title, self.report_stats, self.underwater, self.heatmap)
+        self.report_card = card(self.report_title, self.report_stats, self.regime_stats, self.underwater, self.heatmap)
         self.report_card.layout().addLayout(export_row)
         self.report_card.hide()
         right.add(self.report_card, 3, scroll=True)
@@ -1556,7 +1561,7 @@ class BacktestView(QWidget):
             rows.setdefault(name, res.metrics)
             self._fit_series.append(eq.reindex(df.index).to_numpy(dtype=float))
         first = next((r for r in results.values() if r is not None), None)
-        self._show_report(first)
+        self._show_report(first, df)
         columns = {name: {k: fmt(k, v) for k, v in metrics.items()} for name, metrics in {**rows, **base_rows}.items()}
         self.metrics.set_frame(pd.DataFrame(columns).fillna("–").rename_axis("metric").reset_index())
         self._draw()
@@ -1566,12 +1571,23 @@ class BacktestView(QWidget):
             params = selection_algo.reuse_params(params)  # the selected members' parameters
         self.status.emit("done" + (f" · best params {params}" if params else ""))
 
-    def _show_report(self, res):
+    def _show_report(self, res, df=None):
         """Fill the report card (#152) from the first result: extra statistics, underwater plot, monthly heatmap."""
         self._report_res = res
+        self._report_regimes = None
         self.report_card.setVisible(res is not None)
         if res is None:
             return
+        if df is not None and len(res.returns):
+            try:
+                self._report_regimes = rep.regime_table(res, df)
+            except Exception:  # too few candles for the regime windows: no breakdown
+                self._report_regimes = None
+        if self._report_regimes is not None:
+            f = rep.fmt_regime(self._report_regimes)
+            self.regime_stats.setText("<b>By market regime</b> (return · Sharpe · share of bars)<br>" + "<br>".join(
+                f"{n}: {r['return']} · {r['sharpe']} · {r['share']}" for n, r in f.iterrows()))
+        self.regime_stats.setVisible(self._report_regimes is not None)
         t = self.themes.current
         stats = rep.report_stats(res.equity, res.trades)
         self.report_stats.setText("  ·  ".join(
@@ -1615,7 +1631,7 @@ class BacktestView(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Export", name, "CSV (*.csv)" if kind == "csv" else "HTML (*.html)")
         if not path:
             return
-        out = rep.export_trades_csv(res, path) if kind == "csv" else rep.export_html(res, path, res.algorithm)
+        out = rep.export_trades_csv(res, path) if kind == "csv" else rep.export_html(res, path, res.algorithm, self._report_regimes)
         self.status.emit(f"saved {out}")
 
     def _draw(self):

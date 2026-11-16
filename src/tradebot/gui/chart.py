@@ -1022,6 +1022,7 @@ class ChartView(QWidget):
                                                   brush=pg.mkBrush(qcolor(resolve_color(t, fill.color or "muted"))))
                         item.setZValue(-5)
                         target.addItem(item)
+            self._draw_shades(ind, frame, x, width, t)
         self._drop_panes(spare)
         if self.algorithm is not None:
             self._positions = self.algorithm.run(df).to_numpy()
@@ -1068,6 +1069,24 @@ class ChartView(QWidget):
             self._slots[id(ind)] = self._next_slot
             self._next_slot += len(ind.plot_outputs())
         return self._slots[id(ind)]
+
+    def _draw_shades(self, ind, frame, x, width, t):
+        """Background shades behind the candles (``ind.shades``, e.g. the market regime): one band per run of bars."""
+        for output, colors in ind.shades.items():
+            col = f"{ind.name}_{output}"
+            if col not in frame:
+                continue
+            codes = frame[col].to_numpy()
+            half = width / 0.7 / 2  # half a candle slot
+            for code, css in colors.items():
+                on = np.r_[False, codes == code, False]
+                edges = np.flatnonzero(on[1:] != on[:-1])
+                brush = pg.mkBrush(qcolor(resolve_color(t, css)))
+                for a, b in zip(edges[::2], edges[1::2]):
+                    band = pg.LinearRegionItem((x[a] - half, x[b - 1] + half), movable=False, brush=brush,
+                                               pen=pg.mkPen(None))
+                    band.setZValue(-10)
+                    self.price.addItem(band, ignoreBounds=True)
 
     def _draw_labels(self, target, ind, frame, col, x, close, t):
         """Text labels of an indicator output (e.g. Elliott wave numbers) at its anchor values."""
