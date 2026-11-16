@@ -232,6 +232,8 @@ def backtest(
     trades_csv: Annotated[Optional[Path], typer.Option("--trades-csv", help="Write the trade list to this CSV file")] = None,
     report: Annotated[Optional[Path], typer.Option(help="Write a self-contained HTML report (metrics, equity, "
                                                         "underwater plot, monthly returns, trades)")] = None,
+    regimes: Annotated[bool, typer.Option("--regimes", help="Break the result down by market regime (bull / bear / "
+                                                            "sideways, high / low volatility)")] = False,
 ):
     """Backtest an algorithm on historical OHLC data, next to buy & hold and monthly investing.
 
@@ -258,10 +260,20 @@ def backtest(
 
     stats = rep.report_stats(res.equity, res.trades)
     console.print("  ".join(f"{k.replace('_', ' ')} [bold]{rep.fmt_stat(k, v)}[/]" for k, v in stats.items()))
+    by_regime = rep.regime_table(res, df) if regimes or report else None
+    if regimes:
+        f = rep.fmt_regime(by_regime)
+        tbl = Table(title="by market regime")
+        tbl.add_column("regime")
+        for c in f.columns:
+            tbl.add_column(c.replace("_", " "), justify="right")
+        for name, row in zip(f.index, f.itertuples(index=False)):
+            tbl.add_row(name, *row)
+        console.print(tbl)
     if trades_csv:
         console.print(f"trades written to {rep.export_trades_csv(res, trades_csv)}")
     if report:
-        console.print(f"report written to {rep.export_html(res, report, f'{algorithm!r} on {symbol} {tf}')}")
+        console.print(f"report written to {rep.export_html(res, report, f'{algorithm!r} on {symbol} {tf}', by_regime)}")
     warn_not_beaten(bl, "Over this period")
 
 
