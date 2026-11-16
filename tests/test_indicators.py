@@ -178,7 +178,7 @@ def test_alerts_are_hidden_zero_one_and_nan_in_warmup(ohlc):
             assert set(a.dropna().unique()) <= {0.0, 1.0} and a.iloc[0] != a.iloc[0]
     assert [c.name for c in INDICATORS if c.alerts] == [
         "adx", "avwap", "bbands", "cci", "donchian", "ema", "ichimoku", "keltner", "ma_cross", "macd", "mfi",
-        "momentum", "obv", "pivots", "psar", "roc", "rsi", "sma", "stoch", "supertrend", "volume", "volume_profile",
+        "momentum", "obv", "pivots", "psar", "regime", "roc", "rsi", "sma", "stoch", "supertrend", "volume", "volume_profile",
         "volume_ratio", "vwap", "williams_r"]
 
 

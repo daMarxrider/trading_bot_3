@@ -250,6 +250,8 @@ def backtest(
         help="Portfolio: set the positions back to their target weights: none, candle, week, month or quarter",
         autocompletion=complete.choices(("none", "never"), ("candle", "every candle"), ("week", "weekly"),
                                         ("month", "monthly"), ("quarter", "quarterly")))] = "none",
+    regimes: Annotated[bool, typer.Option("--regimes", help="Break the result down by market regime (bull / bear / "
+                                                            "sideways, high / low volatility)")] = False,
 ):
     """Backtest an algorithm on historical OHLC data, next to buy & hold and monthly investing.
 
@@ -283,10 +285,20 @@ def backtest(
 
     stats = rep.report_stats(res.equity, res.trades)
     console.print("  ".join(f"{k.replace('_', ' ')} [bold]{rep.fmt_stat(k, v)}[/]" for k, v in stats.items()))
+    by_regime = rep.regime_table(res, df) if regimes or report else None
+    if regimes:
+        f = rep.fmt_regime(by_regime)
+        tbl = Table(title="by market regime")
+        tbl.add_column("regime")
+        for c in f.columns:
+            tbl.add_column(c.replace("_", " "), justify="right")
+        for name, row in zip(f.index, f.itertuples(index=False)):
+            tbl.add_row(name, *row)
+        console.print(tbl)
     if trades_csv:
         console.print(f"trades written to {rep.export_trades_csv(res, trades_csv)}")
     if report:
-        console.print(f"report written to {rep.export_html(res, report, f'{algorithm!r} on {symbol} {tf}')}")
+        console.print(f"report written to {rep.export_html(res, report, f'{algorithm!r} on {symbol} {tf}', by_regime)}")
     warn_not_beaten(bl, "Over this period")
 
 
@@ -1356,9 +1368,10 @@ def bot_pair_run(
     """Trade the gap of two assets live: long one and short the other (dry run unless --live).
 
     The short leg is a plain sell, so the broker needs margin or futures for it: give the legs as symbols it
-    can short. The bot doesn't remember an open pair across a restart."""
+    can short. With --live the open pair is saved (`bot pair-state` shows it) and picked up after a restart;
+    a trade that didn't finish makes the next start refuse until the account has been checked."""
     from tradebot.journal import Journal
-    from tradebot.live import PairBot
+    from tradebot.live import PairBot, PairStateError, pair_state_path
 
     legs, symbol = (leg_a, leg_b), f"{leg_a} / {leg_b}"
     confirm_live_risk(live)
@@ -1367,19 +1380,88 @@ def bot_pair_run(
         raise typer.BadParameter(f"{broker} is read-only")
     try:
         bot = PairBot(b, legs, tf, stake, window, entry, exit, stop, method, dry_run=not live,
+                      state_path=pair_state_path(broker, legs, sandbox) if live else None,
                       journal=Journal() if journal else None,
                       on_event=lambda e: console.print(
                           f"[dim]{e.time:%Y-%m-%d %H:%M}[/] {e.pair} z={e.z:+.2f} β={e.beta:.2f} → [bold]{e.action}[/]"
                           + (f" {e.amount_a:.6g} {legs[0]} / {e.amount_b:.6g} {legs[1]}" if e.action != "hold" else "")
-                          + (" [yellow](dry run)[/]" if e.dry_run else "")))
+                          + (" [yellow](dry run)[/]" if e.dry_run else "")
+                          + (f" [yellow]({e.note})[/]" if e.note else "")))
     except ValueError as e:
         raise typer.BadParameter(str(e)) from None
+    except PairStateError as e:
+        console.print(f"[bold red]not starting:[/] {e}")
+        raise typer.Exit(1) from None
     mode = "[red]LIVE[/]" if live else "[yellow]dry run[/]"
     console.print(f"pair bot {symbol} on {broker} {tf}, stake {stake} · {mode} · {b.execution_mode.value}")
+    if bot.side:
+        console.print(f"resumed the open pair: {'long' if bot.side > 0 else 'short'} {bot.amounts[0]:.8g} {legs[0]} / "
+                      f"{bot.amounts[1]:.8g} {legs[1]} (since {bot.opened})")
     try:
         bot.run(max_steps=1 if once else None)
     except KeyboardInterrupt:
         console.print("stopped")
+    except PairStateError as e:
+        console.print(f"[bold red]halted:[/] {e}")
+        raise typer.Exit(1) from None
+
+
+@bot_app.command("pair-state")
+def bot_pair_state(
+    leg_a: Annotated[str, typer.Argument(help="First leg, as given to pair-run")],
+    leg_b: Annotated[str, typer.Argument(help="Second leg")],
+    broker: Broker = "binance",
+    sandbox: Annotated[bool, typer.Option(help="The testnet state (pair-run --sandbox)")] = False,
+    keep: Annotated[bool, typer.Option(help="Drop an unfinished trade, keep the last saved pair (it matches the account)")] = False,
+    forget: Annotated[bool, typer.Option(help="Mark the pair flat (you closed both legs at the broker)")] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask")] = False,
+):
+    """Show what `bot pair-run --live` remembers for a pair; --keep / --forget clear an unfinished trade (#122)."""
+    from datetime import datetime, timezone
+
+    from tradebot.live.pairs import (
+        STATE_VERSION,
+        PairStateError,
+        describe_pending,
+        pair_state_path,
+        read_pair_state,
+        write_json_atomic,
+    )
+
+    if keep and forget:
+        raise typer.BadParameter("use --keep or --forget, not both")
+    where = f"{broker}{' testnet' if sandbox else ''}"
+    path = pair_state_path(broker, (leg_a, leg_b), sandbox)
+    try:
+        s = read_pair_state(path)
+    except PairStateError as e:
+        console.print(f"[bold red]{e}[/]")
+        if not forget:
+            raise typer.Exit(1) from None
+        s = None
+    if s is None and not forget:
+        console.print(f"no saved pair for {leg_a} / {leg_b} on {where} ({path})")
+        return
+    if s is not None:
+        side = {1.0: "long", -1.0: "short"}.get(s["side"], "flat")
+        held = f" {s['amounts'][0]:.8g} {leg_a} / {s['amounts'][1]:.8g} {leg_b} since {s.get('opened')}" if s["side"] else ""
+        console.print(f"[bold]{leg_a} / {leg_b}[/] on {where} ({path})")
+        console.print(f"{side}{held}" + (" · closing" if s["closing"] else "") + f" · updated {s.get('updated')}")
+        if s.get("pending"):
+            console.print(f"[bold red]unfinished trade:[/] {describe_pending(s)}")
+    if not (keep or forget):
+        return
+    if keep and s is not None and not s.get("pending"):
+        console.print("nothing to clear")
+        return
+    if not yes:
+        typer.confirm("Mark the pair flat?" if forget else "Keep the saved pair and drop the unfinished trade?", abort=True)
+    if forget:
+        s = {"version": STATE_VERSION, "legs": [leg_a, leg_b], "side": 0.0, "amounts": [0.0, 0.0], "closing": False,
+             "opened": None}
+    s["pending"], s["updated"] = None, datetime.now(timezone.utc).isoformat()
+    write_json_atomic(path, s)
+    console.print("pair marked flat" if forget else "unfinished trade dropped; the saved pair stays")
 
 
 @app.command()
