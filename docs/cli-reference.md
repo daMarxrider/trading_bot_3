@@ -216,6 +216,20 @@ Portfolio value, allocation and dividend metrics (current yield, annual yield, y
 |---|---|---|
 | `--broker` | `['scalable']` | Broker(s) to aggregate |
 
+## `tradebot portfolio-analytics`
+
+Portfolio over time (time- and money-weighted return vs a benchmark, from the journal), correlation matrix, risk shares and rebalancing suggestions toward a target allocation.
+
+| Option | Default | Description |
+|---|---|---|
+| `--broker` | `['scalable']` | Broker(s) to aggregate |
+| `--benchmark` | `SPY` | Benchmark symbol for the comparison, e.g. SPY, URTH or BTC/USDT |
+| `--target` |  | Target allocation, e.g. "AAPL=40,MSFT=60,BTC/USDT=0": prints what to buy and sell |
+| `--tolerance` |  | Leave holdings within this many percentage points of target |
+| `--mode` | `real` | Journal fills to build the history from: real, live, paper or dry |
+| `--days` | `365` | Price history to load for correlation and risk |
+| `--plot`, `--no-plot` | `True` | Draw the return curves in the terminal |
+
 ## `tradebot screen`
 
 Screen symbols by technicals, volume and market cap.

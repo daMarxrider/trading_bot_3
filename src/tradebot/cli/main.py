@@ -1615,6 +1615,86 @@ def portfolio(broker: Annotated[list[str], typer.Option(help="Broker(s) to aggre
                   f"yield {pct(pf.current_yield)} · trailing {pct(pf.annual_yield)} · YoC {pct(pf.yield_on_cost)}")
 
 
+@app.command("portfolio-analytics")
+def portfolio_analytics(
+    broker: Annotated[list[str], typer.Option(help="Broker(s) to aggregate",
+                                              autocompletion=complete.brokers)] = ["scalable"],
+    benchmark: Annotated[str, typer.Option(help="Benchmark symbol for the comparison, e.g. SPY, URTH or BTC/USDT",
+                                           autocompletion=complete.symbols)] = "SPY",
+    target: Annotated[Optional[str], typer.Option(
+        help='Target allocation, e.g. "AAPL=40,MSFT=60,BTC/USDT=0": prints what to buy and sell')] = None,
+    tolerance: Annotated[float, typer.Option(help="Leave holdings within this many percentage points of target")] = 0.0,
+    mode: Annotated[str, typer.Option(help="Journal fills to build the history from: real, live, paper or dry")] = "real",
+    days: Annotated[int, typer.Option(help="Price history to load for correlation and risk")] = 365,
+    plot: Annotated[bool, typer.Option("--plot/--no-plot", help="Draw the return curves in the terminal")] = True,
+):
+    """Portfolio over time (time- and money-weighted return vs a benchmark, from the journal), correlation matrix,
+    risk shares and rebalancing suggestions toward a target allocation."""
+    from tradebot.data import MarketDataEngine
+    from tradebot.journal import Journal
+    from tradebot.portfolio import build_portfolio
+    from tradebot.portfolio_analytics import analyse, parse_targets
+
+    engine = MarketDataEngine()
+    positions_ = [p for name in broker for p in create_broker(name, data=engine).get_positions()]
+    targets = parse_targets(target) if target else None
+    journal = Journal()
+    fills = journal.fills(mode)
+    journal.close()
+    first = min((pd.Timestamp(f["time"]) for f in fills), default=None)
+    first = first.tz_localize("UTC") if first is not None and first.tzinfo is None else first
+    since = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
+    start = min(since, first - pd.Timedelta(days=5)) if first is not None else since
+    with console.status("pricing holdings and loading history ..."):
+        pf = build_portfolio(positions_, engine.latest_price)
+        out = analyse(lambda s: engine.get_ohlc(s, "1d", start=start)["close"], pf, fills, benchmark, targets,
+                      tolerance / 100)
+    _print_analytics(out, plot, benchmark)
+
+
+def _print_analytics(out: dict, plot: bool, benchmark: str) -> None:
+    pct = lambda v: "–" if v is None or v != v else f"{v * 100:+.2f}%"  # noqa: E731
+    perf = out["performance"]
+    if perf and perf["summary"]:
+        s = perf["summary"]
+        if plot:
+            lines = {"portfolio (TWR)": perf["twr"] * 100}
+            if len(perf["bench"]):
+                lines[benchmark] = perf["bench"] * 100
+            console.print(render_lines(lines, "return since first fill, %"))
+        console.print(f"value [bold]{s['value']:,.2f}[/] · paid in {s['invested']:,.2f} · profit {s['profit']:,.2f}\n"
+                      f"time-weighted {pct(s['twr'])} · money-weighted {pct(s['mwr'])} (annualised {pct(s['mwr_annual'])}) · "
+                      f"{benchmark} {pct(s['benchmark'])} · vs benchmark {pct(s['excess'])}")
+    else:
+        console.print("[yellow]No journal fills with price data: the performance history needs orders recorded "
+                      "in the journal (tradebot journal).[/]")
+    if out["correlation"] is not None:
+        corr = out["correlation"]
+        t = Table(title="correlation of daily returns")
+        t.add_column("")
+        for c in corr.columns:
+            t.add_column(c, justify="right")
+        for sym, row in corr.iterrows():
+            t.add_row(sym, *[f"{v:.2f}" for v in row])
+        console.print(t)
+        t = Table(title="risk")
+        for c in ("symbol", "weight", "volatility", "share of risk"):
+            t.add_column(c, justify="left" if c == "symbol" else "right")
+        for sym, r in out["risk"].sort_values("risk_share", ascending=False).iterrows():
+            t.add_row(sym, f"{r.weight * 100:.1f}%", f"{r.volatility * 100:.1f}%", f"{r.risk_share * 100:.1f}%")
+        console.print(t)
+    reb = out["rebalance"]
+    if reb is not None:
+        t = Table(title="rebalancing to target")
+        for c in ("symbol", "value", "weight", "target", "action", "amount", "quantity"):
+            t.add_column(c, justify="left" if c in ("symbol", "action") else "right")
+        for _, r in reb.iterrows():
+            colour = {"buy": "green", "sell": "red"}.get(r.action, "dim")
+            t.add_row(r.symbol, f"{r.value:,.2f}", f"{r.weight * 100:.1f}%", f"{r.target * 100:.1f}%",
+                      f"[{colour}]{r.action}[/]", f"{r.trade_value:+,.2f}", f"{r.quantity:+,.6g}")
+        console.print(t)
+
+
 @app.command()
 def screen(
     symbols: Annotated[Optional[list[str]], typer.Argument(help="Defaults to the watchlists",
