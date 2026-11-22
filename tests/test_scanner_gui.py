@@ -320,7 +320,7 @@ def test_main_window_has_the_scanner_page_after_the_screener(app, themes, tmp_pa
     monkeypatch.setenv("TRADEBOT_CONFIG", str(tmp_path / "config.toml"))
     win = MainWindow(themes, "dark", Settings(tmp_path / "s.json"))
     names = [b.text() for b in win.findChildren(gs.QPushButton) if b.objectName() == "Nav"]
-    assert names.index("📡  Scanner") == names.index("🔎  Screener") + 1
+    assert names.index("Scanner") == names.index("Screener") + 1
     win.scanner.open_chart.emit("AAPL", "1h", "ma_cross", {"fast": 5})
     assert win.chart.tf.currentText() == "1h" and any(i.name == "ma_cross" for i in win.chart.indicators)
     QThreadPool.globalInstance().waitForDone(3000)

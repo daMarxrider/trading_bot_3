@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Screener · tradebot redesign</title><link rel="stylesheet" href="shared.css"></head>
+<body data-page="screener" data-title="Screener" data-status="Screen finished: 38 of 100 symbols match · 2 s">
+<template id="top">
+  <div class="select" style="width:190px">Universe: S&amp;P 100</div>
+  <div class="select" style="width:190px">Preset: Oversold bounce</div>
+  <button class="btn primary"><i data-i="play"></i>Run screen</button>
+  <span class="sp"></span>
+  <label class="chk on">Auto-refresh every 5 min</label>
+  <span class="muted">Updated 14:32:08</span>
+  <button class="btn icon"><i data-i="refresh"></i></button>
+</template>
+<div id="view" class="pages">
+  <div class="pane" style="width:390px;flex:none">
+    <header>Conditions<span class="sp"></span><span class="pill">All must match</span></header>
+    <div class="fill scroll pad col" style="gap:12px">
+      <div class="col" style="gap:8px">
+        <div class="group-t" style="padding-top:0">Entry</div>
+        <div class="row"><div class="select fill">RSI 14</div><div class="select" style="width:56px">&lt;</div><div class="input" style="width:62px"><input value="30"></div><button class="btn ghost icon sm"><i data-i="close"></i></button></div>
+        <div class="row"><div class="select fill">Close vs EMA 50</div><div class="select" style="width:56px">&gt;</div><div class="input" style="width:62px"><input value="0%"></div><button class="btn ghost icon sm"><i data-i="close"></i></button></div>
+        <div class="row"><div class="select fill">Volume ÷ avg 20</div><div class="select" style="width:56px">&gt;</div><div class="input" style="width:62px"><input value="1.5"></div><button class="btn ghost icon sm"><i data-i="close"></i></button></div>
+        <button class="btn sm" style="align-self:flex-start"><i data-i="plus"></i>Add to entry</button>
+      </div>
+      <div class="divider"></div>
+      <div class="col" style="gap:8px">
+        <div class="group-t" style="padding-top:0">Exit</div>
+        <div class="row"><div class="select fill">RSI 14</div><div class="select" style="width:56px">&gt;</div><div class="input" style="width:62px"><input value="60"></div><button class="btn ghost icon sm"><i data-i="close"></i></button></div>
+        <button class="btn sm" style="align-self:flex-start"><i data-i="plus"></i>Add to exit</button>
+      </div>
+      <div class="divider"></div>
+      <div class="field"><span class="label">Logic</span><div class="seg"><button aria-pressed="true">AND</button><button>OR</button><button>Weighted</button></div></div>
+      <div class="field"><span class="label">Threshold</span><div class="row"><div class="bar fill"><i style="width:60%"></i></div><b>3 of 5</b></div></div>
+    </div>
+    <div class="row" style="padding:10px 12px;border-top:1px solid var(--line)"><button class="btn sm"><i data-i="save"></i>Save combo</button><button class="btn sm ghost">Apply logic</button><span class="sp"></span><span class="hint">Combo “Dip + volume”</span></div>
+  </div>
+
+  <div class="pane fill reveal">
+    <header>Matches <span class="pill accent">38</span><span class="sp"></span>
+      <label class="input" style="width:200px;font-weight:400"><i data-i="search"></i><input placeholder="Filter results"></label>
+      <button class="btn sm"><i data-i="download"></i>CSV</button></header>
+    <div class="fill scroll">
+      <table class="data">
+        <thead><tr><th>Symbol</th><th class="r sorted">Match</th><th class="r">Price</th><th class="r">Change</th><th class="r">RSI 14</th><th class="r">vs EMA 50</th><th class="r">Vol ×</th><th>Signal</th><th></th></tr></thead>
+        <tbody>
+          <tr class="sel"><td><span class="sym">NVDA</span><span class="symname">NVIDIA</span></td><td class="r">5 / 5</td><td class="r">128.40</td><td class="r up">2.41%</td><td class="r">27.8</td><td class="r up">0.6%</td><td class="r">2.3</td><td><span class="pill accent">Entry</span></td><td class="r"><button class="btn ghost sm">Open chart<i data-i="chevr"></i></button></td></tr>
+          <tr><td><span class="sym">INTC</span><span class="symname">Intel</span></td><td class="r">5 / 5</td><td class="r">21.17</td><td class="r dn">0.82%</td><td class="r">24.1</td><td class="r up">1.9%</td><td class="r">1.8</td><td><span class="pill accent">Entry</span></td><td></td></tr>
+          <tr><td><span class="sym">PYPL</span><span class="symname">PayPal</span></td><td class="r">4 / 5</td><td class="r">63.92</td><td class="r up">1.12%</td><td class="r">29.4</td><td class="r dn">2.2%</td><td class="r">1.6</td><td><span class="pill">Watch</span></td><td></td></tr>
+          <tr><td><span class="sym">DIS</span><span class="symname">Walt Disney</span></td><td class="r">4 / 5</td><td class="r">92.48</td><td class="r dn">0.34%</td><td class="r">31.0</td><td class="r up">0.2%</td><td class="r">1.5</td><td><span class="pill">Watch</span></td><td></td></tr>
+          <tr><td><span class="sym">BA</span><span class="symname">Boeing</span></td><td class="r">4 / 5</td><td class="r">171.06</td><td class="r up">0.97%</td><td class="r">28.6</td><td class="r dn">3.1%</td><td class="r">2.0</td><td><span class="pill">Watch</span></td><td></td></tr>
+          <tr><td><span class="sym">NKE</span><span class="symname">Nike</span></td><td class="r">3 / 5</td><td class="r">74.55</td><td class="r dn">1.46%</td><td class="r">33.2</td><td class="r dn">4.0%</td><td class="r">1.7</td><td><span class="pill">Watch</span></td><td></td></tr>
+          <tr><td><span class="sym">CVS</span><span class="symname">CVS Health</span></td><td class="r">3 / 5</td><td class="r">52.30</td><td class="r up">0.55%</td><td class="r">34.9</td><td class="r dn">1.0%</td><td class="r">1.5</td><td><span class="pill">Watch</span></td><td></td></tr>
+          <tr><td><span class="sym">MMM</span><span class="symname">3M</span></td><td class="r">3 / 5</td><td class="r">103.78</td><td class="r dn">0.12%</td><td class="r">35.4</td><td class="r up">0.4%</td><td class="r">1.6</td><td><span class="pill">Watch</span></td><td></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<script src="shell.js"></script></body></html>

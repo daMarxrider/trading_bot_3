@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Scanner · tradebot redesign</title><link rel="stylesheet" href="shared.css"></head>
+<body data-page="scanner" data-title="Scanner" data-status="Scanning… 214 of 500 symbols · 3 skipped">
+<template id="top">
+  <button class="btn"><i data-i="db"></i>Source: Nasdaq 100<i data-i="chev"></i></button>
+  <div class="select" style="width:90px">1D</div>
+  <button class="btn primary busy" style="width:78px">Scan</button>
+  <button class="btn danger"><i data-i="stop"></i>Stop</button>
+  <span class="sp"></span>
+  <button class="btn ghost"><i data-i="code"></i>New script…</button>
+</template>
+<div id="view" class="pages" style="flex-direction:column">
+  <div class="pane" style="flex:none">
+    <div class="row pad wrap" style="gap:8px;padding:10px 12px">
+      <span class="label" style="margin-right:2px">Columns</span>
+      <span class="pill accent">RSI 14 <i data-i="close" style="opacity:.7"></i></span>
+      <span class="pill accent">MACD hist <i data-i="close"></i></span>
+      <span class="pill accent">Supertrend <i data-i="close"></i></span>
+      <span class="pill accent">ATR % <i data-i="close"></i></span>
+      <button class="btn sm ghost"><i data-i="plus"></i>Column</button>
+      <span class="vdiv"></span>
+      <span class="label" style="margin-right:2px">Filters</span>
+      <span class="pill">RSI 14 &lt; 35 <i data-i="close"></i></span>
+      <span class="pill">Supertrend is true <i data-i="close"></i></span>
+      <button class="btn sm ghost"><i data-i="plus"></i>Filter</button>
+      <span class="sp"></span>
+      <div style="width:220px"><div class="bar"><i style="width:43%"></i></div></div><span class="muted">43%</span>
+    </div>
+  </div>
+  <div class="pane fill reveal">
+    <header>Results <span class="pill accent">17</span><span class="sp"></span><a href="dialogs.html#skipped" class="muted">3 skipped symbols</a><button class="btn sm"><i data-i="refresh"></i>Rescan</button></header>
+    <div class="fill scroll">
+      <table class="data">
+        <thead><tr><th>Symbol</th><th class="r">Price</th><th class="r sorted">RSI 14</th><th class="r">MACD hist</th><th>Supertrend</th><th class="r">ATR %</th><th class="r">Bars</th><th></th></tr></thead>
+        <tbody>
+          <tr><td><span class="sym">AMD</span><span class="symname">Advanced Micro Devices</span></td><td class="r">141.20</td><td class="r">24.3</td><td class="r dn">0.84</td><td><span class="pill accent">Up</span></td><td class="r">3.1</td><td class="r">1 250</td><td class="r"><button class="btn ghost sm">Chart<i data-i="chevr"></i></button></td></tr>
+          <tr><td><span class="sym">ADBE</span><span class="symname">Adobe</span></td><td class="r">498.10</td><td class="r">27.9</td><td class="r up">0.12</td><td><span class="pill accent">Up</span></td><td class="r">2.0</td><td class="r">1 250</td><td></td></tr>
+          <tr><td><span class="sym">INTC</span><span class="symname">Intel</span></td><td class="r">21.17</td><td class="r">28.4</td><td class="r up">0.05</td><td><span class="pill accent">Up</span></td><td class="r">2.8</td><td class="r">1 250</td><td></td></tr>
+          <tr><td><span class="sym">PYPL</span><span class="symname">PayPal</span></td><td class="r">63.92</td><td class="r">30.8</td><td class="r dn">0.31</td><td><span class="pill accent">Up</span></td><td class="r">2.4</td><td class="r">1 250</td><td></td></tr>
+          <tr><td><span class="sym">QCOM</span><span class="symname">Qualcomm</span></td><td class="r">168.44</td><td class="r">31.5</td><td class="r up">0.44</td><td><span class="pill accent">Up</span></td><td class="r">2.2</td><td class="r">1 250</td><td></td></tr>
+          <tr><td><span class="sym">SBUX</span><span class="symname">Starbucks</span></td><td class="r">88.31</td><td class="r">33.0</td><td class="r dn">0.20</td><td><span class="pill accent">Up</span></td><td class="r">1.9</td><td class="r">1 250</td><td></td></tr>
+          <tr><td><span class="sym">MRNA</span><span class="symname">Moderna</span></td><td class="r">74.02</td><td class="r">33.8</td><td class="r up">0.60</td><td><span class="pill accent">Up</span></td><td class="r">4.6</td><td class="r">1 250</td><td></td></tr>
+          <tr><td><span class="skel" style="display:block;width:60px"></span></td><td><span class="skel" style="display:block;width:50px;margin-left:auto"></span></td><td><span class="skel" style="display:block;width:40px;margin-left:auto"></span></td><td><span class="skel" style="display:block;width:40px;margin-left:auto"></span></td><td><span class="skel" style="display:block;width:44px"></span></td><td><span class="skel" style="display:block;width:30px;margin-left:auto"></span></td><td></td><td></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<script src="shell.js"></script></body></html>

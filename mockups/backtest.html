@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Backtest · tradebot redesign</title><link rel="stylesheet" href="shared.css"></head>
+<body data-page="backtest" data-title="Backtest" data-status="Backtest finished: 184 trades on 5 symbols in 1.8 s">
+<template id="top">
+  <span class="muted">EMA Cross 9/21 · 5 symbols · 2019-01-01 to 2026-10-31</span>
+  <span class="sp"></span>
+  <button class="btn"><i data-i="dna"></i>Optimize</button>
+  <button class="btn"><i data-i="chart"></i>Show on chart</button>
+  <button class="btn primary"><i data-i="play"></i>Run backtest</button>
+</template>
+<div id="view" class="pages">
+  <div class="pane" style="width:316px;flex:none">
+    <header>Setup</header>
+    <div class="fill scroll pad col" style="gap:14px">
+      <div class="field"><span class="label">Strategy</span><div class="select">EMA Cross<span class="sp"></span></div></div>
+      <div class="field"><span class="label">Symbols</span>
+        <div class="input" style="height:auto;min-height:28px;flex-wrap:wrap;padding:4px 6px;gap:4px"><span class="pill">BTC/USDT <i data-i="close"></i></span><span class="pill">ETH/USDT <i data-i="close"></i></span><span class="pill">SOL/USDT <i data-i="close"></i></span><span class="pill">AAPL <i data-i="close"></i></span><span class="pill">NVDA <i data-i="close"></i></span></div>
+        <div class="row"><button class="btn sm ghost"><i data-i="plus"></i>From watchlist</button></div></div>
+      <div class="row"><div class="field fill"><span class="label">From</span><div class="input"><input value="2019-01-01"></div></div><div class="field fill"><span class="label">To</span><div class="input"><input value="2026-10-31"></div></div></div>
+      <label class="chk on">Common date range only</label>
+      <label class="chk">From first candle</label>
+      <div class="divider"></div>
+      <div class="group-t" style="padding-top:0">Parameters</div>
+      <div class="form"><span class="label">Fast EMA</span><div class="input"><input value="9"></div><span class="label">Slow EMA</span><div class="input"><input value="21"></div><span class="label">Stop loss %</span><div class="input"><input value="3.0"></div><span class="label">Take profit %</span><div class="input"><input value="6.0"></div></div>
+      <div class="divider"></div>
+      <div class="field"><span class="label">Fills</span><div class="seg"><button>Bar close</button><button aria-pressed="true">Intrabar</button></div><span class="hint">Stops, limits and targets fill inside the bar.</span></div>
+      <div class="form"><span class="label">Fee</span><div class="input"><input value="0.10 %"></div><span class="label">Slippage</span><div class="input"><input value="0.02 %"></div><span class="label">Start capital</span><div class="input"><input value="10 000"></div></div>
+      <div class="notice"><i data-i="cpu"></i><span>Compute backend: <b>CPU · NumPy</b>. Add the <span class="mono">gpu</span> extra to optimize on the GPU.</span></div>
+    </div>
+  </div>
+
+  <div class="col fill" style="gap:12px">
+    <div class="strip reveal">
+      <div class="s"><span>Total return</span><b class="up">+312.4%</b></div>
+      <div class="s"><span>Buy &amp; hold</span><b>+248.1%</b></div>
+      <div class="s"><span>CAGR</span><b>21.6%</b></div>
+      <div class="s"><span>Max drawdown</span><b class="dn">−27.3%</b></div>
+      <div class="s"><span>Sharpe</span><b>1.31</b></div>
+      <div class="s"><span>Win rate</span><b>46.2%</b></div>
+      <div class="s"><span>Expectancy</span><b class="up">+0.41R</b></div>
+      <div class="s"><span>Trades</span><b>184</b></div>
+    </div>
+    <div class="pane fill reveal" style="animation-delay:0.05s">
+      <div class="tabs" role="tablist"><button aria-selected="true">Equity</button><button>Report</button><button>Trades</button><button>Monte Carlo <span class="pill warn">robust 82%</span></button><button>Optimizer</button><span class="sp" style="flex:1"></span><button class="btn sm ghost" style="height:26px;margin:5px 0"><i data-i="download"></i>Export trades (CSV)</button><button class="btn sm ghost" style="height:26px;margin:5px 0"><i data-i="download"></i>Report (HTML)</button></div>
+      <div class="plot fill" data-lines='{"n":150,"labels":["2019","2020","2021","2022","2023","2024","2025"],"series":[{"seed":31,"start":100,"vol":0.03,"drift":0.0095,"c":1,"area":1,"w":2.2},{"seed":47,"start":100,"vol":0.045,"drift":0.0075,"c":3,"dash":"5 4","w":1.6},{"seed":59,"start":100,"vol":0.01,"drift":0.0055,"c":4,"w":1.4,"op":0.8}]}'>
+        <div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Strategy</span><span><i class="sw" style="background:var(--s3)"></i>Buy &amp; hold</span><span><i class="sw" style="background:var(--s4)"></i>Monthly investing</span><span class="muted">Equity, rebased to 100</span></div>
+      </div>
+      <div style="height:150px;border-top:1px solid var(--line);position:relative;flex:none" data-lines='{"n":150,"padR":62,"labels":["2019","2021","2023","2025"],"xl":4,"pct":1,"series":[{"seed":31,"start":100,"vol":0.03,"drift":0.0095,"dd":1,"scale":18,"c":2,"area":1}]}'><div class="legend" style="top:auto;bottom:26px"><span>Underwater, drawdown from peak</span></div></div>
+    </div>
+  </div>
+</div>
+<script src="shell.js"></script></body></html>

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Settings · tradebot redesign</title><link rel="stylesheet" href="shared.css">
+<style>
+  .sec { display: grid; grid-template-columns: 220px 1fr; gap: 24px; padding: 22px 0; border-bottom: 1px solid var(--line); }
+  .sec h2 { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .sec p { color: var(--muted); max-width: 30ch; }
+  .themes { display: flex; gap: 10px; flex-wrap: wrap; }
+  .th { width: 132px; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; background: var(--panel); cursor: pointer; }
+  .th[aria-pressed="true"] { border-color: var(--accent); outline: 2px solid var(--accent-soft); }
+  .th i { display: block; height: 58px; padding: 8px; position: relative; }
+  .th i b { position: absolute; inset: 8px 8px auto 8px; height: 6px; border-radius: 2px; opacity: .9; }
+  .th span { display: block; padding: 7px 9px; font-size: 12px; }
+</style></head>
+<body data-page="settings" data-title="Settings" data-status="Settings saved to ~/.config/tradebot/config.toml">
+<template id="top"><span class="muted">Saved automatically</span><span class="sp"></span><button class="btn ghost"><i data-i="folder"></i>Open config folder</button></template>
+<div id="view" class="pages" style="overflow:auto"><div class="col" style="max-width:920px;margin:0 auto;width:100%;padding:0 12px 40px">
+  <div class="sec"><div><h2>Theme</h2><p>Colour is always paired with a shape, so up and down never rely on hue alone.</p></div>
+    <div class="themes">
+      <button class="th" aria-pressed="true" style="padding:0;color:inherit"><i style="background:#121211"><b style="background:#c4b2ff;width:40%"></b></i><span>Graphite</span></button>
+      <button class="th" style="padding:0;color:inherit"><i style="background:#f1efe8"><b style="background:#5a3fd1;width:40%"></b></i><span>Paper</span></button>
+      <button class="th" style="padding:0;color:inherit"><i style="background:#0d1022"><b style="background:#7c9cff;width:40%"></b></i><span>Glass (classic)</span></button>
+      <button class="th" style="padding:0;color:inherit"><i style="background:#0b0b1a"><b style="background:#ff6ad5;width:40%"></b></i><span>Midnight · yours</span></button>
+      <button class="btn" style="height:auto;border-style:dashed"><i data-i="plus"></i>Import JSON theme</button>
+    </div></div>
+  <div class="sec"><div><h2>Rendering</h2><p>Charts can draw on the GPU. Turn it off if candles flicker.</p></div>
+    <div class="col" style="gap:12px"><label class="row"><span class="switch"></span>GPU rendering <span class="pill warn">experimental</span></label><label class="row"><span class="switch on"></span>Touch mode follows the touchscreen</label></div></div>
+  <div class="sec"><div><h2>Broker API keys</h2><p>Keys stay in your config file. They are never sent anywhere except the broker.</p></div>
+    <div class="col" style="gap:10px">
+      <div class="pane"><div class="row pad" style="gap:12px"><b style="width:130px">Binance</b><span class="pill"><span class="dot"></span>Connected</span><span class="sp"></span><label class="row"><span class="switch on"></span>Enabled</label><button class="btn sm">Edit keys</button></div></div>
+      <div class="pane"><div class="row pad" style="gap:12px"><b style="width:130px">KuCoin</b><span class="pill"><span class="dot off"></span>No keys</span><span class="sp"></span><label class="row"><span class="switch"></span>Enabled</label><button class="btn sm">Add keys</button></div></div>
+      <div class="pane"><div class="row pad" style="gap:12px"><b style="width:130px">Pionex</b><span class="pill"><span class="dot off"></span>No keys</span><span class="sp"></span><label class="row"><span class="switch"></span>Enabled</label><button class="btn sm">Add keys</button></div></div>
+    </div></div>
+  <div class="sec"><div><h2>Third-party tools</h2><p>Never bundled. Install them yourself; their own terms apply.</p></div>
+    <div class="form"><span class="label">Scalable CLI (<span class="mono">sc</span>)</span><div class="row"><div class="input fill"><input value="/usr/local/bin/sc"></div><button class="btn"><i data-i="folder"></i>Browse…</button></div><span class="label">Trade Republic (<span class="mono">pytr</span>)</span><div class="row"><span class="pill warn">Not installed</span><span class="hint">Source install only</span></div></div></div>
+  <div class="sec"><div><h2>Notifications</h2><p>Trade and risk-guard alerts.</p></div>
+    <div class="col" style="gap:12px"><label class="row"><span class="switch on"></span>Telegram</label><div class="form"><span class="label">Bot token</span><div class="input"><input type="password" value="••••••••••••••"></div><span class="label">Chat</span><div class="input"><input value="-1001234567"></div></div><div class="row"><button class="btn">Send test message</button><span style="color:var(--ok)">Delivered</span></div></div></div>
+  <div class="sec"><div><h2>Disk cache</h2><p>Keeps market data and symbol lists on disk so charts open fast.</p></div>
+    <div class="col" style="gap:14px"><label class="row"><span class="switch on"></span>Keep market data on disk</label>
+      <div class="form"><span class="label">Maximum size</span><div class="input" style="width:130px"><input value="2 GB"></div><span class="label">Folder</span><div class="row"><div class="input fill"><input value="~/.cache/tradebot"></div><button class="btn"><i data-i="folder"></i>Browse…</button><button class="btn ghost">Open folder</button></div></div>
+      <div class="col" style="gap:6px"><div class="row"><span class="muted">Chart data</span><span class="sp"></span>388 MB</div><div class="row"><span class="muted">Symbol lists</span><span class="sp"></span>24 MB</div><div class="bar"><i style="width:21%"></i></div><div class="row"><b>Total 412 MB of 2 GB</b><span class="sp"></span><button class="btn sm danger">Clear cache</button></div></div></div></div>
+</div></div>
+<script src="shell.js"></script></body></html>

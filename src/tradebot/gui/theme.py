@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 daMarxrider
-"""Theme manager: built-in Glass / Dark / Light themes plus user themes from JSON.
+"""Theme manager: built-in Graphite / Paper (the #191 redesign) and the older Glass / Dark / Light themes, plus user themes from JSON.
 
 A theme is a palette of tokens; one QSS template turns it into a stylesheet,
 and the same tokens style the pyqtgraph charts, so every widget follows the
@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, QPointF, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QPainter, QRadialGradient
+from PyQt6.QtGui import QColor, QFont, QFontDatabase, QPainter, QRadialGradient
 from PyQt6.QtWidgets import QApplication, QWidget
 
 log = logging.getLogger(__name__)
@@ -47,9 +47,28 @@ class Theme:
     glass: bool = False
     font: str = "Inter, 'Segoe UI', 'SF Pro Text', 'Noto Sans', sans-serif"
     series: tuple[str, ...] = ("#4cc9f0", "#f72585", "#ffd166", "#06d6a0", "#b388ff", "#ff9f1c")
+    accent_ink: str = "#ffffff"  #: text on an accent-filled button
+    rail: str = ""  #: navigation rail; empty = the panel colour
+    warn: str = "#e9c14c"
+    live: str = "#cc2438"  #: fill of the kill-switch / live state; white text on it
 
+
+PLEX = "'IBM Plex Sans', Inter, 'Segoe UI', 'SF Pro Text', 'Noto Sans', sans-serif"
 
 BUILTIN: dict[str, Theme] = {
+    # the #191 redesign: solid warm-graphite panels, one violet accent, blue-teal up / vermilion down
+    "graphite": Theme(
+        name="Graphite", bg="#121211", panel="#1a1a18", panel_border="#2d2c28", text="#ece9e1", muted="#a09c91",
+        accent="#c4b2ff", up="#43c2d4", down="#ff8453", grid="rgba(255, 255, 255, 0.055)", input_bg="#21211e",
+        selection="#2b2740", radius=8, font=PLEX, accent_ink="#17122b", rail="#0d0d0c", warn="#e9c14c", live="#cc2438",
+        series=("#43c2d4", "#ff8453", "#e9c14c", "#c4b2ff", "#7ee0a8", "#f08fc0"),
+    ),
+    "paper": Theme(
+        name="Paper", bg="#f1efe8", panel="#fbf9f3", panel_border="#dcd8cb", text="#1d1c18", muted="#5f5c52",
+        accent="#5a3fd1", up="#0a7a8c", down="#bf4515", grid="rgba(0, 0, 0, 0.06)", input_bg="#f4f1e9",
+        selection="#e4def8", radius=8, font=PLEX, accent_ink="#ffffff", rail="#e8e5db", warn="#916d00", live="#c8203a",
+        series=("#0a7a8c", "#bf4515", "#916d00", "#5a3fd1", "#1c7f55", "#b0357f"),
+    ),
     "glass": Theme(
         name="Glass", bg="#0d1022", panel="rgba(255, 255, 255, 0.07)", panel_border="rgba(255, 255, 255, 0.16)",
         text="#eef1ff", muted="#9aa3c7", accent="#7c9cff", up="#2ee6a6", down="#ff5c8a",
@@ -72,26 +91,38 @@ QSS = """
 * {{ font-family: {font}; font-size: 13px; color: {text}; }}
 QMainWindow, #Root {{ background: {root_bg}; }}
 QDialog {{ background: {bg}; }}
-QWidget#Sidebar {{ background: {panel}; border-right: 1px solid {panel_border}; }}
+QWidget#Sidebar {{ background: {rail_bg}; border-right: 1px solid {panel_border}; }}
+QLabel#NavGroup {{ color: {muted}; font-size: 11px; font-weight: 500; padding: 12px 8px 3px 8px; }}
+QLabel#Brand {{ font-size: 16px; font-weight: 600; }}
 QFrame#Card, QGroupBox {{ background: {panel}; border: 1px solid {panel_border}; border-radius: {radius}px; }}
 QGroupBox {{ margin-top: 14px; padding: 10px; }}
 QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 4px; color: {muted}; }}
-QLabel#Title {{ font-size: 20px; font-weight: 600; }}
+QLabel#Title {{ font-size: 18px; font-weight: 600; }}
 QLabel#KpiValue {{ font-size: 22px; font-weight: 600; }}
 QLabel#Muted, QLabel#KpiLabel {{ color: {muted}; }}
 QPushButton {{ background: {input_bg}; border: 1px solid {panel_border}; border-radius: {radius_sm}px; padding: 6px 14px; }}
 QPushButton:hover {{ border-color: {accent}; }}
-QPushButton:checked, QPushButton#Primary {{ background: {accent}; color: #ffffff; border-color: {accent}; }}
-QPushButton#Nav {{ background: transparent; border: none; text-align: left; padding: 10px 16px; border-radius: {radius_sm}px; }}
-QPushButton#Nav:hover {{ background: {selection}; }}
-QPushButton#Nav:checked {{ background: {selection}; color: {text}; font-weight: 600; }}
+QPushButton:checked, QPushButton#Primary {{ background: {accent}; color: {accent_ink}; border-color: {accent}; }}
+QPushButton#Primary {{ font-weight: 600; }}
+QPushButton:disabled, QToolButton:disabled {{ color: {muted}; background: transparent; }}
+QPushButton#Nav {{ background: transparent; border: none; text-align: left; padding: 7px 10px; border-radius: {radius_sm}px; color: {muted}; }}
+QPushButton#Nav:hover {{ background: {nav_hover}; color: {text}; }}
+QPushButton#Nav:checked {{ background: {selection}; color: {text}; font-weight: 500; border: none; }}
+QPushButton#Kill {{ background: transparent; border: 1px solid {panel_border}; border-radius: 4px; padding: 1px 8px; color: {muted}; min-height: 0; }}
+QPushButton#Kill:hover {{ border-color: {live}; color: {text}; }}
+QPushButton#Kill:checked {{ background: {live}; border-color: {live}; color: #ffffff; font-weight: 600; }}
+QLabel#ModeChip {{ border: 1px solid {panel_border}; border-radius: 4px; padding: 1px 8px; font-weight: 600; font-size: 11px; background: {input_bg}; }}
+QLabel#ModeChip[state="kill"] {{ background: {live}; border-color: {live}; color: #ffffff; }}
+QFrame#KillBanner {{ background: {live}; }}
+QFrame#KillBanner QLabel {{ color: #ffffff; font-weight: 500; }}
 QToolButton {{ background: {input_bg}; border: 1px solid {panel_border}; border-radius: {radius_sm}px; padding: 5px 9px; }}
-QToolButton:checked {{ background: {accent}; color: #ffffff; }}
+QToolButton:checked {{ background: {accent}; color: {accent_ink}; }}
 QToolButton::menu-indicator {{ image: none; }}
 QToolButton#ChartCorner {{ padding: 0; min-height: 0; }}
 QTabWidget::pane {{ border: none; }}
-QTabBar::tab {{ background: {input_bg}; color: {muted}; border: 1px solid {panel_border}; border-radius: {radius_sm}px; padding: 5px 14px; margin-right: 4px; }}
-QTabBar::tab:selected {{ background: {selection}; color: {text}; }}
+QTabBar::tab {{ background: transparent; color: {muted}; border: none; border-bottom: 2px solid transparent; padding: 7px 12px; margin-right: 2px; }}
+QTabBar::tab:hover {{ color: {text}; }}
+QTabBar::tab:selected {{ color: {text}; font-weight: 500; border-bottom: 2px solid {accent}; }}
 QFrame#Chip {{ border: 1px solid {panel_border}; border-radius: {radius_sm}px; }}
 QFrame#Chip QToolButton {{ background: transparent; border: none; padding: 3px 6px; }}
 QFrame#ChartSidebar {{ background: {panel}; border: 1px solid {panel_border}; border-radius: {radius}px; }}
@@ -116,7 +147,7 @@ QCalendarWidget QWidget#qt_calendar_navigationbar {{ border-bottom: 1px solid {p
 QCalendarWidget QToolButton {{ background: transparent; border: none; color: {text}; font-weight: 600; padding: 4px 8px; }}
 QCalendarWidget QToolButton:hover {{ background: {selection}; }}
 QCalendarWidget QToolButton#qt_calendar_prevmonth, QCalendarWidget QToolButton#qt_calendar_nextmonth {{ font-size: 18px; }}
-QCalendarWidget QAbstractItemView {{ selection-background-color: {accent}; selection-color: #ffffff; outline: 0; }}
+QCalendarWidget QAbstractItemView {{ selection-background-color: {accent}; selection-color: {accent_ink}; outline: 0; }}
 QCalendarWidget QAbstractItemView:disabled {{ color: {muted}; }}
 QComboBox QAbstractItemView, QMenu, QAbstractItemView#SymbolPopup {{ background: {menu_bg}; border: 1px solid {panel_border}; selection-background-color: {selection}; }}
 QMenu::item {{ padding: 5px 22px; }}
@@ -140,6 +171,8 @@ QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
 QProgressBar {{ background: {input_bg}; border: none; border-radius: 4px; height: 8px; text-align: center; }}
 QProgressBar::chunk {{ background: {accent}; border-radius: 4px; }}
 QStatusBar {{ color: {muted}; background: {status_bg}; border-top: 1px solid {panel_border}; }}
+QStatusBar::item {{ border: none; }}
+QProgressBar {{ text-align: center; }}
 QToolTip {{ background: {menu_bg}; color: {text}; border: 1px solid {panel_border}; }}
 """
 
@@ -168,7 +201,9 @@ def stylesheet(t: Theme, touch: bool = False) -> str:
         **asdict(t),
         root_bg="transparent" if t.glass else t.bg,
         radius_sm=max(4, t.radius // 2),
-        status_bg=t.bg if t.glass else t.panel,  # the status bar sits outside the glass backdrop
+        rail_bg=t.rail or (t.bg if t.glass else t.panel),
+        nav_hover=t.selection if t.glass else t.input_bg,
+        status_bg=t.bg if t.glass else (t.rail or t.panel),  # the status bar sits outside the glass backdrop
         menu_bg=_opaque(t.panel, "#1a1e36"),
         alt_row="rgba(255,255,255,0.025)" if t.glass else t.input_bg,
     )
@@ -192,6 +227,21 @@ def qcolor(css: str) -> QColor:
     return QColor(css)
 
 
+FONT_DIR = Path(__file__).with_name("assets") / "fonts"
+_fonts_loaded = False
+
+
+def load_fonts() -> None:
+    """Register the bundled IBM Plex fonts with Qt, once (#191). A missing file just means the fallback fonts."""
+    global _fonts_loaded
+    if _fonts_loaded:
+        return
+    _fonts_loaded = True
+    for path in sorted(FONT_DIR.glob("*.ttf")):
+        if QFontDatabase.addApplicationFont(str(path)) < 0:
+            log.warning("could not load font %s", path)
+
+
 class ThemeManager(QObject):
     changed = pyqtSignal(object)
 
@@ -200,7 +250,7 @@ class ThemeManager(QObject):
         self.touch = touch
         self.themes: dict[str, Theme] = dict(BUILTIN)
         self.themes.update(self._load_user_themes(user_dir or Path("~/.config/tradebot/themes").expanduser()))
-        self.current: Theme = self.themes["glass"]
+        self.current: Theme = self.themes["graphite"]
 
     @staticmethod
     def _load_user_themes(directory: Path) -> dict[str, Theme]:
@@ -220,6 +270,7 @@ class ThemeManager(QObject):
         theme = self.themes[key]
         self.current = theme
         app = QApplication.instance()
+        load_fonts()
         app.setStyleSheet(stylesheet(theme, self.touch))
         font = QFont()
         font.setFamilies([f.strip().strip("'") for f in theme.font.split(",")])

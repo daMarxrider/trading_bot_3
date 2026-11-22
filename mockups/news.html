@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>News · tradebot redesign</title><link rel="stylesheet" href="shared.css"></head>
+<body data-page="news" data-title="News" data-status="31 headlines for 14 symbols · updated 14:30">
+<template id="top">
+  <div class="seg"><button aria-pressed="true">My symbols</button><button>Watchlist</button><button>Portfolio</button></div>
+  <label class="input" style="width:220px"><i data-i="search"></i><input placeholder="Filter headlines"></label>
+  <span class="sp"></span><button class="btn"><i data-i="refresh"></i>Refresh</button>
+</template>
+<div id="view" class="pages">
+  <div class="pane" style="width:480px;flex:none"><div class="fill scroll">
+    <div class="listrow sel" style="height:auto;padding:10px 12px;align-items:flex-start;flex-direction:column;gap:3px"><div class="row"><span class="pill accent">NVDA</span><span class="faint">Reuters · 24 min ago</span></div><span style="font-weight:500">Nvidia moves its new chip launch forward as suppliers ramp</span></div>
+    <div class="listrow" style="height:auto;padding:10px 12px;align-items:flex-start;flex-direction:column;gap:3px"><div class="row"><span class="pill">BTC</span><span class="faint">CoinDesk · 51 min ago</span></div><span>Spot Bitcoin funds log fourth straight day of net inflows</span></div>
+    <div class="listrow" style="height:auto;padding:10px 12px;align-items:flex-start;flex-direction:column;gap:3px"><div class="row"><span class="pill">IWDA</span><span class="pill">EUNL</span><span class="faint">FT · 1 h ago</span></div><span>Global equities edge higher ahead of central bank decisions</span></div>
+    <div class="listrow" style="height:auto;padding:10px 12px;align-items:flex-start;flex-direction:column;gap:3px"><div class="row"><span class="pill">ETH</span><span class="faint">The Block · 2 h ago</span></div><span>Ethereum developers fix date for next network upgrade</span></div>
+    <div class="listrow" style="height:auto;padding:10px 12px;align-items:flex-start;flex-direction:column;gap:3px"><div class="row"><span class="pill">AAPL</span><span class="faint">Bloomberg · 3 h ago</span></div><span>Apple suppliers see steady demand into the holiday quarter</span></div>
+    <div class="listrow" style="height:auto;padding:10px 12px;align-items:flex-start;flex-direction:column;gap:3px"><div class="row"><span class="pill">SOL</span><span class="faint">Decrypt · 4 h ago</span></div><span>Solana network activity hits a record as fees stay low</span></div>
+  </div></div>
+  <div class="pane fill reveal"><div class="pad col" style="max-width:68ch;gap:14px;margin:0 auto;padding:28px 24px">
+    <div class="row"><span class="pill accent">NVDA</span><span class="muted">Reuters · 24 min ago</span><span class="sp"></span><span class="up">+2.41% today</span></div>
+    <h2 style="font-size:22px;line-height:1.25;font-weight:600;text-wrap:balance">Nvidia moves its new chip launch forward as suppliers ramp</h2>
+    <p style="line-height:1.6;color:var(--muted)">Nvidia is bringing forward the launch of its data-centre chips by about one quarter, according to two people familiar with the plans, as memory and packaging suppliers report faster-than-expected capacity ramps.</p>
+    <p style="line-height:1.6;color:var(--muted)">Headlines are shown with source and time. Open the full article in your browser; tradebot never trades on news.</p>
+    <div class="row"><button class="btn"><i data-i="ext"></i>Open article</button><button class="btn"><i data-i="chart"></i>Open NVDA chart</button></div>
+  </div></div>
+</div>
+<script src="shell.js"></script></body></html>

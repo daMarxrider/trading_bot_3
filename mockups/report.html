@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Backtest report and Monte Carlo · tradebot redesign</title><link rel="stylesheet" href="shared.css"></head>
+<body data-page="backtest" data-title="Backtest · Report" data-status="Monte Carlo: 2 000 reshuffles of 184 trades">
+<template id="top">
+  <span class="muted">EMA Cross 9/21 · 5 symbols · 2019-01-01 to 2026-10-31</span><span class="sp"></span>
+  <button class="btn"><i data-i="download"></i>Export trades (CSV)</button><button class="btn"><i data-i="download"></i>Export report (HTML)</button>
+</template>
+<div id="view" class="pages" style="flex-direction:column;overflow:auto">
+  <div class="row" style="gap:12px;align-items:stretch;flex:none">
+    <div class="pane fill reveal" style="min-height:300px">
+      <header>Monte Carlo <span class="pill warn">Robust in 82% of reshuffles</span><span class="sp"></span><button class="btn sm"><i data-i="play"></i>Run Monte Carlo</button></header>
+      <div class="plot" style="min-height:230px" data-bars='{"n":44,"seed":9,"mark":0.66,"zero":0.214,"peak":0.56,"label":"actual run +312%","ticks":["−100%","0","+100%","+200%","+300%","+400%","+500%"]}'></div>
+      <div class="row" style="padding:8px 12px;border-top:1px solid var(--line);flex:none;gap:18px"><span class="muted">Median <b style="color:var(--text)">+271%</b></span><span class="muted">5th percentile <b class="dn">+38%</b></span><span class="muted">Ruin probability <b style="color:var(--text)">0.4%</b></span><span class="sp"></span><span class="hint">Orange bars end below zero.</span></div>
+    </div>
+    <div class="pane" style="width:360px;flex:none">
+      <header>Trade statistics</header>
+      <table class="data tight"><tbody>
+        <tr><td class="muted">Expectancy</td><td class="r up">+0.41 R</td></tr>
+        <tr><td class="muted">Profit factor</td><td class="r">1.62</td></tr>
+        <tr><td class="muted">Avg win / avg loss</td><td class="r">1.89</td></tr>
+        <tr><td class="muted">Longest win streak</td><td class="r">7</td></tr>
+        <tr><td class="muted">Longest loss streak</td><td class="r dn">9</td></tr>
+        <tr><td class="muted">Time in market</td><td class="r">58%</td></tr>
+        <tr><td class="muted">Avg bars in trade</td><td class="r">23</td></tr>
+        <tr><td class="muted">Longest drawdown</td><td class="r">214 days</td></tr>
+      </tbody></table>
+    </div>
+  </div>
+  <div class="pane reveal" style="flex:none;animation-delay:0.05s"><header>Monthly returns, %</header><div class="pad scroll" data-heat='["2021","2022","2023","2024","2025","2026"]'></div></div>
+  <div class="pane reveal" style="flex:none;animation-delay:0.1s;min-height:280px"><header>Trades <span class="pill">184</span></header>
+    <table class="data tight"><thead><tr><th>Symbol</th><th>Side</th><th>Entered</th><th>Exited</th><th>Exit reason</th><th class="r">Entry</th><th class="r">Exit</th><th class="r">P&amp;L</th><th class="r">R</th></tr></thead><tbody>
+      <tr><td class="sym">BTC/USDT</td><td>Long</td><td>2026-09-02 08:00</td><td>2026-09-09 14:00</td><td><span class="pill accent">Take profit</span></td><td class="r">57 420</td><td class="r">60 861</td><td class="r up">+5.99%</td><td class="r">1.9</td></tr>
+      <tr><td class="sym">NVDA</td><td>Long</td><td>2026-08-19</td><td>2026-08-22</td><td><span class="pill">Stop</span></td><td class="r">121.80</td><td class="r">118.15</td><td class="r dn">−3.00%</td><td class="r">−1.0</td></tr>
+      <tr><td class="sym">SOL/USDT</td><td>Long</td><td>2026-08-02 20:00</td><td>2026-08-11 02:00</td><td><span class="pill">Signal</span></td><td class="r">141.20</td><td class="r">152.70</td><td class="r up">+8.14%</td><td class="r">2.7</td></tr>
+      <tr><td class="sym">ETH/USDT</td><td>Long</td><td>2026-07-21 04:00</td><td>2026-07-23 10:00</td><td><span class="pill">Stop</span></td><td class="r">3 302</td><td class="r">3 203</td><td class="r dn">−3.00%</td><td class="r">−1.0</td></tr>
+    </tbody></table></div>
+</div>
+<script src="shell.js"></script></body></html>

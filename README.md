@@ -678,8 +678,10 @@ Lists and tables scroll with a kinetic flick. With a touchscreen present, contro
 
 Changes are saved to `config.toml` right away.
 
-Themes: **Glass** (translucent frosted panels over a soft gradient backdrop),
-**Modern Dark** and **Light**. You can add your own by placing JSON files in
+Themes: **Graphite** (the default: solid warm-graphite panels, one violet accent) and **Paper** (its light
+twin), plus the older **Glass** (translucent frosted panels over a soft gradient backdrop), **Modern Dark** and
+**Light**. In every theme, up is blue-teal and down is vermilion rather than green and red, and the app's colours
+and triangles never carry meaning alone. The UI font is IBM Plex Sans (SIL Open Font License, bundled). You can add your own by placing JSON files in
 `~/.config/tradebot/themes/`:
 
 ```json
@@ -691,7 +693,7 @@ Themes: **Glass** (translucent frosted panels over a soft gradient backdrop),
 `~/.config/tradebot/config.toml` (override the path with `$TRADEBOT_CONFIG`):
 
 ```toml
-theme = "glass"
+theme = "graphite"
 
 [watchlists]                # edited in the chart sidebar, or here by hand
 Main = ["AAPL", "MSFT", "SAP.DE", "BTC/USDT", "ETH/USDT"]

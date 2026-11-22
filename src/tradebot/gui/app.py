@@ -8,10 +8,12 @@ import logging
 import sys
 from functools import partial
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QButtonGroup,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -33,6 +35,7 @@ from tradebot.data.providers import quiet_yfinance
 from tradebot.gui.chart import ChartView
 from tradebot.gui.common import run_async
 from tradebot.gui.evolve import EvolveView
+from tradebot.gui.icons import pixmap
 from tradebot.gui.pairs import PairView
 from tradebot.gui.settings import SettingsDialog
 from tradebot.live.risk import kill_active, set_kill
@@ -47,7 +50,7 @@ log = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, themes: ThemeManager, theme_key: str = "glass", settings: Settings | None = None,
+    def __init__(self, themes: ThemeManager, theme_key: str = "graphite", settings: Settings | None = None,
                  opengl: bool = False):
         super().__init__()
         self.setWindowTitle("tradebot")
@@ -71,44 +74,60 @@ class MainWindow(QMainWindow):
         self.portfolio = PortfolioView(engine, themes)
         self.lab = BacktestView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)
         self.evolve = EvolveView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)
-        pages = [("Chart", "📈", self.chart), ("Screener", "🔎", self.screener),
-                 ("Scanner", "📡", self.scanner), ("Backtest", "🧪", self.lab),
-                 ("Evolve", "🧬", self.evolve), ("Pairs", "⚖", self.pairs), ("Portfolio", "💼", self.portfolio), ("News", "📰", self.news)]
+        groups = [("Markets", [("Chart", "chart", self.chart), ("Screener", "screener", self.screener),
+                               ("Scanner", "scanner", self.scanner), ("Pairs", "pairs", self.pairs), ("News", "news", self.news)]),
+                  ("Strategies", [("Backtest", "flask", self.lab), ("Evolve", "dna", self.evolve)]),
+                  ("Account", [("Portfolio", "wallet", self.portfolio)])]
+        pages = [item for _, items in groups for item in items]
 
         self.stack = QStackedWidget()
         sidebar = QWidget(objectName="Sidebar")
         sidebar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        sidebar.setFixedWidth(200)
+        sidebar.setFixedWidth(192)
         side = QVBoxLayout(sidebar)
-        side.setContentsMargins(12, 18, 12, 14)
-        brand = QLabel("◆ tradebot")
-        brand.setObjectName("Title")
-        side.addWidget(brand)
+        side.setContentsMargins(10, 16, 10, 12)
+        side.setSpacing(2)
+        head = QHBoxLayout()
+        head.setContentsMargins(8, 0, 8, 6)
+        brand = QLabel("tradebot")
+        brand.setObjectName("Brand")
+        head.addWidget(brand)
         version = QLabel(f"v{__version__}")
         version.setObjectName("Muted")
-        side.addWidget(version)
-        side.addSpacing(16)
+        head.addWidget(version)
+        head.addStretch()
+        side.addLayout(head)
         group = QButtonGroup(self)
-        for i, (name, icon, page) in enumerate(pages):
-            self.stack.addWidget(page)
-            btn = QPushButton(f"{icon}  {name}", objectName="Nav", checkable=True)
-            btn.clicked.connect(lambda _, n=i: self.stack.setCurrentIndex(n))
-            group.addButton(btn)
-            side.addWidget(btn)
-            if i == 0:
-                btn.setChecked(True)
+        self._nav_icons: list[tuple[QPushButton, str]] = []
+        index = 0
+        for title, items in groups:
+            heading = QLabel(title)
+            heading.setObjectName("NavGroup")
+            side.addWidget(heading)
+            for name, glyph, page in items:
+                n = index
+                index += 1
+                self.stack.addWidget(page)
+                btn = QPushButton(name, objectName="Nav", checkable=True)
+                btn.setIconSize(QSize(16, 16))
+                btn.clicked.connect(lambda _, n=n: self.stack.setCurrentIndex(n))
+                group.addButton(btn)
+                side.addWidget(btn)
+                self._nav_icons.append((btn, glyph))
+                if n == 0:
+                    btn.setChecked(True)
         side.addStretch()
-        self.kill_btn = QPushButton("⛔  Kill switch", objectName="Nav", checkable=True,
-                                    toolTip="Stops every running live bot at its next check (same as `tradebot bot kill`)")
-        self.kill_btn.setChecked(kill_active())
-        self.kill_btn.toggled.connect(self.toggle_kill)  # #154
-        side.addWidget(self.kill_btn)
-        about = QPushButton("ⓘ  About", objectName="Nav")  # disclaimers and licence (#58)
+        about = QPushButton("About", objectName="Nav")  # disclaimers and licence (#58)
         about.clicked.connect(self.show_about)
         side.addWidget(about)
-        self.settings_btn = QPushButton("⚙  Settings", objectName="Nav", toolTip="Theme, third-party tools")  # #59
+        self._nav_icons.append((about, "info"))
+        self.settings_btn = QPushButton("Settings", objectName="Nav", toolTip="Theme, third-party tools")  # #59
         self.settings_btn.clicked.connect(self.show_settings)
         side.addWidget(self.settings_btn)
+        self._nav_icons.append((self.settings_btn, "settings"))
+        for btn in (about, self.settings_btn):
+            btn.setIconSize(QSize(16, 16))
+        themes.changed.connect(self._refresh_icons)
 
         # cross-page navigation
         def chart_symbol(sym):
@@ -146,13 +165,29 @@ class MainWindow(QMainWindow):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addWidget(sidebar)
-        lay.addWidget(self.stack, 1)
+        right = QVBoxLayout()
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(0)
+        self.kill_banner = self._build_kill_banner()
+        right.addWidget(self.kill_banner)
+        right.addWidget(self.stack, 1)
+        lay.addLayout(right, 1)
         self.setCentralWidget(root)
         self.setStatusBar(QStatusBar())
+        # the desktop app never places orders, so the chip says so; the kill switch lives next to it (#154, #191)
+        self.mode_chip = QLabel("RESEARCH · NO ORDERS", objectName="ModeChip",
+                                toolTip="The desktop app only analyses. Live bots run with `tradebot bot run`.")
+        self.kill_btn = QPushButton("Kill switch", objectName="Kill", checkable=True,
+                                    toolTip="Stops every running live bot at its next check (same as `tradebot bot kill`)")
+        self.kill_btn.setChecked(kill_active())
+        self.kill_btn.toggled.connect(self.toggle_kill)  # #154
+        self.statusBar().addPermanentWidget(self.mode_chip)
+        self.statusBar().addPermanentWidget(self.kill_btn)
+        self._kill_ui(self.kill_btn.isChecked())
         for page in pages:
             page[2].status.connect(self.statusBar().showMessage)
 
-        self.theme_key = theme_key if theme_key in themes.themes else "glass"  # e.g. a deleted user theme
+        self.theme_key = theme_key if theme_key in themes.themes else "graphite"  # e.g. a deleted user theme
         themes.apply(self.theme_key)  # starting with the configured theme isn't a choice to save
         self.chart.load()
         if self.chart.opengl_note:  # GPU rendering is on but OpenGL isn't available (#71)
@@ -166,8 +201,38 @@ class MainWindow(QMainWindow):
                           "THIRD_PARTY_NOTICES.txt next to the program. Source code: "
                           "<a href='https://github.com/daMarxrider/trading_bot_3'>github.com/daMarxrider/trading_bot_3</a></p>")
 
+    def _build_kill_banner(self) -> QFrame:
+        banner = QFrame(objectName="KillBanner")
+        row = QHBoxLayout(banner)
+        row.setContentsMargins(16, 6, 16, 6)
+        row.addWidget(QLabel("Kill switch is on. Every live bot stops at its next check and no new orders go out."))
+        row.addStretch()
+        off = QPushButton("Turn off")
+        off.clicked.connect(lambda: self.kill_btn.setChecked(False))
+        row.addWidget(off)
+        banner.hide()
+        return banner
+
+    def _kill_ui(self, on: bool):
+        self.kill_banner.setVisible(on)
+        self.kill_btn.setText("Kill switch ON" if on else "Kill switch")
+        self.mode_chip.setProperty("state", "kill" if on else "")
+        self.mode_chip.setText("KILL SWITCH ON" if on else "RESEARCH · NO ORDERS")
+        self.mode_chip.style().unpolish(self.mode_chip)
+        self.mode_chip.style().polish(self.mode_chip)
+
+    def _refresh_icons(self, theme=None):
+        """Recolour the nav icons for the active theme: muted when idle, accent when the page is open."""
+        t = theme or self.themes.current
+        for btn, glyph in self._nav_icons:
+            ic = QIcon()
+            ic.addPixmap(pixmap(glyph, t.muted), QIcon.Mode.Normal, QIcon.State.Off)
+            ic.addPixmap(pixmap(glyph, t.accent), QIcon.Mode.Normal, QIcon.State.On)
+            btn.setIcon(ic)
+
     def toggle_kill(self, on: bool):
         set_kill(on, "gui")
+        self._kill_ui(on)
         self.statusBar().showMessage("kill switch ON: live bots stop trading" if on else "kill switch off", 8000)
 
     def show_settings(self):
@@ -215,7 +280,7 @@ def main(argv: list[str] | None = None) -> int:
     # touch_mode: "auto" (default, on when a touchscreen is present), "on" or "off"
     mode = str(config.get("touch_mode", "auto")).lower()
     themes = ThemeManager(touch=mode == "on" or (mode == "auto" and has_touchscreen()))
-    window = MainWindow(themes, config.get("theme", "glass"), Settings(), opengl=bool(config.get("gpu_rendering", False)))
+    window = MainWindow(themes, config.get("theme", "graphite"), Settings(), opengl=bool(config.get("gpu_rendering", False)))
     window.show()
     return app.exec()
 
