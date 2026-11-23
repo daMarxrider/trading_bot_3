@@ -433,6 +433,10 @@ class NewsView(QWidget):
         self.filter = QLineEdit()
         self.filter.setPlaceholderText("filter headlines …")
         self.filter.textChanged.connect(self._render)
+        self.publisher = QComboBox()
+        self.publisher.setToolTip("Show the headlines of one publisher")
+        self.publisher.addItem("All sources", "")
+        self.publisher.currentIndexChanged.connect(lambda _: self._render())
         refresh = QPushButton("Refresh")
         refresh.setObjectName("Primary")
         refresh.clicked.connect(self.refresh)
@@ -444,6 +448,7 @@ class NewsView(QWidget):
         head = QHBoxLayout()
         head.addWidget(_title("News"))
         head.addStretch()
+        head.addWidget(self.publisher)
         head.addWidget(self.filter)
         head.addWidget(self.auto)
         head.addWidget(refresh)
@@ -522,20 +527,30 @@ class NewsView(QWidget):
             self.timer.start()
 
     def refresh(self):
-        from tradebot.news import fetch_news
+        from tradebot.news import fetch_news_report
 
         symbols = self.symbols_fn()
         self.status.emit(f"fetching news for {len(symbols)} symbols …")
-        run_async(lambda: fetch_news(symbols, 100), self._loaded, lambda e: self.status.emit(f"news failed: {e}"))
+        run_async(lambda: fetch_news_report(symbols, 100), self._loaded, lambda e: self.status.emit(f"news failed: {e}"))
 
-    def _loaded(self, items):
-        self.items = items
+    def _loaded(self, result):
+        self.items, errors = result
+        keep = self.publisher.currentData()
+        self.publisher.blockSignals(True)
+        self.publisher.clear()
+        self.publisher.addItem("All sources", "")
+        for name in sorted({n.publisher for n in self.items if n.publisher}, key=str.lower):
+            self.publisher.addItem(name, name)
+        self.publisher.setCurrentIndex(max(self.publisher.findData(keep), 0))
+        self.publisher.blockSignals(False)
         self._render()
-        self.status.emit(f"{len(items)} headlines")
+        failed = f" · {len(errors)} source{'s' if len(errors) != 1 else ''} failed, see Settings" if errors else ""
+        self.status.emit(f"{len(self.items)} headlines{failed}")
 
     def _render(self):
-        needle = self.filter.text().lower()
-        items = [n for n in self.items if not needle or needle in (n.title + n.summary + n.symbol).lower()]
+        needle, publisher = self.filter.text().lower(), self.publisher.currentData()
+        items = [n for n in self.items if (not needle or needle in (n.title + n.summary + n.symbol).lower())
+                 and (not publisher or n.publisher == publisher)]
         self.shown = items
         fill_news_list(self.list, items, self.themes)
         self._show_detail(self.list.currentRow())

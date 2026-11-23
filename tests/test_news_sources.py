@@ -82,3 +82,58 @@ def test_limit_and_default_sources(feeds):
     assert "bitcoinmagazine" not in news.default_sources() and "cnbc" in news.default_sources()
     feeds[SOURCES["cnbc"].url] = RSS
     assert fetch_news_report(["AAPL"], 0, ["cnbc"])[0] == []
+
+
+# -- the user's choice of sources (#194) --------------------------------------------------------------------
+@pytest.fixture
+def config(tmp_path, monkeypatch):
+    path = tmp_path / "config.toml"
+    monkeypatch.setenv("TRADEBOT_CONFIG", str(path))
+    return path
+
+
+def test_enabled_sources_default_until_the_user_chooses(config):
+    assert news.enabled_sources() == news.default_sources()
+    assert news.set_enabled("cnbc", False) and news.set_enabled("bitcoinmagazine", True)
+    on = news.enabled_sources()
+    assert "cnbc" not in on and "bitcoinmagazine" in on and "coindesk" in on  # the rest keeps its default
+    assert news.set_enabled("bitcoinmagazine", True) and news.enabled_sources().count("bitcoinmagazine") == 1
+
+
+def test_fetch_uses_only_the_enabled_sources(config, feeds):
+    feeds[SOURCES["cnbc"].url] = RSS
+    feeds[SOURCES["marketwatch"].url] = RSS
+    news.set_enabled("marketwatch", False)
+    on = news.enabled_sources()
+    assert "cnbc" in on and "marketwatch" not in on
+    items, errors = fetch_news_report(["AAPL"], 10)
+    assert [i.publisher for i in items] == ["Some Wire"] and "marketwatch" not in errors  # never asked
+
+
+def test_custom_feed_is_stored_enabled_and_removable(config, feeds):
+    assert news.add_custom("My | feed", "https://x.example/feed.xml")
+    (sid, src), = news.custom_sources().items()
+    assert sid == "custom:https://x.example/feed.xml" and src.name == "My feed" and sid in news.enabled_sources()
+    assert "cnbc" in news.enabled_sources()  # adding one doesn't change the other choices
+    feeds[src.url] = RSS
+    items, errors = fetch_news_report(["BTC/USDT"], 10, [sid])
+    assert errors == {} and [(i.symbol, i.publisher) for i in items] == [("BTC/USDT", "My feed")]
+    assert news.remove_custom(sid)
+    assert news.custom_sources() == {} and sid not in news.enabled_sources()
+
+
+def test_failed_sources_are_remembered_until_they_work(config, feeds):
+    news.LAST_ERRORS.clear()
+    fetch_news_report(["AAPL"], 10, ["cnbc"])  # not served: fails
+    assert "cnbc" in news.LAST_ERRORS
+    feeds[SOURCES["cnbc"].url] = RSS
+    fetch_news_report(["AAPL"], 10, ["cnbc"])
+    assert "cnbc" not in news.LAST_ERRORS
+
+
+def test_validate_feed(monkeypatch):
+    monkeypatch.setattr(news, "_download", lambda url: {"ok": RSS, "html": b"<html><body><p>hi</body>", "empty": b"<rss><channel/></rss>"}[url.rsplit("/")[-1]])
+    assert news.validate_feed("https://x/ok") == 2
+    for bad in ("https://x/html", "https://x/empty", "ftp://x/ok"):
+        with pytest.raises(ValueError):
+            news.validate_feed(bad)

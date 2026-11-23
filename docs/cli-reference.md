@@ -271,7 +271,7 @@ Arguments: `SYMBOLS` (optional)
 |---|---|---|
 | `--limit` | `25` |  |
 | `--watchlist`, `-w` |  | Without symbols: only this watchlist's (default: all watchlists) |
-| `--source`, `-s` |  | Only these news sources (repeat the option); default: all default-on ones. See `tradebot news --list-sources` |
+| `--source`, `-s` |  | Only these news sources (repeat the option); default: the ones enabled in the settings. See `tradebot news --list-sources` |
 | `--list-sources` |  | Show the available news sources and exit |
 
 ## `tradebot pair`

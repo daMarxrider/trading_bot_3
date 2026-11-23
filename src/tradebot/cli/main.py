@@ -1861,14 +1861,16 @@ def _fmt_cell(col, v):
 @app.command()
 def news(symbols: Annotated[Optional[list[str]], typer.Argument(autocompletion=complete.symbols)] = None, limit: int = 25,
          watchlist: Annotated[Optional[str], typer.Option("--watchlist", "-w", help=WATCHLIST_HELP)] = None,
-         source: Annotated[Optional[list[str]], typer.Option("--source", "-s", help="Only these news sources (repeat the option); default: all default-on ones. See `tradebot news --list-sources`")] = None,
+         source: Annotated[Optional[list[str]], typer.Option("--source", "-s", help="Only these news sources (repeat the option); default: the ones enabled in the settings. See `tradebot news --list-sources`")] = None,
          list_sources: Annotated[bool, typer.Option("--list-sources", help="Show the available news sources and exit")] = False):
     """Latest headlines for symbols (defaults to the watchlists), merged from several RSS feeds and Yahoo."""
-    from tradebot.news import SOURCES, fetch_news_report
+    from tradebot.news import all_sources, enabled_sources, fetch_news_report
 
+    SOURCES = all_sources()
     if list_sources:
+        on = enabled_sources()
         for s in SOURCES.values():
-            console.print(f"{s.id:<16} {s.name:<28} [dim]{s.scope}{'' if s.default else ', off by default'}[/]")
+            console.print(f"{s.id:<16} {s.name:<28} [dim]{s.scope}{', on' if s.id in on else ', off'}[/]")
         return
     unknown = [i for i in source or [] if i not in SOURCES]
     if unknown:

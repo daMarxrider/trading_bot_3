@@ -20,8 +20,20 @@ No accounts or API keys: RSS feeds plus Yahoo Finance. Headlines that several so
 | Bitcoin Magazine | crypto | like the other crypto feeds, but off by default |
 
 A source that is down is skipped (the command line prints a warning); the others still deliver. Feeds are cached for a
-minute. `tradebot news --list-sources` lists the ids, and `--source` picks some of them. Choosing sources in the
-Settings is tracked in #194.
+minute. `tradebot news --list-sources` lists the ids (and which are on), and `--source` picks some of them.
+
+**Settings → News sources** has a checkbox per source, grouped Stocks / Crypto / General. A change applies at the next
+refresh, no restart. A source that failed at its last refresh is marked there. **Add your own feed** takes a name and an
+RSS or Atom address, fetches it once to check it and keeps it, switched on; a feed of your own can be removed again. It is
+a general feed: its headlines are matched to your symbols by ticker or name. The choice is stored in `config.toml`:
+
+```toml
+[news]
+sources = ["cnbc", "coindesk", "custom:https://example.com/feed.xml"]
+custom = ["SEC filings | https://example.com/feed.xml"]
+```
+
+Without a `[news]` table the default-on sources are used. The News page can show the headlines of one publisher.
 
 The Chart's sidebar has the same headlines for the one symbol on the chart (see [Chart](chart.md#sidebar-watchlists-and-news)).
 
