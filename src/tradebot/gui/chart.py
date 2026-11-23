@@ -15,6 +15,7 @@ import pyqtgraph as pg
 from PyQt6.QtCore import QEvent, QObject, QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import (
+    QApplication,
     QColorDialog,
     QComboBox,
     QHBoxLayout,
@@ -45,7 +46,8 @@ from tradebot.gui.common import (
     toolbar_group,
 )
 from tradebot.gui.icons import bind_icon
-from tradebot.gui.drawings import FibItem, MeasureItem, NoteItem, color_of, set_color, to_spec
+from tradebot.gui.drawings import (SNAP_RADIUS, SNAP_RADIUS_TOUCH, FibItem, MeasureItem, NoteItem, color_of, set_color,
+                                   snap_point, snap_time, to_spec)
 from tradebot.gui.news import NewsPanel
 from tradebot.gui.params import ParamDialog
 from tradebot.gui.sidebar import ChartSidebar
@@ -562,6 +564,16 @@ class ChartView(QWidget):
         clear.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         bind_icon(clear, "trash", themes, off="muted", size=14)
         clear.clicked.connect(self.clear_drawings)
+        self.magnet_btn = QToolButton(text="Magnet", checkable=True, toolTip="Snap drawing points to the nearest candle open, "
+                                      "high, low or close (hold Ctrl to flip it while drawing)")
+        self.magnet_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        bind_icon(self.magnet_btn, "magnet", themes, off="muted", on="accent_ink", size=14)
+        self.magnet_btn.setChecked(bool(settings.get(self.MAGNET_KEY, False)) if settings else False)
+        self.magnet_btn.toggled.connect(self._magnet_toggled)
+        self._snap_marker = None  # dot on the value the next point would snap to
+        self._snap_cache = None
+        self._last_view_x = None
+        self._snapping = False
         self.loadouts = LoadoutStore(settings)
         self.loadout_btn = QToolButton(text="Loadouts", toolTip="Saved sets of indicators and a signal")
         self.loadout_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
@@ -574,7 +586,7 @@ class ChartView(QWidget):
         # three groups that wrap onto a second row on narrow windows; the tools (… Clear, Loadouts) stay top right
         bar = FlowLayout(spacing=12, last_right=True)
         for group in ((self.symbol, self.tf, self.bars, self.dates, load), (self.type_box, self.versus, self.style_btn, self.ind_btn, self.algo_box),
-                      (*tool_group, clear, self.loadout_btn)):
+                      (*tool_group, self.magnet_btn, clear, self.loadout_btn)):
             bar.addWidget(toolbar_group(*group))
 
         # -- plot area ---------------------------------------------------------------------------
@@ -1222,6 +1234,15 @@ class ChartView(QWidget):
         if self.df is None or self.df.empty or plot is None:
             return
         pt = plot.vb.mapSceneToView(pos)
+        if plot is self.price:
+            self._last_view_x = pt.x()
+            if self._active_tool() is not None:
+                pt, which = self.snap_view_point(pt)
+                self._show_snap_marker(pt) if which else self._hide_snap_marker()
+            else:
+                self._hide_snap_marker()
+        else:
+            self._hide_snap_marker()
         self._update_preview(plot, pt)
         i = nearest_bar(self._x, pt.x())
         for p, (vline, hline) in self._cross.items():
@@ -1238,6 +1259,103 @@ class ChartView(QWidget):
                          f"L {row.low:.6g}  C {row.close:.6g}  ({chg * 100:+.2f}%)   "
                          f"cursor {self.price_at(pt.y()) if plot is self.price else pt.y():.6g}")
 
+    # -- magnet (#197) ---------------------------------------------------------------------------
+    MAGNET_KEY = "chart.magnet"
+
+    def _magnet_toggled(self, on):
+        if self.settings is not None:
+            self.settings.set(self.MAGNET_KEY, on)
+        if not on:
+            self._hide_snap_marker()
+
+    def magnet_active(self) -> bool:
+        """The magnet button, flipped while Ctrl is held."""
+        flip = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier)
+        return self.magnet_btn.isChecked() != flip
+
+    def _snap_view_ohlc(self):
+        key = (id(self.df), self._log, len(self._x))
+        if self._snap_cache is None or self._snap_cache[0] != key:
+            cols = tuple(np.asarray(self._ty(self.df[c].to_numpy(dtype=float))) for c in ("open", "high", "low", "close"))
+            self._snap_cache = (key, cols)
+        return self._snap_cache[1]
+
+    def snap_view_point(self, pt):
+        """``pt`` (view coordinates) snapped to the nearest candle O/H/L/C within the radius: (QPointF, which|None)."""
+        if self.df is None or self.df.empty or not self.magnet_active():
+            return pt, None
+        dx, dy = self.price.vb.viewPixelSize()
+        if not dx or not dy:
+            return pt, None
+        radius = SNAP_RADIUS_TOUCH if self.themes.touch else SNAP_RADIUS
+        hit = snap_point(pt.x(), pt.y(), self._x, self._snap_view_ohlc(), 1 / dx, 1 / dy, radius)
+        return (pt, None) if hit is None else (QPointF(hit[0], hit[1]), hit[2])
+
+    def _show_snap_marker(self, pt):
+        if self._snap_marker is None:
+            self._snap_marker = pg.ScatterPlotItem(size=9, pxMode=True)
+            self._snap_marker.setZValue(100)
+            self._snap_marker.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            self.price.addItem(self._snap_marker, ignoreBounds=True)
+        t = self.themes.current
+        self._snap_marker.setData([pt.x()], [pt.y()], brush=pg.mkBrush(qcolor(t.accent)), pen=pg.mkPen(qcolor(t.text), width=1.5))
+        self._snap_marker.setVisible(True)
+
+    def _hide_snap_marker(self):
+        if self._snap_marker is not None:
+            self._snap_marker.setVisible(False)
+
+    def _snap_handle_move(self, roi, start):
+        """While a handle of ``roi`` is dragged: pull the moved one onto a candle value."""
+        if self._snapping or not self.magnet_active():
+            return
+        handles = roi.getHandles()
+        now = [roi.mapToParent(h.pos()) for h in handles]
+        if len(start) != len(now):
+            return
+        moved = max(range(len(now)), key=lambda i: abs(now[i].x() - start[i].x()) + abs(now[i].y() - start[i].y()))
+        if now[moved] == start[moved]:
+            return
+        pt, which = self.snap_view_point(now[moved])
+        if which is not None:
+            self._snapping = True
+            try:
+                roi.movePoint(handles[moved], pt, finish=False)
+            finally:
+                self._snapping = False
+
+    def _hook_snapping(self, item):
+        if isinstance(item, NoteItem):
+            item.snap = lambda x, y: (lambda p: (p[0].x(), p[0].y()))(self.snap_view_point(QPointF(x, y)))
+        elif isinstance(item, pg.InfiniteLine):
+            item.sigPositionChanged.connect(lambda line: self._snap_line(line))
+        else:
+            start: list = []
+            item.sigRegionChangeStarted.connect(
+                lambda *_: start.__setitem__(slice(None), [item.mapToParent(h.pos()) for h in item.getHandles()]))
+            item.sigRegionChanged.connect(lambda *_: self._snap_handle_move(item, start))
+
+    def _snap_line(self, line):
+        """A level (price, at the cursor's candle) or a time line (candle time) is being dragged."""
+        if self._snapping or not self.magnet_active() or self.df is None or self.df.empty:
+            return
+        dx, dy = self.price.vb.viewPixelSize()
+        radius = SNAP_RADIUS_TOUCH if self.themes.touch else SNAP_RADIUS
+        if line.angle == 90:
+            v = snap_time(line.value(), self._x, 1 / dx if dx else 0, radius)
+        elif self._last_view_x is not None:
+            hit = snap_point(self._last_view_x, line.value(), self._x, self._snap_view_ohlc(),
+                             1 / dx if dx else 0, 1 / dy if dy else 0, radius)
+            v = hit[1] if hit else None
+        else:
+            v = None
+        if v is not None and v != line.value():
+            self._snapping = True
+            try:
+                line.setValue(v)
+            finally:
+                self._snapping = False
+
     def _tool_toggled(self, key, on):
         if on:
             for k, btn in self.tools.items():
@@ -1245,6 +1363,7 @@ class ChartView(QWidget):
                     btn.setChecked(False)
         self._pending_point = None
         self._clear_preview()
+        self._hide_snap_marker()
 
     def _clear_preview(self):
         if self._preview is not None:
@@ -1297,11 +1416,16 @@ class ChartView(QWidget):
         if tool is None or not self.price.sceneBoundingRect().contains(scene_pos):
             return
         pt = self.price.vb.mapSceneToView(scene_pos)
+        raw_x = pt.x()
+        pt, _ = self.snap_view_point(pt)
         if tool == "hline":
             self._add_level(self.price_at(pt.y()))
             return
         if tool == "vline":
-            self._add_vline(pt.x())
+            dx = self.price.vb.viewPixelSize()[0]
+            t = snap_time(raw_x, self._x, 1 / dx if dx else 0,
+                          SNAP_RADIUS_TOUCH if self.themes.touch else SNAP_RADIUS, self.magnet_active())
+            self._add_vline(raw_x if t is None else t)
             return
         if tool == "text":
             text = self._ask_text("")
@@ -1520,6 +1644,7 @@ class ChartView(QWidget):
 
     def _add_drawing(self, item, tool, save: bool = True):
         item._kind = tool
+        self._hook_snapping(item)
         self.price.addItem(item)
         self.drawings.append(item)
         self.tools[tool].setChecked(False)
