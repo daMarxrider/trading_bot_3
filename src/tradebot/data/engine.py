@@ -68,6 +68,21 @@ class MarketDataEngine:
         self._cache: dict[tuple, pd.DataFrame] | None = {} if cache else None
         self.disk = DiskCache.from_config() if disk is True else (disk or None)
         self._refreshed: dict[tuple[str, str], float] = {}  # series -> when its newest candles were fetched
+        self._market = None
+
+    @property
+    def market(self):
+        """Crypto market data beyond candles (#166: funding rate, open interest, Fear & Greed, order book), cached
+        next to the candles. Replace it to inject other sources."""
+        if self._market is None:
+            from tradebot.data.market import MarketData
+
+            self._market = MarketData(cache=self.disk.folder if self.disk is not None else None)
+        return self._market
+
+    @market.setter
+    def market(self, value) -> None:
+        self._market = value
 
     def clear_memory(self) -> None:
         """Forget the candles held in memory, e.g. after the disk cache was cleared."""

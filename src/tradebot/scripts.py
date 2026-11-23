@@ -187,7 +187,7 @@ def reload_script(path: Path, source: str, ohlc: OHLC | None = None) -> ReloadRe
     if not classes:
         return restore(ValueError("define a BaseIndicator subclass with a name"), "No indicator found")
     data = ohlc if ohlc is not None else sample_ohlc()
-    data = OHLC(*(None if a is None else a[-DRY_RUN_BARS:] for a in data.fields()))
+    data = data.apply(lambda a: a[-DRY_RUN_BARS:])
     for cls in classes:
         try:
             ok, why = is_screenable(cls)
