@@ -663,12 +663,12 @@ class ChartView(QWidget):
         self.sidebar = ChartSidebar(settings, touch=themes.touch, themes=themes)
         self.news = NewsPanel(themes)
         self.sidebar.add_category("news", "news", "News", self.news)
-        self.info = InfoPanel(themes)
-        self.sidebar.add_category("info", "info", "Fundamentals", self.info)
         self.watchlists = WatchlistPanel(engine, themes, settings, symbol_search)
         self.watchlists.open_symbol.connect(self.open_symbol)
         self.watchlists.status.connect(self.status)
         self.sidebar.add_category("watchlists", "star", "Watchlists", self.watchlists)
+        self.info = InfoPanel(themes)  # last, so the pages that were there keep their place in the strip
+        self.sidebar.add_category("info", "info", "Fundamentals", self.info)
         self.sidebar.shown.connect(self._sidebar_shown)
         self.sidebar.toggle.clicked.connect(self._sidebar_toggled)
 
