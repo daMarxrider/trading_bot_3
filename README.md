@@ -29,6 +29,14 @@ desktop app's **About** button show the disclaimer too.
 Market data comes from third-party services under their own terms; Yahoo Finance data, for example, is
 meant for personal use. Check each broker's API terms before automating trades with it.
 
+## Screenshots
+
+The desktop app in its two main themes (synthetic demo candles). Up is blue-teal and down is vermilion, so the
+chart reads the same with red-green colour blindness.
+
+![Chart in the Graphite theme](docs/screenshots/chart-graphite.png)
+![Chart in the Paper theme](docs/screenshots/chart-paper.png)
+
 ## Install
 
 ```sh
