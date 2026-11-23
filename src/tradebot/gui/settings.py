@@ -54,7 +54,8 @@ NOTIFY_SECRETS = {"token", "password", "url"}  #: shown as dots (a webhook URL i
 NOTIFY_LABELS = {"chat_id": "Chat ID", "url": "Webhook URL", "host": "SMTP server", "to": "To", "user": "User",
                  "from": "From (optional)"}
 NOTIFY_EVENTS = {"trade": "A bot bought or sold", "error": "A bot step failed", "risk": "A risk guard stopped trading",
-                 "scanner": "Matches of a scan sent with tradebot scan --notify"}
+                 "scanner": "Matches of a scan sent with tradebot scan --notify, and scheduled scans",
+                 "alert": "A price or indicator alert fired (tradebot alert)"}
 
 
 class SettingsDialog(QDialog):

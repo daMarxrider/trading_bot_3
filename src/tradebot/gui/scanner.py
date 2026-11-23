@@ -46,6 +46,7 @@ from PyQt6.QtWidgets import (
 from tradebot import scanner as engine_scan
 from tradebot import scripts, universes
 from tradebot.config import Settings
+from tradebot.core import mtf
 from tradebot.core.registry import resolve_params
 from tradebot.core.series import OHLC
 from tradebot.gui.common import DataFrameModel, Panes, pct, run_async, tooltip
@@ -421,13 +422,19 @@ class ScannerView(QWidget):
         for key, label in TF_LABELS.items():
             self.tf.addItem(label, key)
         self.tf.currentIndexChanged.connect(self._tf_changed)
+        self.ind_tf = QComboBox(toolTip="Run the indicator on longer candles than the scan's (#161), e.g. the daily "
+                                        "RSI in a 1h scan; the values are those of the last closed longer candle")
+        self.ind_tf.addItem("indicator: same", None)
+        for key, label in TF_LABELS.items():
+            self.ind_tf.addItem(f"indicator: {label}", key)
+        self.ind_tf.currentIndexChanged.connect(self._ind_tf_changed)
         self.add_column_btn = QPushButton("＋ Column")
         self.add_column_btn.clicked.connect(lambda: self.column_menu().exec(self.add_column_btn.mapToGlobal(
             self.add_column_btn.rect().bottomLeft())))
         self.scan_btn = QPushButton("Scan", objectName="Primary")
         self.scan_btn.clicked.connect(self.start_scan)
         bar = QHBoxLayout()
-        for w in (self.source_btn, self.indicator_btn, self.params_btn, self.tf, self.add_column_btn):
+        for w in (self.source_btn, self.indicator_btn, self.params_btn, self.tf, self.ind_tf, self.add_column_btn):
             bar.addWidget(w)
         bar.addStretch()
         bar.addWidget(self.scan_btn)
@@ -539,6 +546,9 @@ class ScannerView(QWidget):
         self.tf.blockSignals(True)
         self.tf.setCurrentIndex(max(0, self.tf.findData(tf)))
         self.tf.blockSignals(False)
+        self.ind_tf.blockSignals(True)
+        self.ind_tf.setCurrentIndex(max(0, self.ind_tf.findData(self._get("indicator_tf"))))
+        self.ind_tf.blockSignals(False)
         self._load_indicator_state()
         source = self._get("source") or {}
         self._set_source(source.get("kind", "watchlist"), source.get("key", ""), restoring=True)
@@ -654,6 +664,16 @@ class ScannerView(QWidget):
     @property
     def timeframe(self) -> str:
         return self.tf.currentData()
+
+    def _ind_tf_changed(self, *_):
+        self._save("indicator_tf", self.ind_tf.currentData())
+        self._check_stale()
+
+    @property
+    def indicator_tf(self) -> str | None:
+        """The longer timeframe the indicator runs on (#161); None: the scan's own, or one not longer than it."""
+        tf = self.ind_tf.currentData()
+        return tf if tf and mtf.seconds(tf) > mtf.seconds(self.timeframe) else None
 
     # -- source -------------------------------------------------------------------------------------
     def default_watchlist(self) -> str:
@@ -827,7 +847,8 @@ class ScannerView(QWidget):
 
     def _row_opened(self, index):
         symbol = self.model.df.iat[index.row(), 0]
-        self.open_chart.emit(symbol, self.timeframe, self.cls.name, self.params)
+        tf = self.indicator_tf
+        self.open_chart.emit(symbol, self.timeframe, self.cls.name, {**self.params, **({"tf": tf} if tf else {})})
 
     def _style_stale(self):
         stale = self.result is not None and self.last_sig is not None and self._signature() != self.last_sig
@@ -836,7 +857,7 @@ class ScannerView(QWidget):
     # -- scan ---------------------------------------------------------------------------------------
     def _signature(self):
         return (self.source, hash(tuple(self.symbols)), self.cls.name, id(self.cls), tuple(sorted(self.params.items())),
-                self.timeframe, repr(self.active_filters()))
+                self.timeframe, self.indicator_tf, repr(self.active_filters()))
 
     def _check_stale(self):
         stale = self.last_sig is not None and not self.scanning and self._signature() != self.last_sig
@@ -848,7 +869,8 @@ class ScannerView(QWidget):
         name = universes.INDICES[key].title if kind == "index" else key
         args = ", ".join(f"{v:g}" for v in self.params.values())
         ind = pretty(self.cls.name) + (f" ({args})" if args else "")
-        return f"Scanning {name} with {ind} on {TF_LABELS[self.timeframe]} …"
+        on = f" ({TF_LABELS[self.indicator_tf]} candles)" if self.indicator_tf else ""
+        return f"Scanning {name} with {ind}{on} on {TF_LABELS[self.timeframe]} …"
 
     def start_scan(self):
         if self.scanning:
@@ -858,6 +880,7 @@ class ScannerView(QWidget):
             return
         symbols, name, params, tf = list(self.symbols), self.cls.name, self.params, self.timeframe
         filters, sig, cls = self.active_filters(), self._signature(), self.cls
+        extra = {"indicator_tf": self.indicator_tf} if self.indicator_tf else {}
         self._cancel.clear()
         self.scanning = True
         self.scan_btn.setEnabled(False)
@@ -876,7 +899,7 @@ class ScannerView(QWidget):
         def work():
             try:
                 return "ok", self.scan_fn(symbols, name, params, tf, filters, progress=self._progress.emit,
-                                          cancel=self._cancel.is_set)
+                                          cancel=self._cancel.is_set, **extra)
             except engine_scan.ScanBusy:
                 return "busy", None
 

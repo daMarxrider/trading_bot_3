@@ -8,6 +8,9 @@ algorithm's target position is evaluated and the bot buys/sells to match it.
 ``max_trading_value``). Dry-run is the default; nothing is sent unless
 ``dry_run=False``.
 
+With a sizing model (``tradebot.algorithms.sizing``, #147) the entry buys ``stake`` times the size instead of
+the whole stake; the target it follows is the algorithm's own signal.
+
 A target above 0.5 buys; once in, a lower target sells that share of the holding (a combo's take-profits in
 steps scale out, #150) and a target of 0 sells everything. The bot follows the same rules as the backtest
 (the algorithm decides on the closed candles), but acts at the close: a combo's intrabar stop that the
@@ -30,6 +33,7 @@ from tradebot.algorithms.base import BaseAlgorithm
 from tradebot.brokers.base import BaseBroker
 from tradebot.core.models import Order, Side
 from tradebot.core.timeframes import to_timedelta
+from tradebot.journal import Journal
 from tradebot.live.risk import RiskEvent, RiskGuard, RiskLimits
 
 log = logging.getLogger(__name__)
@@ -65,6 +69,7 @@ class TradingBot:
     on_risk: Callable[[RiskEvent], None] | None = None  #: called on every risk trigger (notification hook)
     entry_price: float = 0.0  #: price the current position was bought at
     guard: RiskGuard | None = field(default=None, init=False, repr=False)
+    journal: Journal | None = None  #: every order is stored here (#159); see :mod:`tradebot.journal`
 
     def _risk_trigger(self, e: RiskEvent) -> None:
         notify.notify("risk", f"Risk guard: {self.symbol} {e.kind}", e.message)
@@ -89,6 +94,23 @@ class TradingBot:
             df = df.iloc[:-1]  # the last candle is still forming
         return df
 
+    @property
+    def mode(self) -> str:
+        return "dry" if self.dry_run else "paper" if getattr(self.broker, "simulated", False) else "live"
+
+    def _journal(self, event: BotEvent) -> None:
+        if not self.journal or event.action not in ("buy", "sell"):
+            return
+        try:
+            bot = f"{self.algorithm.__class__.__name__} {self.timeframe}"
+            if event.order:
+                self.journal.record_order(event.order, self.broker, mode=self.mode, bot=bot, note=event.note)
+            else:  # dry run: nothing was sent, record the intended fill at the candle's close
+                self.journal.record(self.symbol, event.action, event.amount, event.price, mode=self.mode,
+                                    broker=getattr(self.broker, "name", ""), bot=bot, note=event.note)
+        except Exception:  # a broken journal must never stop the bot
+            log.exception("journal write failed for %s", self.symbol)
+
     def _sell(self, event: BotEvent, target: float = 0.0) -> None:
         """Sell the whole holding (``target`` 0) or scale out to ``target`` of the position."""
         available = self.broker.get_balance().get(self.base_asset) if not self.dry_run else None
@@ -111,7 +133,12 @@ class TradingBot:
 
     def step(self) -> BotEvent:
         df = self.closed_candles()
-        target = float(self.algorithm.run(df).iloc[-1])
+        size = 1.0
+        if hasattr(self.algorithm, "run_sized"):  # position sizing (#147): follow the signal, size the entry
+            signal, sizes = self.algorithm.run_sized(df)
+            target, size = float(signal.iloc[-1]), float(sizes.iloc[-1])
+        else:
+            target = float(self.algorithm.run(df).iloc[-1])
         price = float(df["close"].iloc[-1])
         event = BotEvent(datetime.now(timezone.utc), self.symbol, target, "hold", price, dry_run=self.dry_run)
         fraction = self.fraction if self.fraction > 0 else 1.0
@@ -122,7 +149,9 @@ class TradingBot:
             if self.risk.close_on_halt and self.holding > 0:
                 self._sell(event)
         elif target > 0.5 and self.holding <= 0:
-            event.action, event.amount = "buy", self.stake / price
+            event.action, event.amount = "buy", self.stake * size / price
+            if size < 1:
+                event.note = f"sized to {size:.0%} of the stake"
             if self.guard:
                 market = self.broker.get_ticker(self.symbol).last if self.risk.price_band else None
                 veto = self.guard.check_entry(event.amount, price, self.holding, market)
@@ -136,6 +165,7 @@ class TradingBot:
         elif self.holding > 0 and target < fraction - 1e-9:
             self._sell(event, target)
         self.events.append(event)
+        self._journal(event)
         log.info("%s %s target=%.2f price=%.6g amount=%.6g%s%s", self.symbol, event.action, target, price,
                  event.amount, " (dry run)" if self.dry_run else "", f" [{event.note}]" if event.note else "")
         if self.on_event:

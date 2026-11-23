@@ -324,3 +324,27 @@ def test_main_window_has_the_scanner_page_after_the_screener(app, themes, tmp_pa
     win.scanner.open_chart.emit("AAPL", "1h", "ma_cross", {"fast": 5})
     assert win.chart.tf.currentText() == "1h" and any(i.name == "ma_cross" for i in win.chart.indicators)
     QThreadPool.globalInstance().waitForDone(3000)
+
+
+def test_indicator_timeframe_goes_to_the_scan_and_the_chart(make):
+    """#161: the indicator on longer candles than the scan's; one not longer than the scan's is ignored."""
+    calls = []
+
+    def scan_fn(symbols, indicator, params, timeframe, filters, progress=None, cancel=None, **kw):
+        calls.append(kw)
+        return fake_scan(symbols, indicator, params, timeframe, filters)
+
+    v = make(scan_fn=scan_fn)
+    v.tf.setCurrentIndex(v.tf.findData("1h"))
+    v.ind_tf.setCurrentIndex(v.ind_tf.findData("1d"))
+    assert v.indicator_tf == "1d" and "1D candles" in v._scan_text()
+    v.start_scan()
+    wait_until(lambda: v.result is not None)
+    assert calls[-1] == {"indicator_tf": "1d"}
+    charted = []
+    v.open_chart.connect(lambda *a: charted.append(a))
+    v._row_opened(v.model.index(0, 0))
+    assert charted[-1][3]["tf"] == "1d"
+    v.ind_tf.setCurrentIndex(v.ind_tf.findData("15m"))
+    assert v.indicator_tf is None
+    assert make()._get("indicator_tf") == "15m"  # remembered

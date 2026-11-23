@@ -4,7 +4,7 @@
 
 A loadout is plain JSON, kept in ``settings.json`` (:class:`tradebot.config.Settings`)::
 
-    {"indicators": [{"name": "bbands", "params": {"period": 20, "width": 2.0}}, ...],
+    {"indicators": [{"name": "bbands", "params": {"period": 20, "width": 2.0}}, ...],  # + "tf": "1d" (#161)
      "signal": {"name": "vote", "params": {...}, "members": ["rsi_threshold", "macd_cross"]} | null,
      "line": false}
 
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from tradebot.algorithms import ALGORITHMS, build_algorithm
 from tradebot.algorithms.pool import RULES  # pool members can be indicators
+from tradebot.core.timeframes import TIMEFRAMES
 from tradebot.indicators import INDICATORS
 
 KEY = "chart.loadouts"
@@ -28,7 +29,8 @@ def capture(indicators, algorithm, line: bool) -> dict:
         members = getattr(algorithm, "members", None)  # vote ensembles
         signal = {"name": algorithm.name, "params": dict(algorithm.values),
                   "members": [m.name for m in members] if members else None}
-    return {"indicators": [{"name": ind.name, "params": dict(ind.values)} for ind in indicators],
+    return {"indicators": [{"name": ind.name, "params": dict(ind.values),
+                            **({"tf": ind.tf} if getattr(ind, "tf", None) else {})} for ind in indicators],
             "signal": signal, "line": bool(line)}
 
 
@@ -41,7 +43,8 @@ def restore(data: dict):
             skipped.append(name)
             continue
         cls = INDICATORS.get(name)
-        indicators.append(cls(**_valid(cls.params, spec.get("params", {}))))
+        tf = spec.get("tf") if spec.get("tf") in TIMEFRAMES else None  # a higher timeframe (#161)
+        indicators.append(cls(tf=tf, **_valid(cls.params, spec.get("params", {}))))
     algorithm = None
     signal = data.get("signal")
     if signal:

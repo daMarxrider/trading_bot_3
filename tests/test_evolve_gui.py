@@ -67,6 +67,19 @@ def test_settings_from_the_form(view):
     assert sorted(kw["indicators"]) == ["ema", "rsi"] and kw["seed"] is None  # random
 
 
+def test_higher_timeframes_from_the_form(view):
+    """#161: ticked higher timeframes longer than the candles; none from scratch."""
+    assert view.settings_kwargs()["timeframes"] == ()
+    view.tf.setCurrentText("1h")
+    view.higher_tfs["1d"].setChecked(True)
+    view.higher_tfs["1w"].setChecked(True)
+    assert view.settings_kwargs()["timeframes"] == ("1d", "1w")
+    view.tf.setCurrentText("1d")
+    assert view.settings_kwargs()["timeframes"] == ("1w",)  # 1d is not longer than daily candles
+    view.from_scratch.setChecked(True)
+    assert view.settings_kwargs()["timeframes"] == ()
+
+
 def test_from_scratch_box(view):
     assert not view.from_scratch.isChecked() and view.indicators_card.isEnabled()
     view.from_scratch.setChecked(True)

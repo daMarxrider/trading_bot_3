@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QStackedWidget,
+    QTabWidget,
     QTableView,
     QToolButton,
     QVBoxLayout,
@@ -46,11 +47,14 @@ from PyQt6.QtWidgets import (
 from tradebot.algorithms import ALGORITHMS, algorithm_names, build_algorithm
 from tradebot.algorithms.builtin import VotingEnsemble
 from tradebot.algorithms.combo import FILLS, LIMITS, LOGIC, RISK, Combo, check, combine, save_combo, terms
+from tradebot.algorithms.direction import DIRECTIONS, directed
+from tradebot.algorithms.sizing import DESCRIPTIONS as SIZING_MODELS, sized
 from tradebot.algorithms.pool import RULES, PoolEnsemble, default_pool
 from tradebot.backtest.baselines import BUY_HOLD, MONTHLY, baselines, buy_and_hold, monthly_investing
 from tradebot.backtest import report as rep
 from tradebot.backtest.engine import bps
 from tradebot.backtest.metrics import fmt
+from tradebot.backtest.margin import Margin
 from tradebot.backtest.slippage import configured_bps
 from tradebot.config import Settings, watchlists
 from tradebot.brokers import BROKERS, create_broker
@@ -586,9 +590,11 @@ class PortfolioView(QWidget):
     status = pyqtSignal(str)
     loaded = pyqtSignal(list)
 
-    def __init__(self, engine, themes: ThemeManager):
+    def __init__(self, engine, themes: ThemeManager, journal_factory=None):
         super().__init__()
         self.engine, self.themes = engine, themes
+        self._journal_factory = journal_factory
+        self._pf = None  # the last loaded PortfolioSummary, input of the analytics (#169)
         self.checks = {name: QCheckBox(name) for name in BROKERS.names()}
         self.checks.get("scalable", next(iter(self.checks.values()))).setChecked(True)
         load = QPushButton("Load portfolio")
@@ -628,6 +634,92 @@ class PortfolioView(QWidget):
         lay.addWidget(TableWithEmpty(table, self.model, themes, "wallet", "No portfolio loaded",
                                      "Tick your brokers and press Load portfolio to see holdings and dividend income."), 1)
 
+        # analytics (#169)
+        self.benchmark = QLineEdit("SPY", toolTip="Benchmark symbol, e.g. SPY, URTH (MSCI World) or BTC/USDT")
+        self.targets = QLineEdit(placeholderText="target allocation, e.g. AAPL=40, MSFT=40, BTC/USDT=20",
+                                 toolTip="Weights in percent (any scale, normalised); holdings not listed are sold")
+        self.analyze_btn = QPushButton("Analyze")
+        self.analyze_btn.clicked.connect(self.analyze)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Benchmark:"))
+        row.addWidget(self.benchmark)
+        row.addWidget(self.targets, 2)
+        row.addWidget(self.analyze_btn)
+        self.perf_summary = QLabel("Load the portfolio, then Analyze: needs the journal for the history.")
+        self.perf_summary.setWordWrap(True)
+        self.perf_plot = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem()})
+        self.perf_plot.addLegend()
+        self.perf_plot.setMinimumHeight(180)
+        self.corr_model, self.risk_model, self.reb_model = DataFrameModel(), DataFrameModel(formats={
+            "weight": pct, "volatility": pct, "risk_share": pct}), DataFrameModel(formats={
+            "value": lambda v: f"{v:,.2f}", "weight": pct, "target": pct, "trade_value": lambda v: f"{v:+,.2f}",
+            "quantity": lambda v: f"{v:+,.6g}"})
+        perf = QWidget()
+        pl = QVBoxLayout(perf)
+        pl.addWidget(self.perf_summary)
+        pl.addWidget(self.perf_plot, 1)
+        self.analytics = QTabWidget()
+        self.analytics.addTab(perf, "Performance")
+        for title, model in (("Correlation", self.corr_model), ("Risk", self.risk_model),
+                             ("Rebalancing", self.reb_model)):
+            self.analytics.addTab(_table(model), title)
+        lay.addLayout(row)
+        lay.addWidget(self.analytics, 2)
+
+    def analyze(self):
+        from tradebot.portfolio_analytics import analyse, parse_targets
+
+        if self._pf is None:
+            self.status.emit("load the portfolio first")
+            return
+        try:
+            targets = parse_targets(self.targets.text()) if self.targets.text().strip() else None
+        except ValueError as e:
+            self.status.emit(f"target allocation: {e}")
+            return
+        from tradebot.journal import Journal
+
+        pf, bench, engine = self._pf, self.benchmark.text().strip(), self.engine
+        factory = self._journal_factory or Journal
+        self.status.emit("analysing the portfolio …")
+
+        def work():
+            j = factory()
+            fills = j.fills("real")
+            j.close()
+            first = min((pd.Timestamp(f["time"]) for f in fills), default=None)
+            since = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=365)
+            if first is not None:
+                first = first.tz_localize("UTC") if first.tzinfo is None else first
+                since = min(since, first - pd.Timedelta(days=5))
+            return analyse(lambda s: engine.get_ohlc(s, "1d", start=since)["close"], pf, fills, bench, targets)
+
+        run_async(work, self.show_analytics, lambda e: self.status.emit(f"analysis failed: {e}"))
+
+    def show_analytics(self, out: dict):
+        t = self.themes.current
+        self.perf_plot.clear()
+        perf = out["performance"]
+        s = perf["summary"] if perf else {}
+        if s:
+            for (name, ser), color in zip((("Portfolio (TWR)", perf["twr"]), (self.benchmark.text() or "Benchmark",
+                                                                             perf["bench"])), t.series):
+                if len(ser):
+                    self.perf_plot.plot(epoch_seconds(ser.index), ser.to_numpy(dtype=float) * 100,
+                                        pen=pg.mkPen(qcolor(color), width=2), name=name)
+            self.perf_summary.setText(
+                f"Value {s['value']:,.2f}, paid in {s['invested']:,.2f}, profit {s['profit']:,.2f}. "
+                f"Time-weighted {pct(s['twr'])}, money-weighted {pct(s['mwr'])} (annualised {pct(s['mwr_annual'])}), "
+                f"benchmark {pct(s['benchmark'])}, vs benchmark {pct(s['excess'])}.")
+        else:
+            self.perf_summary.setText("No journal fills with price data: the history needs orders recorded in the journal.")
+        corr, risk, reb = out["correlation"], out["risk"], out["rebalance"]
+        self.corr_model.set_frame(corr.round(2).reset_index(names="symbol") if corr is not None else pd.DataFrame())
+        self.risk_model.set_frame(risk.sort_values("risk_share", ascending=False).reset_index(names="symbol")
+                                  if risk is not None else pd.DataFrame())
+        self.reb_model.set_frame(reb if reb is not None else pd.DataFrame())
+        self.status.emit("portfolio analysis done")
+
     def load(self):
         from tradebot.portfolio import build_portfolio
 
@@ -641,6 +733,7 @@ class PortfolioView(QWidget):
         run_async(work, self._loaded, lambda e: self.status.emit(f"portfolio failed: {e}"))
 
     def _loaded(self, pf):
+        self._pf = pf
         self.kpis["value"].set(f"{pf.total_value:,.2f}")
         self.kpis["income"].set(f"{pf.annual_income:,.2f}")
         self.kpis["current"].set(pct(pf.current_yield))
@@ -708,6 +801,28 @@ class BacktestView(QWidget):
         self.algo = QComboBox()
         self.algo.addItems(algorithm_names())
         self.algo.currentTextChanged.connect(self._algo_changed)
+        self.sizing = QComboBox()  # position sizing (#147)
+        self.sizing.addItem("Full size", "none")
+        for key, text in SIZING_MODELS.items():
+            self.sizing.addItem(text.split(":")[0], key)
+        _explain_choices(self.sizing, explain("sizing"), {k: explain(f"sizing_{k}") for k in ("none", *SIZING_MODELS)})
+        self.sizing.currentIndexChanged.connect(lambda _: self._members_changed())
+        self.direction = QComboBox()  # shorts (#149), backtests only
+        for key, text in DIRECTIONS.items():
+            self.direction.addItem(text.split(":")[0], key)
+        self.leverage = QDoubleSpinBox()  # liquidation is modelled (#149)
+        self.leverage.setRange(1.0, 125.0)
+        self.leverage.setDecimals(1)
+        self.leverage.setSuffix("x")
+        self.borrow_fee = QDoubleSpinBox()  # % a year on a short's value
+        self.borrow_fee.setRange(0.0, 100.0)
+        self.borrow_fee.setDecimals(2)
+        self.borrow_fee.setSuffix(" % / year")
+        self.funding = QDoubleSpinBox()  # % per 8 hours, perpetuals
+        self.funding.setRange(-1.0, 1.0)
+        self.funding.setDecimals(4)
+        self.funding.setSingleStep(0.001)
+        self.funding.setSuffix(" % / 8 h")
         self.params = ParamForm({})
         self.members = MemberPicker()
         self.members.changed.connect(self._members_changed)
@@ -814,7 +929,10 @@ class BacktestView(QWidget):
         for label, w, term in (("Symbols", symbol_row, "symbol"), ("Timeframe", self.tf, "timeframe"),
                                ("Candles", self.bars, "candles"), ("Dates", self.dates, "dates"),
                                ("Fee / side", self.fee, "fee"), ("Slippage / side", self.slippage, "slippage"),
-                               ("Monthly amount", self.dca_amount, "dca_amount"), ("Algorithm", self.algo, "algorithm")):
+                               ("Monthly amount", self.dca_amount, "dca_amount"), ("Algorithm", self.algo, "algorithm"),
+                               ("Position sizing", self.sizing, "sizing"), ("Direction", self.direction, "direction"),
+                               ("Leverage", self.leverage, "leverage"), ("Borrow fee", self.borrow_fee, "borrow_fee"),
+                               ("Funding", self.funding, "funding")):
             _explained_row(form, label, w, term)
         opt_form = QFormLayout()
         for label, w, term in (("Method", self.method, "method"), ("Population / swarm", self.population, "population"),
@@ -932,6 +1050,11 @@ class BacktestView(QWidget):
         self.report_stats.setToolTip("<qt>" + "<br>".join(f"<b>{k.replace('_', ' ')}</b>: {explain(k)}" for k in (
             "expectancy", "avg_win", "avg_loss", "longest_losing_streak", "time_under_water",
             "longest_under_water_days", "avg_holding_days")) + "</qt>")
+        self._report_regimes = None  # per-regime table of the report (#168)
+        self.regime_stats = QLabel(wordWrap=True)
+        self.regime_stats.setTextFormat(Qt.TextFormat.RichText)
+        self.regime_stats.setToolTip(tooltip(explain("regime_table")))
+        self.regime_stats.hide()
         self.underwater = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem()})
         self.underwater.setMinimumHeight(110)
         self.underwater.showGrid(x=True, y=True, alpha=0.15)
@@ -949,7 +1072,7 @@ class BacktestView(QWidget):
         export_row = QHBoxLayout()
         export_row.addWidget(self.export_csv)
         export_row.addWidget(self.export_html)
-        self.report_card = card(self.report_title, self.report_stats, self.underwater, self.heatmap)
+        self.report_card = card(self.report_title, self.report_stats, self.regime_stats, self.underwater, self.heatmap)
         self.report_card.layout().addLayout(export_row)
         self.report_card.hide()
         right.add(self.report_card, 3, scroll=True)
@@ -1056,6 +1179,18 @@ class BacktestView(QWidget):
     def _build(self):
         """The selected algorithm with default parameters; a vote or a pool with the checked members."""
         name = self.algo.currentText()
+        inner, direction = self._build_inner(name), self.direction.currentData()
+        if direction != "long" and getattr(inner, "fills", "close") == "intrabar":
+            self.status.emit("shorts need fills at the close: trading long only")
+            direction = "long"
+        return sized(directed(inner, direction), self.sizing.currentData())
+
+    def _margin(self) -> Margin | None:
+        """Leverage, borrow fee and funding (#149); None when they are all off."""
+        lev, borrow, funding = self.leverage.value(), self.borrow_fee.value() / 100, self.funding.value() / 100
+        return Margin(lev, borrow=borrow, funding=funding) if (lev != 1.0 or borrow or funding) else None
+
+    def _build_inner(self, name: str):
         if ALGORITHMS.get(name) is PoolEnsemble:
             lo, hi = self.min_members.value(), self.max_members.value()
             return PoolEnsemble(self.pool.selected(), min_members=lo, max_members=max(lo, hi) if hi else None)
@@ -1131,11 +1266,11 @@ class BacktestView(QWidget):
         from tradebot.backtest import backtest
 
         algo, fee, amount = self._algorithm(), self.fee.value(), self._amount
-        slip = bps(self.slippage.value())
+        slip, margin = bps(self.slippage.value()), self._margin()
         self._busy(True)
 
         def one(df):
-            res = backtest(df, algo, fee=fee, slippage=slip)
+            res = backtest(df, algo, fee=fee, slippage=slip, margin=margin)
             return df, {"backtest": res, "_baselines": {"backtest": baselines(df, res, fee, amount=amount, slippage=slip)},
                         "_plot_baselines": self._plot_baselines(df, fee, amount, slip)}
 
@@ -1218,6 +1353,8 @@ class BacktestView(QWidget):
                       aggregate=self.aggregate.currentText(), align=self.align.isChecked(),
                       min_symbols_beating=self.min_beating.value(), samples=self.samples.value(),
                       sample_length=self.sample_length.value())
+        if (margin := self._margin()) is not None:
+            kwargs["margin"] = margin
         if self.wf_folds.value() and self.meta.value():
             self._run_meta(algo, method, kwargs)
             return
@@ -1624,22 +1761,33 @@ class BacktestView(QWidget):
             rows.setdefault(name, res.metrics)
             self._fit_series.append(eq.reindex(df.index).to_numpy(dtype=float))
         first = next((r for r in results.values() if r is not None), None)
-        self._show_report(first)
+        self._show_report(first, df)
         columns = {name: {k: fmt(k, v) for k, v in metrics.items()} for name, metrics in {**rows, **base_rows}.items()}
         self.metrics.set_frame(pd.DataFrame(columns).fillna("–").rename_axis("metric").reset_index())
         self._draw()
         self._lock_view()
         self.reset_view()
-        if params and isinstance(selection_algo, PoolEnsemble):
+        if params and hasattr(selection_algo, "reuse_params"):
             params = selection_algo.reuse_params(params)  # the selected members' parameters
         self.status.emit("done" + (f" · best params {params}" if params else ""))
 
-    def _show_report(self, res):
+    def _show_report(self, res, df=None):
         """Fill the report card (#152) from the first result: extra statistics, underwater plot, monthly heatmap."""
         self._report_res = res
+        self._report_regimes = None
         self.report_card.setVisible(res is not None)
         if res is None:
             return
+        if df is not None and len(res.returns):
+            try:
+                self._report_regimes = rep.regime_table(res, df)
+            except Exception:  # too few candles for the regime windows: no breakdown
+                self._report_regimes = None
+        if self._report_regimes is not None:
+            f = rep.fmt_regime(self._report_regimes)
+            self.regime_stats.setText("<b>By market regime</b> (return · Sharpe · share of bars)<br>" + "<br>".join(
+                f"{n}: {r['return']} · {r['sharpe']} · {r['share']}" for n, r in f.iterrows()))
+        self.regime_stats.setVisible(self._report_regimes is not None)
         t = self.themes.current
         stats = rep.report_stats(res.equity, res.trades)
         self.report_stats.setText("  ·  ".join(
@@ -1683,7 +1831,7 @@ class BacktestView(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Export", name, "CSV (*.csv)" if kind == "csv" else "HTML (*.html)")
         if not path:
             return
-        out = rep.export_trades_csv(res, path) if kind == "csv" else rep.export_html(res, path, res.algorithm)
+        out = rep.export_trades_csv(res, path) if kind == "csv" else rep.export_html(res, path, res.algorithm, self._report_regimes)
         self.status.emit(f"saved {out}")
 
     def _draw(self):
@@ -1801,6 +1949,8 @@ class BacktestView(QWidget):
 
     def _show_selection(self, algo, results: dict[str, dict]):
         """Which pool members each method used and which it dropped; with two methods, whether they agree (#21)."""
+        while hasattr(algo, "inner"):  # a sized (#147) or long/short (#149) pool
+            algo = algo.inner
         if not isinstance(algo, PoolEnsemble):
             self.selection_card.hide()
             return

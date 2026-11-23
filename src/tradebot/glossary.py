@@ -207,6 +207,9 @@ TERMS = {
                    "profit or a trailing stop.",
     "evo_indicators": "The indicators the rules may use. Fewer makes the search faster and the rules easier to "
                       "read.",
+    "evo_higher_tf": "Also offer every indicator computed on these longer candles, e.g. the daily SMA as a trend "
+                     "filter for hourly rules. Each candle sees the last closed longer candle only (no look-ahead). "
+                     "Timeframes not longer than the candles are ignored.",
     "from_scratch": "No ready-made indicators: rules are built from candles and plain maths (up and down moves, "
                     "sums, deviations, smoothing, + - × ÷ with units checked), so the search can invent RSI or "
                     "something new. Repeated parts become building blocks (m1, m2, …). Shuffled-price runs and "
@@ -255,6 +258,9 @@ TERMS = {
                        "red lost; the stronger the colour, the bigger the move.",
     "underwater": "How far below its previous high the money was at each moment, in percent. The deepest dip is "
                   "the maximum drawdown.",
+    "regime_table": "How the strategy did in each market regime: bull, bear or sideways (the close up or down more "
+                    "than a threshold over the trend period) and high or low volatility (ATR above or below its "
+                    "longer average). A bar counts with the regime known when its position was taken.",
     "export_trades": "Saves the list of trades (entry, exit, side, return, days held) as a CSV file for a "
                      "spreadsheet.",
     "export_report": "Saves one HTML page with the metrics, equity curve, underwater plot, monthly returns and "
@@ -269,6 +275,34 @@ TERMS = {
     "fills_intrabar": "Stops, take-profits and limit buys fill inside the candle at their level, or at the open "
                       "when it gaps past it. A stop and a take-profit in one candle: the stop counts, the worse "
                       "case, since the order inside the candle is unknown.",
+    "sizing": "How much to put on at each entry, on top of what the strategy signals. Full size puts on the "
+              "whole stake; the models below put on less, never more (no leverage). The sizing settings show "
+              "up as size.* in the parameters and the optimizer can tune them. Compare exposure and maximum "
+              "drawdown with and without.",
+    "sizing_none": "Every entry uses the whole stake, as in earlier versions.",
+    "sizing_fixed": "A fixed share of the capital at each entry, e.g. 50%.",
+    "sizing_vol": "Volatility target: the position is sized so its annual volatility is about the target. "
+                  "Quiet markets get a bigger position, wild ones a smaller one.",
+    "sizing_risk": "Fixed risk per trade: the stop sits a number of ATRs below the entry and the position is "
+                   "sized so that being stopped out loses a set share of the capital, e.g. 1%. A wider stop "
+                   "means a smaller position. The size is fixed at the entry.",
+    "sizing_kelly": "Fractional Kelly: the share of the capital that grows it fastest given the strategy's "
+                    "recent winners and losers, scaled down (half Kelly by default). Zero when the recent "
+                    "returns show no edge.",
+    "liquidations": "How often a short or leveraged position ran so far against the strategy that the exchange "
+                    "closed it and kept its margin. Shown when shorts or leverage are on.",
+    "direction": "Long buys and profits when the price rises. Short sells borrowed units and profits when it "
+                 "falls: it goes short on the strategy's sell signal. Long and short does both, switching sides. "
+                 "A short is liquidated when the price runs away (about doubles without leverage). Backtests "
+                 "only; the live bot does not open shorts.",
+    "leverage": "How many times its margin a position is worth. 3x turns a 10% move into 30% on the margin, up "
+                "or down. When the loss nearly uses up the margin the position is liquidated and the margin is "
+                "lost (10x: a move of about 9.5% against it). 1x is no leverage.",
+    "borrow_fee": "The yearly fee for borrowing the shares of a short, as a percentage of its value (stocks: "
+                  "often 0.3 to 5%, more for hard-to-borrow ones; perpetual futures: 0).",
+    "funding": "Perpetual futures settle funding every 8 hours: at a positive rate longs pay shorts that share of "
+               "their position, at a negative one shorts pay longs. 0.01% per 8 hours is about 11% a year. The "
+               "command line can also use the exchange's historical rates (--funding history).",
     "limit_entry": "limit_pct(1) or limit_atr(0.5) in the entry rule, joined with &: when the rest holds, place "
                    "a buy order 1% (0.5 ATRs) below the close for the next candle. Not filled if the price "
                    "doesn't come down to it.",

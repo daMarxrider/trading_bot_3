@@ -12,6 +12,8 @@ from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
 
 PATHS: dict[str, str] = {
+    "basket": "M5 9h14l-1.5 10h-11zM9 9l3-5 3 5",
+    "journal": "M6 4h11a1 1 0 0 1 1 1v15H7a1 1 0 0 1-1-1zM6 8H4M6 12H4M6 16H4M10 8h5",
     "chevl": "M15 6l-6 6 6 6",
     "rect": "M4 7h16v10H4z",
     "hline": "M3 12h18",

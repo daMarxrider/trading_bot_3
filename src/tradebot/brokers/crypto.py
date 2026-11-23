@@ -59,6 +59,31 @@ class CcxtBroker(BaseBroker):
         self.exchange.cancel_order(order_id, symbol)
         return True
 
+    def get_order(self, order_id: str, symbol: str | None = None) -> Order | None:
+        if not getattr(self.exchange, "has", {}).get("fetchOrder"):
+            return None
+        raw = self.exchange.fetch_order(order_id, symbol)
+        side = Side(raw.get("side") or "buy")
+        type = OrderType(raw.get("type") if raw.get("type") in ("market", "limit") else "market")
+        return self._order(raw, symbol, side, type, float(raw.get("amount") or 0), raw.get("price"))
+
+    def leg_position(self, symbol: str) -> float | None:
+        """Contracts (futures, perpetuals): the open position, signed, in base units; spot: the base balance."""
+        self.exchange.load_markets()
+        market = self.exchange.market(symbol)
+        if market.get("contract"):
+            if not getattr(self.exchange, "has", {}).get("fetchPositions"):
+                return None
+            total = 0.0
+            for p in self.exchange.fetch_positions([symbol]):
+                if p.get("symbol") != market["symbol"]:
+                    continue
+                size = float(p.get("contracts") or 0) * float(p.get("contractSize") or market.get("contractSize") or 1)
+                total += -size if p.get("side") == "short" else size
+            return total
+        held = self.get_balance().get(market["base"])
+        return held.total if held else 0.0
+
     def get_balance(self) -> dict[str, Balance]:
         bal = self.exchange.fetch_balance()
         free, used = bal.get("free", {}), bal.get("used", {})
