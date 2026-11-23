@@ -121,3 +121,25 @@ def test_kpi_strip_marks_its_last_cell(qapp):
     cells = [Kpi("a"), Kpi("b")]
     strip = kpi_strip(cells)
     assert strip.objectName() == "Strip" and [c.property("last") for c in cells] == [False, True]
+
+
+def test_news_reading_pane_shows_the_picked_headline(qapp, tmp_path):
+    from datetime import datetime, timezone
+
+    from tradebot.gui.views import NewsView
+    from tradebot.news import NewsItem
+
+    themes = ThemeManager(user_dir=tmp_path)
+    view = NewsView(themes, lambda: ["NVDA"])
+    view.items = [NewsItem("NVDA", "Chip launch moves up", "Reuters", "https://example.com/a",
+                           datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc), "Suppliers ramp faster.")]
+    view._render()
+    assert view.reader_stack.currentWidget() is view.reader_empty
+    got = []
+    view.open_symbol.connect(got.append)
+    view.list.setCurrentRow(0)
+    assert view.reader_stack.currentWidget() is view.reader_page
+    assert view.reader_title.text() == "Chip launch moves up" and "Suppliers" in view.reader_body.text()
+    view.reader_chart.click()
+    assert got == ["NVDA"]
+    view.deleteLater()

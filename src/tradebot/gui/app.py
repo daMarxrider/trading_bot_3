@@ -136,6 +136,7 @@ class MainWindow(QMainWindow):
             self.chart.open_symbol(sym)
 
         self.screener.open_symbol.connect(chart_symbol)
+        self.news.open_symbol.connect(chart_symbol)
 
         def scanned_symbol(sym, timeframe, indicator, params):
             self.stack.setCurrentWidget(self.chart)
