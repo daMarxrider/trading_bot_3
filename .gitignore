@@ -9,3 +9,7 @@ build/
 .tradebot/
 benchmarks/evolve/data/
 benchmarks/evolve/*.log
+
+# local design tooling, not published
+.impeccable/
+mockups/
