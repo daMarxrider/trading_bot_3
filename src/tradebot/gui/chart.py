@@ -45,9 +45,19 @@ from tradebot.gui.common import (
     shortfall,
     toolbar_group,
 )
+from tradebot.gui.drawings import (
+    SNAP_RADIUS,
+    SNAP_RADIUS_TOUCH,
+    FibItem,
+    MeasureItem,
+    NoteItem,
+    color_of,
+    set_color,
+    snap_point,
+    snap_time,
+    to_spec,
+)
 from tradebot.gui.icons import bind_icon
-from tradebot.gui.drawings import (SNAP_RADIUS, SNAP_RADIUS_TOUCH, FibItem, MeasureItem, NoteItem, color_of, set_color,
-                                   snap_point, snap_time, to_spec)
 from tradebot.gui.news import NewsPanel
 from tradebot.gui.params import ParamDialog
 from tradebot.gui.sidebar import ChartSidebar
@@ -1274,10 +1284,11 @@ class ChartView(QWidget):
         return self.magnet_btn.isChecked() != flip
 
     def _snap_view_ohlc(self):
-        key = (id(self.df), self._log, len(self._x))
-        if self._snap_cache is None or self._snap_cache[0] != key:
+        # the cache holds the frame itself, so its identity can't be reused by a later frame
+        key = (self._log, len(self._x))
+        if self._snap_cache is None or self._snap_cache[0] != key or self._snap_cache[2] is not self.df:
             cols = tuple(np.asarray(self._ty(self.df[c].to_numpy(dtype=float))) for c in ("open", "high", "low", "close"))
-            self._snap_cache = (key, cols)
+            self._snap_cache = (key, cols, self.df)
         return self._snap_cache[1]
 
     def snap_view_point(self, pt):
@@ -1592,6 +1603,7 @@ class ChartView(QWidget):
             self.state.setGeometry(self.canvas.rect())
         elif obj is self.canvas and event.type() == QEvent.Type.Leave and self._hover is not None:
             self._hover = None  # cursor left the chart: show the latest bar again
+            self._hide_snap_marker()
             self._show_values()
         return super().eventFilter(obj, event)
 

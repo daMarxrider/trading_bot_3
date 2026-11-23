@@ -112,3 +112,15 @@ def test_handle_drag_snaps(chart):
     roi.movePoint(h, view_pt(chart, 120, 2 * dy), finish=False)
     end = roi.mapToParent(h.pos())
     assert end.x() == pytest.approx(x[120]) and end.y() == pytest.approx(chart.df["close"].iloc[120])
+
+
+def test_snap_uses_new_frame_after_reload(chart):
+    chart.magnet_btn.setChecked(True)
+    i = 100
+    chart.snap_view_point(view_pt(chart, i))  # fills the cache
+    df = candles()
+    df[["open", "high", "low", "close"]] += 50
+    chart.df = df  # same length, different prices
+    chart.redraw(autorange=True)
+    pt, which = chart.snap_view_point(QPointF(chart._x[i], df["close"].iloc[i] + 0.01))
+    assert which is not None and pt.y() == pytest.approx(df["close"].iloc[i])
