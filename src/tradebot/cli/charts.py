@@ -132,7 +132,7 @@ def _draw_frame(pane, dates, frame: pd.DataFrame, ind: BaseIndicator) -> None:
         mask = series.notna().to_numpy()
         if not mask.any():
             continue
-        if ind.is_line(name):
+        if ind.is_line(name) or ind.output_of(name) in ind.zones:
             pane.draw(pane.signal([d for d, m in zip(dates, mask) if m], series[mask].tolist()).lines().label(name))
             continue
         texts = ind.labels.get(ind.output_of(name))
@@ -144,5 +144,6 @@ def _draw_frame(pane, dates, frame: pd.DataFrame, ind: BaseIndicator) -> None:
         ys = [float(anchor.iloc[i]) if anchor is not None else float("nan") for i in idx]
         keep = [k for k, y in enumerate(ys) if np.isfinite(y)]
         if keep:  # one-character labels (wave numbers) drawn as the point markers themselves
-            markers = [plt.marker(texts.get(float(series.iloc[idx[k]]), "?")[:1], pixel="yellow") for k in keep]
+            markers = [plt.marker(texts.get(float(series.iloc[idx[k]]), "?").split()[-1][:1], pixel="yellow")
+                       for k in keep]
             pane.draw(pane.signal([dates[idx[k]] for k in keep], [ys[k] for k in keep], marker=markers))

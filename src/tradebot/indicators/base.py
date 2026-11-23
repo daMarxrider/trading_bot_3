@@ -90,6 +90,16 @@ class BaseIndicator(ABC):
     labels: ClassVar[dict[str, dict[float, str]]] = {}
     #: Output whose value positions the labels vertically (default: the close).
     label_anchor: ClassVar[str | None] = None
+    #: Label colours by code (#164): ``True`` draws codes below 0 in the down colour, 1..9 in the up colour and
+    #: the rest muted (the texts carry a triangle, so a label is never colour alone), and thins out labels that
+    #: sit closer than a few candles on the same side of the price so the chart stays readable.
+    label_signs: ClassVar[bool] = False
+    #: What a label means, shown when hovering over it: ``{output: {code: sentence}}``.
+    label_help: ClassVar[dict[str, dict[float, str]]] = {}
+    #: Outputs drawn as horizontal bands instead of a line that steps diagonally from level to level (#164):
+    #: ``{output: (colour, letter)}``, the colour as for :class:`Style` and a letter that marks the band. The
+    #: band's half height is ``zone / 2`` of the price when the indicator has a ``zone`` parameter.
+    zones: ClassVar[dict[str, tuple[str, str]]] = {}
     #: Colour of individual ``levels``: ``{level: Style(...)}``; levels without a style are dotted and muted.
     level_styles: ClassVar[dict[float, Style]] = {}
     #: Shaded areas between two outputs: ``[(output_a, output_b, Style(color=...))]``, drawn behind the lines.
@@ -147,7 +157,7 @@ class BaseIndicator(ABC):
 
     def is_line(self, column: str) -> bool:
         out = self.output_of(column)
-        return out not in self.labels and out not in self.hidden
+        return out not in self.labels and out not in self.hidden and out not in self.zones
 
     @classmethod
     def plot_outputs(cls) -> tuple[str, ...]:
