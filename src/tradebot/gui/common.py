@@ -38,11 +38,13 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSplitter,
     QSplitterHandle,
+    QStackedWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from tradebot.gui.icons import pixmap
 from tradebot.symbols import SymbolSearch
 
 
@@ -252,13 +254,14 @@ def card(*widgets, layout_cls=QVBoxLayout) -> QFrame:
 
 
 class Kpi(QFrame):
-    """Label + big value tile."""
+    """Label + value cell of a :func:`kpi_strip`: dense and flat, not a card of its own (#191)."""
 
     def __init__(self, label: str):
         super().__init__()
-        self.setObjectName("Card")
+        self.setObjectName("Stat")
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setContentsMargins(14, 8, 14, 8)
+        lay.setSpacing(1)
         self.label = QLabel(label)
         self.label.setObjectName("KpiLabel")
         self.value = QLabel("–")
@@ -268,6 +271,19 @@ class Kpi(QFrame):
 
     def set(self, text: str):
         self.value.setText(text)
+
+
+def kpi_strip(kpis) -> QFrame:
+    """The given :class:`Kpi` cells in one bordered row with hairline dividers (the mockups' stat strip)."""
+    strip = QFrame(objectName="Strip")
+    row = QHBoxLayout(strip)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(0)
+    cells = list(kpis)
+    for i, cell in enumerate(cells):
+        cell.setProperty("last", i == len(cells) - 1)
+        row.addWidget(cell, 1)
+    return strip
 
 
 class FlowLayout(QLayout):
@@ -498,3 +514,47 @@ def tooltip(text: str) -> str:
 
 def pct(v) -> str:
     return "–" if v is None or (isinstance(v, float) and np.isnan(v)) else f"{v * 100:.2f}%"
+
+
+class EmptyState(QWidget):
+    """A quiet teaching message for a view with nothing in it yet: drawn icon, heading, one sentence (#191)."""
+
+    def __init__(self, themes, icon: str, title: str, text: str):
+        super().__init__()
+        self.themes, self.glyph = themes, icon
+        self.picture = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
+        self.title = QLabel(title, objectName="EmptyTitle", alignment=Qt.AlignmentFlag.AlignCenter)
+        self.text = QLabel(text, objectName="Muted", alignment=Qt.AlignmentFlag.AlignCenter, wordWrap=True)
+        self.text.setMaximumWidth(360)
+        lay = QVBoxLayout(self)
+        lay.setSpacing(8)
+        lay.addStretch(2)
+        for w in (self.picture, self.title):
+            lay.addWidget(w, 0, Qt.AlignmentFlag.AlignHCenter)
+        lay.addWidget(self.text, 0, Qt.AlignmentFlag.AlignHCenter)
+        lay.addStretch(3)
+        themes.changed.connect(self._recolour)
+        self._recolour()
+
+    def _recolour(self, _theme=None):
+        self.picture.setPixmap(pixmap(self.glyph, self.themes.current.muted, 28))
+
+    def set_message(self, title: str, text: str):
+        self.title.setText(title)
+        self.text.setText(text)
+
+
+class TableWithEmpty(QStackedWidget):
+    """A table that shows an :class:`EmptyState` while its model has no rows."""
+
+    def __init__(self, table, model, themes, icon: str, title: str, text: str):
+        super().__init__()
+        self.table, self.model = table, model
+        self.empty = EmptyState(themes, icon, title, text)
+        self.addWidget(self.empty)
+        self.addWidget(table)
+        model.modelReset.connect(self.sync)
+        self.sync()
+
+    def sync(self):
+        self.setCurrentWidget(self.table if self.model.rowCount() else self.empty)

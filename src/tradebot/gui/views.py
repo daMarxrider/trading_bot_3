@@ -56,6 +56,8 @@ from tradebot.gui.common import (
     DataFrameModel,
     DateRange,
     Kpi,
+    TableWithEmpty,
+    kpi_strip,
     Panes,
     SymbolCompleter,
     card,
@@ -378,7 +380,9 @@ class ScreenerView(QWidget):
         box.layout().addLayout(top)
         lay.addWidget(box)
         lay.addWidget(self.progress)
-        lay.addWidget(table, 1)
+        self.results = TableWithEmpty(table, self.model, themes, "screener", "Nothing screened yet",
+                                      "Pick a preset or type filters, then press Run screen.")
+        lay.addWidget(self.results, 1)
         lay.addWidget(hint)
 
     def run(self):
@@ -392,6 +396,7 @@ class ScreenerView(QWidget):
 
         def done(table):
             self.progress.hide()
+            self.results.empty.set_message("No symbol matches", "Loosen a filter, or add symbols to the universe.")
             self.model.set_frame(table)
             self.status.emit(f"screener: {len(table)} of {len(symbols)} match")
 
@@ -536,9 +541,7 @@ class PortfolioView(QWidget):
         self.kpis = {k: Kpi(label) for k, label in (
             ("value", "Total equity"), ("income", "Annual dividend income"), ("current", "Current dividend yield"),
             ("annual", "Annual (trailing) yield"), ("yoc", "Yield on cost"))}
-        kpi_row = QHBoxLayout()
-        for k in self.kpis.values():
-            kpi_row.addWidget(k)
+        kpi_row = kpi_strip(self.kpis.values())
         self.donut = DonutChart(themes)
         self.by_class = DonutChart(themes)
         self.model = DataFrameModel(formats={
@@ -557,9 +560,10 @@ class PortfolioView(QWidget):
         box = card()
         box.layout().addLayout(brokers)
         lay.addWidget(box)
-        lay.addLayout(kpi_row)
+        lay.addWidget(kpi_row)
         lay.addLayout(charts)
-        lay.addWidget(table, 1)
+        lay.addWidget(TableWithEmpty(table, self.model, themes, "wallet", "No portfolio loaded",
+                                     "Tick your brokers and press Load portfolio to see holdings and dividend income."), 1)
 
     def load(self):
         from tradebot.portfolio import build_portfolio

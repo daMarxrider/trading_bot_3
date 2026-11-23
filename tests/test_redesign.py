@@ -94,3 +94,30 @@ def test_signed_columns_get_an_up_or_down_triangle(qapp, tmp_path):
     text = [model.data(model.index(r, 1), Qt.ItemDataRole.DisplayRole) for r in range(3)]
     assert text == ["▲ +2.1%", "▼ -1.3%", "+0.0%"]  # zero is neither
     assert model.data(model.index(0, 2), Qt.ItemDataRole.DisplayRole) == "10"  # unmarked columns stay plain
+
+
+def test_empty_states_swap_for_the_table_once_there_are_rows(qapp, tmp_path):
+    import pandas as pd
+    from PyQt6.QtWidgets import QTableView
+
+    from tradebot.gui.common import DataFrameModel, TableWithEmpty
+
+    themes = ThemeManager(user_dir=tmp_path)
+    model = DataFrameModel()
+    table = QTableView()
+    box = TableWithEmpty(table, model, themes, "screener", "Nothing yet", "Press Run.")
+    assert box.currentWidget() is box.empty
+    model.set_frame(pd.DataFrame({"a": [1]}))
+    assert box.currentWidget() is table
+    model.set_frame(pd.DataFrame({"a": []}))
+    assert box.currentWidget() is box.empty
+    box.empty.set_message("No match", "Loosen a filter.")
+    assert box.empty.title.text() == "No match"
+
+
+def test_kpi_strip_marks_its_last_cell(qapp):
+    from tradebot.gui.common import Kpi, kpi_strip
+
+    cells = [Kpi("a"), Kpi("b")]
+    strip = kpi_strip(cells)
+    assert strip.objectName() == "Strip" and [c.property("last") for c in cells] == [False, True]

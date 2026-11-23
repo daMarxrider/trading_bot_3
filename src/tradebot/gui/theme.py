@@ -93,11 +93,15 @@ QMainWindow, #Root {{ background: {root_bg}; }}
 QDialog {{ background: {bg}; }}
 QWidget#Sidebar {{ background: {rail_bg}; border-right: 1px solid {panel_border}; }}
 QLabel#NavGroup {{ color: {muted}; font-size: 11px; font-weight: 500; padding: 12px 8px 3px 8px; }}
+QLabel#EmptyTitle {{ font-size: 14px; font-weight: 600; }}
 QLabel#Brand {{ font-size: 16px; font-weight: 600; }}
 QFrame#Card, QGroupBox {{ background: {panel}; border: 1px solid {panel_border}; border-radius: {radius}px; }}
 QGroupBox {{ margin-top: 14px; padding: 10px; }}
 QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 4px; color: {muted}; }}
 QLabel#Title {{ font-size: 18px; font-weight: 600; }}
+QFrame#Strip {{ background: {panel}; border: 1px solid {panel_border}; border-radius: {radius}px; }}
+QFrame#Stat {{ background: transparent; border: none; border-right: 1px solid {panel_border}; border-radius: 0; }}
+QFrame#Stat[last="true"] {{ border-right: none; }}
 QLabel#KpiValue {{ font-size: 16px; font-weight: 600; }}
 QLabel#Muted, QLabel#KpiLabel {{ color: {muted}; }}
 QPushButton {{ background: {input_bg}; border: 1px solid {panel_border}; border-radius: {radius_sm}px; padding: 6px 14px; }}
@@ -144,6 +148,13 @@ QLineEdit, QComboBox, QAbstractSpinBox, QPlainTextEdit {{
 QLineEdit:focus, QComboBox:focus, QAbstractSpinBox:focus, QPlainTextEdit:focus {{ border-color: {accent}; }}
 QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: center right; width: 22px; border: none; background: transparent; }}
 QComboBox::down-arrow {{ image: url({spin_down}); width: 10px; height: 10px; }}
+QCheckBox::indicator, QRadioButton::indicator {{ width: 14px; height: 14px; border: 1.5px solid {border_strong}; background: {input_bg}; }}
+QCheckBox::indicator {{ border-radius: 3px; }}
+QRadioButton::indicator {{ border-radius: 8px; }}
+QCheckBox::indicator:hover, QRadioButton::indicator:hover {{ border-color: {accent}; }}
+QCheckBox::indicator:checked {{ background: {accent}; border-color: {accent}; image: url({check_img}); }}
+QRadioButton::indicator:checked {{ background: {accent}; border-color: {accent}; }}
+QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {{ border-color: {panel_border}; }}
 QAbstractSpinBox::up-button {{ subcontrol-origin: border; subcontrol-position: top right; width: 18px; border: none; background: transparent; }}
 QAbstractSpinBox::down-button {{ subcontrol-origin: border; subcontrol-position: bottom right; width: 18px; border: none; background: transparent; }}
 QAbstractSpinBox::up-arrow {{ image: url({spin_up}); width: 10px; height: 10px; }}
@@ -199,6 +210,19 @@ QScrollBar::handle {{ border-radius: 9px; min-height: 48px; min-width: 48px; }}
 """
 
 
+def _luma(color: str) -> float:
+    c = QColor(color)
+    return (0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()) / 255
+
+
+def _mix(base: str, other: str, amount: float) -> str:
+    """``base`` moved ``amount`` of the way towards ``other``; a translucent (rgba) base is returned as it is."""
+    if base.startswith("rgba") or other.startswith("rgba"):
+        return base
+    a, b = QColor(base), QColor(other)
+    return QColor(*(round(x + (y - x) * amount) for x, y in ((a.red(), b.red()), (a.green(), b.green()), (a.blue(), b.blue())))).name()
+
+
 def _opaque(color: str, fallback: str) -> str:
     return fallback if color.startswith("rgba") else color
 
@@ -208,6 +232,8 @@ def stylesheet(t: Theme, touch: bool = False) -> str:
         **asdict(t),
         root_bg="transparent" if t.glass else t.bg,
         radius_sm=max(4, t.radius // 2),
+        border_strong=_mix(t.panel_border, t.text, 0.3),
+        check_img=(ICON_DIR / ("check-light.svg" if _luma(t.accent_ink) > 0.5 else "check-dark.svg")).as_posix(),
         spin_up=(ICON_DIR / "spin-up.svg").as_posix(),
         spin_down=(ICON_DIR / "spin-down.svg").as_posix(),
         rail_bg=t.rail or (t.bg if t.glass else t.panel),
