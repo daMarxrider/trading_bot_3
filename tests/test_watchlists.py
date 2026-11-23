@@ -89,7 +89,7 @@ def test_cli_watchlist_option(config_file, monkeypatch):
 
     config_file.write_text('[watchlists]\nMain = ["AAPL"]\nCrypto = ["BTC/USDT"]\n')
     asked = []
-    monkeypatch.setattr(tradebot.news, "fetch_news", lambda symbols, limit=50: asked.append(symbols) or [])
+    monkeypatch.setattr(tradebot.news, "fetch_news_report", lambda symbols, limit=50, sources=None: (asked.append(symbols) or [], {}))
     runner = CliRunner()
     assert runner.invoke(app, ["news", "--watchlist", "Crypto"]).exit_code == 0
     assert runner.invoke(app, ["news"]).exit_code == 0

@@ -23,6 +23,7 @@ tradebot chart BTC/USDT --tf 4h --bars 200 -i bbands -i rsi --algo rsi_threshold
 tradebot chart AAPL -i sma:period=50 --line --no-volume
 tradebot news AAPL NVDA BTC/USDT
 tradebot news --watchlist Crypto           # without symbols: one watchlist (default: all of them)
+tradebot news BTC/USDT -s coindesk -s decrypt   # only some sources (`--list-sources` shows them)
 tradebot cache info                        # cache folder, size, number of cached series
 tradebot cache clear [--ohlc|--symbols]
 ```

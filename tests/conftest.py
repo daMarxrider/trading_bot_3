@@ -121,4 +121,5 @@ def _no_news_downloads(monkeypatch):
     """The chart's sidebar fetches news for the charted symbol (#41); tests stay offline."""
     import tradebot.news
 
-    monkeypatch.setattr(tradebot.news, "fetch_news", lambda symbols, limit=50: [])
+    monkeypatch.setattr(tradebot.news, "fetch_news", lambda symbols, limit=50, sources=None: [])
+    monkeypatch.setattr(tradebot.news, "fetch_news_report", lambda symbols, limit=50, sources=None: ([], {}))

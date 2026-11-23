@@ -414,9 +414,10 @@ class CandlestickItem(pg.GraphicsObject):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, self._smooth and pg.getConfigOption("antialias"))
         for style, wicks, rects in self._paths():
             p.setPen(self.pens[style])
-            p.setBrush(self.brushes[style])
             if wicks is not None:
+                p.setBrush(Qt.BrushStyle.NoBrush)  # lines only: a brush makes OpenGL paint fill between the wicks
                 p.drawPath(wicks)
+            p.setBrush(self.brushes[style])
             p.drawRects(rects)
 
     def boundingRect(self):
