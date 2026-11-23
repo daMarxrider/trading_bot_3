@@ -147,6 +147,8 @@ QLineEdit, QComboBox, QAbstractSpinBox, QPlainTextEdit {{
 }}
 QLineEdit:focus, QComboBox:focus, QAbstractSpinBox:focus, QPlainTextEdit:focus {{ border-color: {accent}; }}
 QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: center right; width: 22px; border: none; background: transparent; }}
+QDateEdit::drop-down {{ subcontrol-origin: padding; subcontrol-position: center right; width: 22px; border: none; background: transparent; }}
+QDateEdit::down-arrow {{ image: url({spin_down}); width: 10px; height: 10px; }}
 QComboBox::down-arrow {{ image: url({spin_down}); width: 10px; height: 10px; }}
 QCheckBox::indicator, QRadioButton::indicator {{ width: 14px; height: 14px; border: 1.5px solid {border_strong}; background: {input_bg}; }}
 QCheckBox::indicator {{ border-radius: 3px; }}

@@ -510,6 +510,7 @@ class ChartView(QWidget):
         self.style_btn.toggled.connect(lambda _: self.redraw())
 
         self.ind_btn = QToolButton(text="Indicators")
+        self.ind_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         bind_icon(self.ind_btn, "layers", themes, off="muted")
         self.ind_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.ind_menu = QMenu(self)
