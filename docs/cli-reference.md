@@ -263,7 +263,7 @@ Arguments: `SYMBOLS` (optional)
 
 ## `tradebot news`
 
-Latest headlines for symbols (defaults to the watchlists).
+Latest headlines for symbols (defaults to the watchlists), merged from several RSS feeds and Yahoo.
 
 Arguments: `SYMBOLS` (optional)
 
@@ -271,6 +271,8 @@ Arguments: `SYMBOLS` (optional)
 |---|---|---|
 | `--limit` | `25` |  |
 | `--watchlist`, `-w` |  | Without symbols: only this watchlist's (default: all watchlists) |
+| `--source`, `-s` |  | Only these news sources (repeat the option); default: all default-on ones. See `tradebot news --list-sources` |
+| `--list-sources` |  | Show the available news sources and exit |
 
 ## `tradebot pair`
 

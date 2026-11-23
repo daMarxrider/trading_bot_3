@@ -1860,13 +1860,24 @@ def _fmt_cell(col, v):
 
 @app.command()
 def news(symbols: Annotated[Optional[list[str]], typer.Argument(autocompletion=complete.symbols)] = None, limit: int = 25,
-         watchlist: Annotated[Optional[str], typer.Option("--watchlist", "-w", help=WATCHLIST_HELP)] = None):
-    """Latest headlines for symbols (defaults to the watchlists)."""
-    from tradebot.news import fetch_news
+         watchlist: Annotated[Optional[str], typer.Option("--watchlist", "-w", help=WATCHLIST_HELP)] = None,
+         source: Annotated[Optional[list[str]], typer.Option("--source", "-s", help="Only these news sources (repeat the option); default: all default-on ones. See `tradebot news --list-sources`")] = None,
+         list_sources: Annotated[bool, typer.Option("--list-sources", help="Show the available news sources and exit")] = False):
+    """Latest headlines for symbols (defaults to the watchlists), merged from several RSS feeds and Yahoo."""
+    from tradebot.news import SOURCES, fetch_news_report
 
+    if list_sources:
+        for s in SOURCES.values():
+            console.print(f"{s.id:<16} {s.name:<28} [dim]{s.scope}{'' if s.default else ', off by default'}[/]")
+        return
+    unknown = [i for i in source or [] if i not in SOURCES]
+    if unknown:
+        raise typer.BadParameter(f"unknown source {', '.join(unknown)}; see --list-sources")
     symbols = symbols or _watchlist(watchlist)
     with console.status("fetching news ..."):
-        items = fetch_news(symbols, limit)
+        items, errors = fetch_news_report(symbols, limit, source or None)
+    for sid, err in errors.items():
+        console.print(f"[yellow]{SOURCES[sid].name}: {err}[/]")
     for n in items:
         console.print(f"[dim]{n.published:%Y-%m-%d %H:%M}[/] [cyan]{n.symbol:>9}[/] [bold]{n.title}[/] "
                       f"[dim]({n.publisher})[/]\n           [link={n.url}]{n.url}[/link]")

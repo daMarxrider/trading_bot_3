@@ -1,11 +1,27 @@
 # News
 
-The **📰 News** page lists headlines (Yahoo Finance) for the symbols of all your watchlists and your portfolio, newest
-first.
+The **📰 News** page lists headlines for the symbols of all your watchlists and your portfolio, newest first, merged
+from several free sources. The publisher of each headline is shown.
 
 * The filter field narrows the list by text.
 * **Refresh** reloads; **auto-refresh every 5 min** is on by default.
 * Double-click a headline to open it in your browser.
+
+## Sources
+
+No accounts or API keys: RSS feeds plus Yahoo Finance. Headlines that several sources carry are shown once.
+
+| Source | Covers | How it finds your symbols |
+|---|---|---|
+| Yahoo Finance (yfinance), Yahoo Finance RSS | stocks and crypto | asked per symbol |
+| Google News (stocks), Google News (crypto) | stocks / crypto | search per symbol (ticker, coin name) |
+| CNBC Markets, MarketWatch | stocks | general feed, matched by ticker in the headline or summary |
+| CoinDesk, Cointelegraph, Decrypt, The Block | crypto | general feed, matched by ticker or coin name |
+| Bitcoin Magazine | crypto | like the other crypto feeds, but off by default |
+
+A source that is down is skipped (the command line prints a warning); the others still deliver. Feeds are cached for a
+minute. `tradebot news --list-sources` lists the ids, and `--source` picks some of them. Choosing sources in the
+Settings is tracked in #194.
 
 The Chart's sidebar has the same headlines for the one symbol on the chart (see [Chart](chart.md#sidebar-watchlists-and-news)).
 
