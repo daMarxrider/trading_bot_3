@@ -143,13 +143,21 @@ def backtest(
     slippage: float = 0.0,
     margin: Margin | None = None,
     funding=None,
+    blackout: pd.Series | None = None,
 ) -> BacktestResult:
     """Run ``algorithm`` over the OHLC frame ``df`` and compute performance metrics. ``margin``: leverage,
     maintenance margin, borrow fee and funding (#149); ``funding``: historical funding per candle (aligned with
-    ``df``, see :func:`tradebot.data.funding.per_candle`)."""
+    ``df``, see :func:`tradebot.data.funding.per_candle`). ``blackout``: candles (True) in which no new position
+    may be opened, e.g. before earnings (#165, :func:`tradebot.fundamentals.blackout_mask`); open ones are kept."""
     if len(df) < 2:
         raise ValueError("need at least two candles to backtest")
     positions, fills = algorithm.run_fills(df)
+    if blackout is not None and blackout.any():
+        if fills is not None:
+            raise ValueError("the earnings blackout cannot be combined with intrabar fills; use fills=close")
+        from tradebot.fundamentals import apply_blackout
+
+        positions = apply_blackout(positions, blackout)
     return from_positions(df, positions, algorithm.name, dict(algorithm.values), fee, initial_capital,
                           periods_per_year, slippage, fills=fills, margin=margin, funding=funding)
 
