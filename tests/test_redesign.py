@@ -206,3 +206,21 @@ def test_chart_says_so_when_a_symbol_cannot_be_loaded(qapp, tmp_path):
     assert "Couldn't load BTC/USDT" in chart.state.state.title.text()
     assert "Binance did not answer" in chart.state.state.text.text() and not chart.state.retry.isHidden()
     chart.deleteLater()
+
+
+def test_scripts_page_lists_scripts_and_opens_them(qapp, tmp_path, monkeypatch):
+    from tradebot import scripts
+    from tradebot.gui.scripts_page import ScriptsView
+
+    monkeypatch.setattr(scripts, "plugin_dir", lambda: tmp_path)
+    (tmp_path / "mine.py").write_text("# script\n", encoding="utf-8")
+    (tmp_path / "other.py").write_text("# other\n", encoding="utf-8")
+    view = ScriptsView(ThemeManager(user_dir=tmp_path / "themes"))
+    assert [view.list.item(i).text() for i in range(view.list.count())] == ["mine.py", "other.py"]
+    view.list.setCurrentRow(1)
+    assert view.editor.path == tmp_path / "other.py" and view.editor.edit.toPlainText() == "# other\n"
+    assert view.editor.close_btn.isHidden()
+    view.new_script()  # a template, not written to disk until saved
+    assert view.editor.path.parent == tmp_path and not view.editor.path.exists() and view.editor.dirty
+    view.editor.saved_text = view.editor.edit.toPlainText()  # as if saved, so tearing down doesn't ask
+    view.deleteLater()

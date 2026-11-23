@@ -41,6 +41,7 @@ from tradebot.gui.icons import pixmap
 from tradebot.gui.journal import JournalView
 from tradebot.gui.pairs import PairView
 from tradebot.gui.portfolio_backtest import PortfolioBacktestView
+from tradebot.gui.scripts_page import ScriptsView
 from tradebot.gui.settings import SettingsDialog
 from tradebot.live.risk import kill_active, set_kill
 from tradebot.gui.theme import GlassBackdrop, ThemeManager
@@ -79,9 +80,12 @@ class MainWindow(QMainWindow):
         self.lab = BacktestView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)
         self.evolve = EvolveView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)
         self.journal = JournalView(engine, themes)
+        self.scripts_page = ScriptsView(themes)
+        self.scripts_page.reloaded.connect(self.scanner._script_reloaded)  # the scanner and the charts follow a reload
         groups = [("Markets", [("Chart", "chart", self.chart), ("Screener", "screener", self.screener),
                                ("Scanner", "scanner", self.scanner), ("Pairs", "pairs", self.pairs), ("News", "news", self.news)]),
-                  ("Strategies", [("Backtest", "flask", self.lab), ("Evolve", "dna", self.evolve), ("Basket", "basket", self.basket)]),
+                  ("Strategies", [("Backtest", "flask", self.lab), ("Evolve", "dna", self.evolve), ("Basket", "basket", self.basket),
+                                  ("Scripts", "code", self.scripts_page)]),
                   ("Account", [("Portfolio", "wallet", self.portfolio), ("Journal", "journal", self.journal)])]
         pages = [item for _, items in groups for item in items]
 

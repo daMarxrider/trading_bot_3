@@ -54,7 +54,10 @@ Open the editor from the indicator picker:
 * **Edit** (on a My scripts row) opens that file
 * **Copy to my scripts** (on any other row) opens a copy of a built-in under a new name
 
-The editor opens next to the table, so you can edit and scan side by side. It has Python colours, line numbers,
+The **Scripts** page (Strategies, in the left navigation) lists every file in that folder with the same editor beside
+it, and a **+** button for a new script; saving there reloads the Scanner and the charts too.
+
+In the Scanner the editor opens next to the table, so you can edit and scan side by side. It has Python colours, line numbers,
 Tab = 4 spaces, Enter keeps the indentation (and adds a level after `:`), and **Ctrl+/** comments lines.
 No autocomplete, linting or debugger.
 
