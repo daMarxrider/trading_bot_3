@@ -81,6 +81,10 @@ TF = Annotated[str, typer.Option("--tf", help="Timeframe: 1m 5m 15m 30m 1h 4h 1d
 Symbol = Annotated[str, typer.Argument(help="e.g. AAPL, SAP.DE, BTC/USDT", autocompletion=complete.symbols)]
 Algo = Annotated[str, typer.Argument(help="Algorithm name (tradebot list)", autocompletion=complete.algorithms)]
 Broker = Annotated[str, typer.Option(help="Registered broker name", autocompletion=complete.brokers)]
+EarningsBlackout = Annotated[Optional[int], typer.Option(
+    "--no-entry-before-earnings", min=0, metavar="DAYS",
+    help="Open no new position in the DAYS days before a company's earnings date (positions already open are kept). "
+         "Default: [events] earnings_blackout_days in config.toml, else 0 = off")]
 Slippage = Annotated[Optional[str], typer.Option(
     help="Slippage per side in basis points (5 = 0.05%), charged on top of the fee; 'auto' = suggested for the "
     "asset class (crypto 5, stock 2). Default: [backtest] slippage_bps in config.toml, else 0")]
@@ -362,6 +366,7 @@ def backtest(
     funding: Funding = None,
     fee: Annotated[float, typer.Option(help="Fee per side, fraction")] = 0.001,
     slippage: Slippage = None,
+    no_entry_before_earnings: EarningsBlackout = None,
     capital: float = 10_000.0,
     dca_amount: DcaAmount = None,
     plot: Annotated[bool, typer.Option(help="Show chart with signals and equity")] = True,
@@ -410,13 +415,15 @@ def backtest(
         return
     symbols = _symbols(symbol, [])
     if len(symbols) > 1:
-        _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount, slippage, margin, funding)
+        _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount, slippage, margin, funding,
+                       no_entry_before_earnings)
         return
     df = load_data(symbol, tf, start, end, bars, _market_columns(algorithm))
     slip = _slippage(slippage, symbol)
     try:
         res = run_backtest(df, algorithm, fee=fee, initial_capital=capital, slippage=slip, margin=margin,
-                           funding=_funding_history(funding, symbol, df))
+                           funding=_funding_history(funding, symbol, df),
+                           blackout=_blackout(df, symbol, no_entry_before_earnings))
     except ValueError as e:
         raise typer.BadParameter(str(e)) from None
     if res.liquidations is not None and res.liquidations.any():
@@ -518,8 +525,19 @@ def _slippage(value: str | None, symbol: str | None) -> float:
         raise typer.BadParameter(str(exc), param_hint="--slippage") from None
 
 
+def _blackout(df, symbol: str, days: int | None):
+    """The "no new position before earnings" mask (#165) of ``--no-entry-before-earnings``, None when off."""
+    from tradebot import fundamentals as fund
+
+    days = fund.blackout_days() if days is None else days
+    mask = fund.earnings_blackout(df, symbol, days)
+    if days and mask is None:
+        console.print(f"[yellow]{symbol}: no earnings dates known, the earnings rule is not applied[/]")
+    return mask
+
+
 def _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount, slippage=None, margin=None,
-                   funding=None) -> None:
+                   funding=None, earnings_days=None) -> None:
     """One row per symbol: the strategy's return, Sharpe, XIRR and lead over each baseline."""
     from tradebot.backtest import backtest as run_backtest, baselines
     from tradebot.backtest.metrics import fmt
@@ -531,7 +549,7 @@ def _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_a
     for s, df in _load_many(symbols, tf, start, end, bars, _market_columns(algorithm)).items():
         slip = _slippage(slippage, s)
         res = run_backtest(df, algorithm, fee=fee, initial_capital=capital, slippage=slip, margin=margin,
-                           funding=_funding_history(funding, s, df))
+                           funding=_funding_history(funding, s, df), blackout=_blackout(df, s, earnings_days))
         bl = baselines(df, res, fee=fee, initial_capital=capital, amount=dca_amount, slippage=slip)
         lead = [f"[{'green' if v > 0 else 'red'}]{fmt('vs buy & hold', v)}[/]" for v in bl.excess.values()]
         for name in bl.excess:
@@ -1775,15 +1793,19 @@ def screen(
     filter: Annotated[list[str], typer.Option("--filter", "-f", help='e.g. -f "rsi < 30" -f "close > sma200"')] = [],
     sort: str = "change_1d",
     watchlist: Annotated[Optional[str], typer.Option("--watchlist", "-w", help=WATCHLIST_HELP)] = None,
+    fundamentals: Annotated[bool, typer.Option("--fundamentals", help="Add the fundamentals columns (pe, forward_pe, ps, "
+        "profit_margin, operating_margin, revenue_growth, earnings_growth, dividend_yield, days_to_earnings); also "
+        "added when a filter uses one, e.g. -f \"pe < 15\" -f \"dividend_yield > 0.03\"")] = False,
 ):
-    """Screen symbols by technicals, volume and market cap."""
+    """Screen symbols by technicals, volume, market cap and fundamentals."""
     from tradebot.data import MarketDataEngine
     from tradebot.screener import run_screen
 
     symbols = symbols or _watchlist(watchlist)
     engine = MarketDataEngine()
     with console.status("screening ..."):
-        table = run_screen(symbols, lambda s: engine.get_ohlc(s, "1d", start=pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=420)), filter)
+        table = run_screen(symbols, lambda s: engine.get_ohlc(s, "1d", start=pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=420)), filter,
+                           fundamentals=True if fundamentals else None)
     table = table.sort_values(sort, ascending=False)
     t = Table(title=f"screener ({len(table)} matches)")
     for c in table.columns:
@@ -1898,6 +1920,10 @@ def _fmt_cell(col, v):
         return f"[{color}]{v * 100:+.2f}%[/]" if col.startswith("change") else f"{v * 100:.2f}%"
     if col == "market_cap":
         return f"{v / 1e9:,.1f}B"
+    if col in ("profit_margin", "operating_margin", "revenue_growth", "earnings_growth", "dividend_yield"):
+        return f"{v * 100:.1f}%"
+    if col == "days_to_earnings":
+        return f"{v:.0f}"
     return f"{v:,.2f}"
 
 
@@ -1977,6 +2003,39 @@ def market(symbol: Annotated[str, typer.Argument(help="A crypto pair, e.g. BTC/U
             d.add_row(f"{within * 100:g} %", f"{bc[0] if len(bc) else 0:,.2f}", f"{ac[-1] if len(ac) else 0:,.2f}",
                       f"{book.imbalance(within):+.2f}")
         console.print(d)
+
+
+@app.command()
+def fundamentals(symbols: Annotated[Optional[list[str]], typer.Argument(autocompletion=complete.symbols)] = None,
+                 watchlist: Annotated[Optional[str], typer.Option("--watchlist", "-w", help=WATCHLIST_HELP)] = None,
+                 events: Annotated[bool, typer.Option("--events/--no-events", help="List the earnings, split and "
+                                                                                   "ex-dividend dates")] = True,
+                 refresh: Annotated[bool, typer.Option("--refresh", help="Ignore the cache and ask again")] = False):
+    """Valuation, margins, growth and dividend yield of stocks, with their earnings, split and dividend dates.
+
+    Free data from Yahoo Finance, cached for a day. Crypto pairs have none. Not investment advice."""
+    from tradebot import fundamentals as fund
+
+    symbols = symbols or _watchlist(watchlist)
+    with console.status("fetching fundamentals ..."):
+        snaps = {s: fund.load(s, refresh=refresh) for s in symbols}
+    t = Table(title="fundamentals")
+    t.add_column("symbol")
+    for name, (label, _) in fund.FIELDS.items():
+        t.add_column(label, justify="right")
+    t.add_column("next earnings", justify="right")
+    for s, snap in snaps.items():
+        nxt = snap.next_earnings()
+        t.add_row(s, *[fund.format_value(n, getattr(snap.fundamentals, n)) for n in fund.FIELDS],
+                  f"{nxt:%Y-%m-%d}" if nxt else "–")
+    console.print(t)
+    for s, snap in snaps.items():
+        if snap.error:
+            console.print(f"[yellow]{s}: {snap.error}[/]")
+    if events:
+        for s, snap in snaps.items():
+            for e in sorted(snap.events, reverse=True)[:12]:
+                console.print(f"[dim]{e.day:%Y-%m-%d}[/] [cyan]{s:>9}[/] {e.label}" + ("  [bold](upcoming)[/]" if e.upcoming else ""))
 
 
 @app.command()

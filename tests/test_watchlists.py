@@ -289,7 +289,7 @@ def test_sidebar_category_below_news_and_prices_only_while_shown(themes, config_
     chart.resize(1200, 700)
     chart.show()
     QApplication.processEvents()
-    assert chart.sidebar.keys == ["news", "watchlists"]
+    assert chart.sidebar.keys[:2] == ["news", "watchlists"]  # later pages (fundamentals #165) come after
     settle()
     assert engine.calls == []  # News is the open category
     chart.sidebar.show_category("watchlists")

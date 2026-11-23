@@ -57,7 +57,7 @@ chart reads the same with red-green colour blindness.
 * **Getting started**: [install, binary, GPU, first run, cache](docs/getting-started.md)
 * **Desktop app**: [Chart](docs/chart.md), [Screener](docs/screener.md), [Scanner](docs/scanner.md),
   [Backtest lab](docs/backtest-lab.md), [Evolve](docs/evolve.md), [Pairs](docs/pairs.md),
-  [Basket](docs/portfolio-backtest.md), [Portfolio](docs/portfolio.md), [Journal](docs/journal.md), [News](docs/news.md), [Settings](docs/settings.md)
+  [Basket](docs/portfolio-backtest.md), [Portfolio](docs/portfolio.md), [Journal](docs/journal.md), [News](docs/news.md), [Fundamentals](docs/fundamentals.md), [Settings](docs/settings.md)
 * **Command line**: [every command with examples](docs/cli.md), [CLI reference](docs/cli-reference.md), tab completion
 * **Extending**: [plugins, indicators, brokers](docs/extending.md),
   [turning an indicator into an algorithm](docs/indicators-as-algorithms.md), `examples/plugins/`

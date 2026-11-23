@@ -69,6 +69,7 @@ Arguments: `SYMBOL`, `ALGO`
 | `--funding` |  | Funding of a perpetual future: a rate per 8 hours (0.0001 = 0.01%, longs pay shorts when positive) or 'history' for the exchange's historical rates (crypto) |
 | `--fee` | `0.001` | Fee per side, fraction |
 | `--slippage` |  | Slippage per side in basis points (5 = 0.05%), charged on top of the fee; 'auto' = suggested for the asset class (crypto 5, stock 2). Default: [backtest] slippage_bps in config.toml, else 0 |
+| `--no-entry-before-earnings` |  | Open no new position in the DAYS days before a company's earnings date (positions already open are kept). Default: [events] earnings_blackout_days in config.toml, else 0 = off |
 | `--capital` | `10000.0` |  |
 | `--dca-amount` |  | Amount the monthly-investing baseline invests each month (default: capital / months) |
 | `--plot`, `--no-plot` | `True` | Show chart with signals and equity |
@@ -234,7 +235,7 @@ Portfolio over time (time- and money-weighted return vs a benchmark, from the jo
 
 ## `tradebot screen`
 
-Screen symbols by technicals, volume and market cap.
+Screen symbols by technicals, volume, market cap and fundamentals.
 
 Arguments: `SYMBOLS` (optional)
 
@@ -243,6 +244,7 @@ Arguments: `SYMBOLS` (optional)
 | `--filter`, `-f` |  | e.g. -f "rsi < 30" -f "close > sma200" |
 | `--sort` | `change_1d` |  |
 | `--watchlist`, `-w` |  | Without symbols: only this watchlist's (default: all watchlists) |
+| `--fundamentals` |  | Add the fundamentals columns (pe, forward_pe, ps, profit_margin, operating_margin, revenue_growth, earnings_growth, dividend_yield, days_to_earnings); also added when a filter uses one, e.g. -f "pe < 15" -f "dividend_yield > 0.03" |
 
 ## `tradebot scan`
 
@@ -286,6 +288,18 @@ Arguments: `SYMBOL`
 | `--tf` | `1d` | Candle timeframe the open interest is bucketed for |
 | `--depth` |  | Also show the order book: how much can be traded within 0.5 / 1 / 2 / 5 % of the mid price, and the imbalance |
 | `--limit` | `500` | Order book levels per side (with --depth) |
+
+## `tradebot fundamentals`
+
+Valuation, margins, growth and dividend yield of stocks, with their earnings, split and dividend dates. Free data from Yahoo Finance, cached for a day. Crypto pairs have none. Not investment advice.
+
+Arguments: `SYMBOLS` (optional)
+
+| Option | Default | Description |
+|---|---|---|
+| `--watchlist`, `-w` |  | Without symbols: only this watchlist's (default: all watchlists) |
+| `--events`, `--no-events` | `True` | List the earnings, split and ex-dividend dates |
+| `--refresh` |  | Ignore the cache and ask again |
 
 ## `tradebot pair`
 

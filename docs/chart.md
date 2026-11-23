@@ -117,6 +117,9 @@ remembers whether it was open and which category was shown.
 * **Order book depth**: the live order book of a crypto pair as a depth chart, with the spread and which side is
   heavier; see [Crypto market data](market-data.md). Funding rate, open interest, Fear & Greed and on-chain metrics
   are indicators (panes under the chart) described there too.
+* **ⓘ Fundamentals**: P/E, margins, growth, dividend yield and the earnings, split and ex-dividend dates of a stock.
+  The **Events** toolbar button marks those dates on the candles (E, S, D). See
+  [Fundamentals and events](fundamentals.md).
 * **⭐ Watchlists**: one or more named lists of symbols, each with its full name, last price and the day's change.
   Pick a list in the box at the top; **＋** creates one, **✎** renames it, **🗑** deletes it (after asking; the last
   list stays). Add symbols with the field (same suggestions as the chart's), with **Add current symbol**, or from the

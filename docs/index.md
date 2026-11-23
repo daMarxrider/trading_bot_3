@@ -34,6 +34,7 @@ bots, a desktop app (PyQt6) and a terminal CLI. It is licensed under the GNU GPL
 * [Basket](portfolio-backtest.md): one account trading a strategy on several symbols (portfolio backtest)
 * [Journal](journal.md): every order the bots placed, realised P&L, tax lots
 * [News](news.md)
+* [Fundamentals and events](fundamentals.md): P/E, margins, dividends, earnings dates, the earnings rule
 * [Settings](settings.md)
 
 **Command line**
