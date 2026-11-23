@@ -187,6 +187,7 @@ Arguments: `SYMBOL` (optional)
 | `--state`, `--no-state` | `True` | Let exit rules use the open trade (bars in trade, stop loss, take profit, trailing stop) |
 | `--indicators` |  | Comma-separated indicators the rules may use (default: all, plugins included) |
 | `--higher-tf` |  | Comma-separated higher timeframes, e.g. 1d,1w: the rules may also use every indicator computed on those candles (only closed ones, no look-ahead) |
+| `--market-data` |  | Crypto symbols: let the rules also use funding rate, open interest, Fear & Greed and on-chain MVRV / active addresses (fetched and lined up without look-ahead; see `tradebot market`). Naming those indicators in --indicators does the same |
 | `--permutations` |  | Also run the search this many times on shuffled candles, to see whether it finds as much in noise (default 0, with --from-scratch 5) |
 | `--folds` |  | Walk-forward: also run the search on this many rolling windows, each scored on the stretch after it (default 0, with --from-scratch 3) |
 | `--fee` | `0.001` |  |
@@ -273,6 +274,18 @@ Arguments: `SYMBOLS` (optional)
 | `--watchlist`, `-w` |  | Without symbols: only this watchlist's (default: all watchlists) |
 | `--source`, `-s` |  | Only these news sources (repeat the option); default: the ones enabled in the settings. See `tradebot news --list-sources` |
 | `--list-sources` |  | Show the available news sources and exit |
+
+## `tradebot market`
+
+Crypto market data beyond candles: funding rate, open interest, Fear & Greed, on-chain MVRV and active addresses, and with --depth the order book (#166). All from free sources that need no key; what can't be fetched (offline, rate limited, no perpetual for the symbol) is named instead. Use the same data as indicators (``funding``, ``open_interest``, ``oi_change``, ``fear_greed``, ``mvrv``, ``active_addresses``) in ``chart``, ``backtest`` rules and ``evolve --market-data``.
+
+Arguments: `SYMBOL`
+
+| Option | Default | Description |
+|---|---|---|
+| `--tf` | `1d` | Candle timeframe the open interest is bucketed for |
+| `--depth` |  | Also show the order book: how much can be traded within 0.5 / 1 / 2 / 5 % of the mid price, and the imbalance |
+| `--limit` | `500` | Order book levels per side (with --depth) |
 
 ## `tradebot pair`
 

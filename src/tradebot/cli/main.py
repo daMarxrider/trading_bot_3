@@ -19,6 +19,7 @@ from tradebot.algorithms import ALGORITHMS, build_algorithm
 from tradebot.cli import complete
 from tradebot.brokers import BROKERS, create_broker
 from tradebot.core.registry import load_plugins
+from tradebot.core.timeframes import to_timedelta
 from tradebot.indicators import INDICATORS
 
 complete.match_case_insensitively()  # before the commands are built: "sol" TAB -> SOL/USDT
@@ -148,8 +149,10 @@ def _higher_timeframes(text: str | None, base: str) -> tuple[str, ...]:
     return out
 
 
-def load_data(symbol: str, tf: str, start: str | None, end: str | None, bars: int | None = None) -> pd.DataFrame:
-    """``start``/``end`` select a date range; without ``start``, the last ``bars`` candles before ``end``."""
+def load_data(symbol: str, tf: str, start: str | None, end: str | None, bars: int | None = None,
+              market: list[str] | None = None) -> pd.DataFrame:
+    """``start``/``end`` select a date range; without ``start``, the last ``bars`` candles before ``end``.
+    ``market``: crypto market data columns to add (funding rate, open interest, ... #166), as far as available."""
     from tradebot.data import MarketDataEngine
 
     with console.status(f"fetching {symbol} {tf} ..."):  # a short history is logged as a warning by the engine
@@ -157,9 +160,32 @@ def load_data(symbol: str, tf: str, start: str | None, end: str | None, bars: in
         if engine.disk is not None:
             engine.disk.maybe_cleanup()  # at most once a day
         df = engine.get_ohlc(symbol, tf, start, end, bars=bars)
+    if market:
+        df = _with_market(df, symbol, market)
     if df.attrs.get("offline"):
         console.print("[yellow]offline: using cached candles, they may be outdated[/]")
     return df
+
+
+def _with_market(df: pd.DataFrame, symbol: str, columns: list[str]) -> pd.DataFrame:
+    """``df`` with the market data ``columns`` attached; what can't be had is reported and left out (NaN in rules)."""
+    from tradebot.data.market import MarketData
+
+    with console.status(f"fetching market data of {symbol} ..."):
+        out = MarketData().attach(df, symbol, columns)
+    for column, why in out.attrs.get("market_errors", {}).items():
+        console.print(f"[yellow]{symbol}: no {column.replace('_', ' ')} ({why}); rules using it never fire[/]")
+    return out
+
+
+def _market_columns(algorithm) -> list[str]:
+    """The market data columns the indicators of ``algorithm`` read."""
+    from tradebot.data.market import wanted_by
+
+    try:
+        return wanted_by(algorithm.chart_indicators())
+    except Exception:  # noqa: BLE001 - an algorithm that can't tell its indicators needs no extra data
+        return []
 
 
 def make_algo(name: str, params: list[str], members: str | None, entry: str | None = None, exit: str | None = None,
@@ -299,7 +325,9 @@ def chart(
     inds = [parse_indicator(s) for s in indicator]
     if algorithm and not inds:
         inds = algorithm.chart_indicators()
-    df = load_data(symbol, tf, None, None, bars + 250)  # extra history warms up indicators
+    from tradebot.data.market import wanted_by
+
+    df = load_data(symbol, tf, None, None, bars + 250, wanted_by(inds))  # extra history warms up indicators
     shown = None
     title = f"{symbol} {tf}" + (f" ({kind})" if kind not in ("candles", "line") else "")
     if kind == "heikin-ashi":
@@ -384,7 +412,7 @@ def backtest(
     if len(symbols) > 1:
         _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount, slippage, margin, funding)
         return
-    df = load_data(symbol, tf, start, end, bars)
+    df = load_data(symbol, tf, start, end, bars, _market_columns(algorithm))
     slip = _slippage(slippage, symbol)
     try:
         res = run_backtest(df, algorithm, fee=fee, initial_capital=capital, slippage=slip, margin=margin,
@@ -500,7 +528,7 @@ def _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_a
     for col in ("symbol", "total return", "sharpe", "XIRR", "vs buy & hold", "vs monthly", "trades"):
         t.add_column(col, justify="left" if col == "symbol" else "right")
     beats = {}
-    for s, df in _load_many(symbols, tf, start, end, bars).items():
+    for s, df in _load_many(symbols, tf, start, end, bars, _market_columns(algorithm)).items():
         slip = _slippage(slippage, s)
         res = run_backtest(df, algorithm, fee=fee, initial_capital=capital, slippage=slip, margin=margin,
                            funding=_funding_history(funding, s, df))
@@ -839,12 +867,13 @@ def _symbols(symbol: str | None, watchlists: list[str]) -> list[str]:
     return list(dict.fromkeys(out))
 
 
-def _load_many(symbols: list[str], tf: str, start, end, bars) -> dict[str, pd.DataFrame]:
+def _load_many(symbols: list[str], tf: str, start, end, bars,
+               market: list[str] | None = None) -> dict[str, pd.DataFrame]:
     """Candles per symbol; a symbol that can't be loaded is left out with a note."""
     frames = {}
     for s in symbols:
         try:
-            frames[s] = load_data(s, tf, start, end, bars)
+            frames[s] = load_data(s, tf, start, end, bars, market)
         except Exception as e:  # unknown symbol, delisted, offline without cache
             console.print(f"[yellow]skipping {s}: {e}[/]")
     if not frames:
@@ -998,6 +1027,10 @@ def evolve(
     higher_tf: Annotated[Optional[str], typer.Option(
         "--higher-tf", help="Comma-separated higher timeframes, e.g. 1d,1w: the rules may also use every indicator "
         "computed on those candles (only closed ones, no look-ahead)")] = None,
+    market_data: Annotated[bool, typer.Option(
+        "--market-data", help="Crypto symbols: let the rules also use funding rate, open interest, Fear & Greed "
+        "and on-chain MVRV / active addresses (fetched and lined up without look-ahead; see `tradebot market`). "
+        "Naming those indicators in --indicators does the same")] = False,
     permutations: Annotated[Optional[int], typer.Option(
         help="Also run the search this many times on shuffled candles, to see whether it finds as much in noise "
         "(default 0, with --from-scratch 5)")] = None,
@@ -1062,7 +1095,17 @@ def evolve(
     if from_scratch and higher:
         raise typer.BadParameter("from scratch uses no ready-made indicators", param_hint="--higher-tf")
     symbols = _symbols(symbol, watchlist)
-    df = load_data(symbols[0], tf, start, end, bars) if len(symbols) == 1 else _load_many(symbols, tf, start, end, bars)
+    market = None
+    if market_data and from_scratch:
+        raise typer.BadParameter("from scratch uses no ready-made indicators", param_hint="--market-data")
+    if market_data and names is None:
+        names = [c.name for c in INDICATORS]
+    if names:
+        from tradebot.data.market import wanted_by
+
+        market = wanted_by(INDICATORS.get(n) for n in names) or None
+    df = (load_data(symbols[0], tf, start, end, bars, market) if len(symbols) == 1
+          else _load_many(symbols, tf, start, end, bars, market))
     if best_result or auto_settings:
         from tradebot.evolve import auto_configure, best_result_settings
 
@@ -1883,6 +1926,57 @@ def news(symbols: Annotated[Optional[list[str]], typer.Argument(autocompletion=c
     for n in items:
         console.print(f"[dim]{n.published:%Y-%m-%d %H:%M}[/] [cyan]{n.symbol:>9}[/] [bold]{n.title}[/] "
                       f"[dim]({n.publisher})[/]\n           [link={n.url}]{n.url}[/link]")
+
+
+@app.command()
+def market(symbol: Annotated[str, typer.Argument(help="A crypto pair, e.g. BTC/USDT", autocompletion=complete.symbols)],
+           tf: Annotated[str, typer.Option(help="Candle timeframe the open interest is bucketed for")] = "1d",
+           depth: Annotated[bool, typer.Option("--depth", help="Also show the order book: how much can be traded "
+                                               "within 0.5 / 1 / 2 / 5 % of the mid price, and the imbalance")] = False,
+           limit: Annotated[int, typer.Option(help="Order book levels per side (with --depth)")] = 500):
+    """Crypto market data beyond candles: funding rate, open interest, Fear & Greed, on-chain MVRV and active
+    addresses, and with --depth the order book (#166).
+
+    All from free sources that need no key; what can't be fetched (offline, rate limited, no perpetual for the
+    symbol) is named instead. Use the same data as indicators (``funding``, ``open_interest``, ``oi_change``,
+    ``fear_greed``, ``mvrv``, ``active_addresses``) in ``chart``, ``backtest`` rules and ``evolve --market-data``."""
+    from tradebot.data.market import SOURCES, MarketData, MarketDataError, is_crypto
+
+    if not is_crypto(symbol):
+        raise typer.BadParameter("market data needs a crypto pair like BTC/USDT")
+    data, step = MarketData(), to_timedelta(tf)
+    now = pd.Timestamp.now(tz="UTC")
+    t = Table(title=f"{symbol} market data")
+    for col in ("metric", "latest", "as of", "note"):
+        t.add_column(col, justify="left" if col in ("metric", "note") else "right")
+    with console.status(f"fetching market data of {symbol} ..."):
+        for column, src in SOURCES.items():
+            try:
+                series, _, offline = data.series(column, symbol, now - 30 * pd.Timedelta(days=1), now, step)
+            except MarketDataError as e:
+                t.add_row(src.title, "–", "–", f"[yellow]{e}[/]")
+                continue
+            last = series.dropna()
+            value = last.iloc[-1]
+            shown = {"funding_rate": f"{value * 100:+.4f} %", "open_interest": f"{value:,.0f}",
+                     "fear_greed": f"{value:.0f}", "mvrv": f"{value:.2f}",
+                     "active_addresses": f"{value:,.0f}"}[column]
+            t.add_row(src.title, shown, f"{last.index[-1]:%Y-%m-%d %H:%M}", "[yellow]cached, offline[/]" if offline else "")
+    console.print(t)
+    if depth:
+        try:
+            book = data.order_book(symbol, limit)
+        except MarketDataError as e:
+            console.print(f"[yellow]{e}[/]")
+            return
+        d = Table(title=f"{symbol} order book on {book.exchange}: mid {book.mid:,.2f}, spread {book.spread * 100:.3f} %")
+        for col in ("within", "bids", "asks", "imbalance"):
+            d.add_column(col, justify="right")
+        for within in (0.005, 0.01, 0.02, 0.05):
+            _, bc, _, ac = book.depth(within)
+            d.add_row(f"{within * 100:g} %", f"{bc[0] if len(bc) else 0:,.2f}", f"{ac[-1] if len(ac) else 0:,.2f}",
+                      f"{book.imbalance(within):+.2f}")
+        console.print(d)
 
 
 @app.command()

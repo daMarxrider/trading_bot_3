@@ -6,6 +6,7 @@ Layout::
 
     ohlc/<symbol>/<timeframe>.npz     candles of one series (timestamps + open/high/low/close/volume)
     symbols/*.json                    crypto pairs, Yahoo search results, instrument names
+    market/<column>/<symbol>.npz      funding rate, open interest, Fear & Greed, on-chain (#166, data/market.py)
 
 Everything here can be deleted at any time; it is rebuilt on demand. A file's mtime is its last use, so
 :meth:`DiskCache.cleanup` can drop what wasn't opened for a while and, over the size cap, the least
@@ -136,7 +137,7 @@ class DiskCache:
                          sum(_size(p) for p in self.symbols_dir.glob("*")), len(series))
 
     def clear(self, ohlc: bool = True, symbols: bool = True) -> None:
-        for wanted, folder in ((ohlc, self.ohlc_dir), (symbols, self.symbols_dir)):
+        for wanted, folder in ((ohlc, self.ohlc_dir), (symbols, self.symbols_dir), (ohlc, self.folder / "market")):
             if wanted:
                 shutil.rmtree(folder, ignore_errors=True)
         if symbols:

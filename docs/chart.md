@@ -114,6 +114,9 @@ remembers whether it was open and which category was shown.
 * **📰 News**: headlines for the symbol on the chart, for stocks and crypto pairs alike (Yahoo Finance). They follow
   the chart when you switch symbols and refresh every 5 minutes, and load only while the sidebar shows them. Click a
   headline to open it in the browser. The [News page](news.md) shows the headlines of all your watchlists.
+* **Order book depth**: the live order book of a crypto pair as a depth chart, with the spread and which side is
+  heavier; see [Crypto market data](market-data.md). Funding rate, open interest, Fear & Greed and on-chain metrics
+  are indicators (panes under the chart) described there too.
 * **⭐ Watchlists**: one or more named lists of symbols, each with its full name, last price and the day's change.
   Pick a list in the box at the top; **＋** creates one, **✎** renames it, **🗑** deletes it (after asking; the last
   list stays). Add symbols with the field (same suggestions as the chart's), with **Add current symbol**, or from the

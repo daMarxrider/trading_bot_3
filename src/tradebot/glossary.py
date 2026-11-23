@@ -92,6 +92,9 @@ TERMS = {
     "aggregate": "With several symbols: how their scores become one for the optimizer.",
     "align": "With several symbols: cut all of them to the dates every one of them has, so they cover the same "
              "period. Otherwise a symbol with much less history than the rest is left out.",
+    "market_data": "Crypto only: also let the rules use the funding rate, open interest, the Fear & Greed index and "
+                   "on-chain MVRV and active addresses. They come from free public sources, lined up so a candle "
+                   "only sees what was known when it opened. Without that data a rule using it never fires.",
     "min_symbols_beating": "Only accept settings that do better than buy & hold (on the objective, in-sample) on at "
                            "least this many symbols. Off accepts any.",
     "samples": "Instead of all in-sample candles, score each round on this many random stretches per symbol, "
