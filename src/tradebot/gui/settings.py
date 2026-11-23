@@ -39,6 +39,7 @@ from tradebot import notify, tools
 from tradebot.brokers import BROKERS
 from tradebot.config import config_path, load_config, os_cache_dir, save_config_value
 from tradebot.data.cache import DEFAULT_MAX_MB, DiskCache, human_size
+from tradebot.gui.icons import bind_icon
 from tradebot.gui.theme import ThemeManager
 
 #: How a credential key is labelled; others read "Some key" from "some_key"
@@ -80,10 +81,10 @@ class SettingsDialog(QDialog):
         self.notify_enabled: dict[str, QCheckBox] = {}
         self.page_names: list[str] = []  # the categories, in the order of the left bar
 
-        self._add_page("Appearance", "🎨", self._appearance(theme_key))
-        self._add_page("Integrations", "🔌", self._integrations())
-        self._add_page("Notifications", "🔔", self._notifications())
-        self._add_page("Data & cache", "💾", self._cache_page())
+        self._add_page("Appearance", "eye", self._appearance(theme_key))
+        self._add_page("Integrations", "key", self._integrations())
+        self._add_page("Notifications", "bell", self._notifications())
+        self._add_page("Data & cache", "db", self._cache_page())
         self.nav_group.buttons()[0].setChecked(True)
         self.nav.addStretch()
 
@@ -107,7 +108,8 @@ class SettingsDialog(QDialog):
                              "QScrollArea > QWidget > QWidget { background: transparent; }")
         scroll.setWidget(content)
         self.pages.addWidget(scroll)
-        btn = QPushButton(f"{icon}  {name.replace('&', '&&')}", objectName="Nav", checkable=True)  # "&": not a shortcut
+        btn = QPushButton(name.replace("&", "&&"), objectName="Nav", checkable=True)  # "&": not a shortcut
+        bind_icon(btn, icon, self.themes, off="muted", on="accent")
         btn.clicked.connect(lambda _, w=scroll: self.pages.setCurrentWidget(w))
         self.nav_group.addButton(btn)
         self.nav.addWidget(btn)
