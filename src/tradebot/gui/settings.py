@@ -3,7 +3,7 @@
 """The settings dialog behind the sidebar's gear button (#59).
 
 Categories on the left, one page each: Appearance (theme, GPU rendering), Integrations (third-party tools, broker
-API keys), Notifications (#155) and Data & cache (the disk cache, #63). A new category is one more :meth:`SettingsDialog._add_page` call.
+API keys), News sources (#194), Notifications (#155) and Data & cache (the disk cache, #63). A new category is one more :meth:`SettingsDialog._add_page` call.
 """
 
 from __future__ import annotations
@@ -35,10 +35,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from tradebot import notify, tools
+from tradebot import news, notify, tools
 from tradebot.brokers import BROKERS
 from tradebot.config import config_path, load_config, os_cache_dir, save_config_value
 from tradebot.data.cache import DEFAULT_MAX_MB, DiskCache, human_size
+from tradebot.gui.common import run_async
 from tradebot.gui.icons import bind_icon
 from tradebot.gui.theme import ThemeManager
 
@@ -84,9 +85,12 @@ class SettingsDialog(QDialog):
         self.notify_events: dict[str, dict[str, QCheckBox]] = {}  # channel type -> event kind -> box
         self.notify_enabled: dict[str, QCheckBox] = {}
         self.page_names: list[str] = []  # the categories, in the order of the left bar
+        self.news_boxes: dict[str, QCheckBox] = {}  # news source id -> its checkbox
+        self.news_errors: dict[str, QLabel] = {}  # news source id -> the marker of a failed fetch
 
         self._add_page("Appearance", "eye", self._appearance(theme_key))
         self._add_page("Integrations", "key", self._integrations())
+        self._add_page("News sources", "news", self._news_page())
         self._add_page("Notifications", "bell", self._notifications())
         self._add_page("Data & cache", "db", self._cache_page())
         self.nav_group.buttons()[0].setChecked(True)
@@ -220,6 +224,135 @@ class SettingsDialog(QDialog):
                 form.addRow(KEY_LABELS.get(key, key.replace("_", " ").capitalize()), field)
         lay.addLayout(form)
         return box
+
+    # -- News sources (#194) ---------------------------------------------------------------------
+    NEWS_GROUPS = {"stocks": "Stocks", "crypto": "Crypto", "any": "General"}
+
+    def _news_page(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(0, 0, 4, 0)
+        lay.addWidget(QLabel("The News page and the chart's News tab only fetch the sources ticked here. A change "
+                             "applies at the next refresh. A source that fails is marked and the others still count.",
+                             objectName="Muted", wordWrap=True))
+        on = set(news.enabled_sources())
+        for scope, title in self.NEWS_GROUPS.items():
+            box = QGroupBox(title)
+            grid = QVBoxLayout(box)
+            grid.setSpacing(10)
+            for src in news.SOURCES.values():
+                if src.scope == scope:
+                    grid.addLayout(self._news_row(src, src.id in on, _news_coverage(src)))
+            lay.addWidget(box)
+        self.custom_box = QGroupBox("Your feeds")
+        self.custom_lay = QVBoxLayout(self.custom_box)
+        lay.addWidget(self.custom_box)
+        form = QFormLayout()
+        self.feed_name = QLineEdit(placeholderText="Name, e.g. SEC filings")
+        self.feed_url = QLineEdit(placeholderText="https://example.com/feed.xml (RSS or Atom)")
+        self.feed_add = QPushButton("Add feed")
+        self.feed_add.setToolTip("Fetches the feed once to check that it works.")
+        self.feed_add.clicked.connect(lambda _: self.add_feed())
+        self.feed_url.returnPressed.connect(self.add_feed)
+        self.feed_result = QLabel(wordWrap=True)
+        form.addRow("Name", self.feed_name)
+        form.addRow("Address", self.feed_url)
+        row = QHBoxLayout()
+        row.addWidget(self.feed_add)
+        row.addWidget(self.feed_result, 1)
+        form.addRow(row)
+        add_box = QGroupBox("Add your own feed")
+        QVBoxLayout(add_box).addLayout(form)
+        lay.addWidget(add_box)
+        lay.addStretch()
+        self._fill_custom_feeds()
+        self._show_news_errors()
+        return page
+
+    def _news_row(self, src, checked: bool, coverage: str, remove=None) -> QHBoxLayout:
+        cb = QCheckBox(src.name)
+        cb.setChecked(checked)
+        cb.toggled.connect(lambda on, i=src.id: self._save_news_source(i, on))
+        cover = QLabel(coverage, objectName="Muted", wordWrap=True)
+        err = QLabel(wordWrap=True)
+        self.news_boxes[src.id], self.news_errors[src.id] = cb, err
+        text = QVBoxLayout()
+        text.setSpacing(2)
+        for w in (cb, cover, err):
+            text.addWidget(w)
+        row = QHBoxLayout()
+        row.addLayout(text, 1)
+        if remove:
+            btn = QPushButton("Remove")
+            btn.clicked.connect(lambda _: remove(src.id))
+            row.addWidget(btn, 0, Qt.AlignmentFlag.AlignTop)
+        return row
+
+    def _fill_custom_feeds(self):
+        while self.custom_lay.count():
+            item = self.custom_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                _delete_layout(item.layout())
+        custom = news.custom_sources()
+        for gone in [i for i in self.news_boxes if i.startswith(news.CUSTOM_PREFIX) and i not in custom]:
+            self.news_boxes.pop(gone), self.news_errors.pop(gone)
+        on = set(news.enabled_sources())
+        if not custom:
+            self.custom_lay.addWidget(QLabel("None yet. Add one below.", objectName="Muted"))
+        for src in custom.values():
+            self.custom_lay.addLayout(self._news_row(src, src.id in on, src.url, remove=self.remove_feed))
+        self._show_news_errors()
+
+    def _save_news_source(self, source_id: str, on: bool):
+        if not news.set_enabled(source_id, on):
+            self.message.emit(f"news source not saved: couldn't write {config_path()}")
+
+    def _show_news_errors(self):
+        """Mark the sources whose latest fetch failed (news.LAST_ERRORS)."""
+        down = self.themes.current.down
+        for sid, label in self.news_errors.items():
+            err = news.LAST_ERRORS.get(sid, "")
+            label.setText(f"<span style='color:{down}'>Failed at the last refresh: {escape(err[:160])}</span>" if err else "")
+            label.setVisible(bool(err))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._show_news_errors()  # a refresh may have failed a source since the page was last shown
+
+    def add_feed(self):
+        """Check the feed by fetching it once; only a working one is kept."""
+        name, url = self.feed_name.text().strip(), self.feed_url.text().strip()
+        if not url:
+            self.feed_result.setText("Enter the feed's address.")
+            return
+        if news.CUSTOM_PREFIX + url in news.custom_sources():
+            self.feed_result.setText("That feed is already in the list.")
+            return
+        self.feed_add.setEnabled(False)
+        self.feed_result.setText("Checking the feed …")
+        validate = news.validate_feed
+        run_async(lambda: validate(url), lambda n: self._feed_checked(name, url, n),
+                  lambda err: self._feed_rejected(err))
+
+    def _feed_checked(self, name: str, url: str, entries: int):
+        self.feed_add.setEnabled(True)
+        if not news.add_custom(name, url):
+            self.feed_result.setText(f"Not saved: couldn't write {escape(str(config_path()))}")
+            return
+        self.feed_name.clear()
+        self.feed_url.clear()
+        self.feed_result.setText(f"Added: {entries} entries found.")
+        self._fill_custom_feeds()
+
+    def _feed_rejected(self, err: str):
+        self.feed_add.setEnabled(True)
+        self.feed_result.setText(f"<span style='color:{self.themes.current.down}'>Not added: {escape(str(err)[:200])}</span>")
+
+    def remove_feed(self, source_id: str):
+        news.remove_custom(source_id)
+        self._fill_custom_feeds()
 
     # -- Notifications ---------------------------------------------------------------------------
     def _notifications(self) -> QWidget:
@@ -427,6 +560,21 @@ class SettingsDialog(QDialog):
         else:
             text = f"✗ not found on PATH · {link}"
         self.status[key].setText(text)
+
+
+def _news_coverage(src) -> str:
+    kind = {"stocks": "stocks", "crypto": "crypto", "any": "stocks and crypto"}[src.scope]
+    how = "asked for each symbol" if src.per_symbol else "headlines matched to your symbols by ticker or name"
+    return f"{kind[0].upper()}{kind[1:]}: {how}"
+
+
+def _delete_layout(layout):
+    while layout.count():
+        item = layout.takeAt(0)
+        if item.widget():
+            item.widget().deleteLater()
+        elif item.layout():
+            _delete_layout(item.layout())
 
 
 def _with_browse(edit: QLineEdit, browse) -> QHBoxLayout:

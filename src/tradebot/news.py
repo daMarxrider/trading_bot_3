@@ -183,6 +183,79 @@ def default_sources() -> list[str]:
     return [s.id for s in SOURCES.values() if s.default]
 
 
+# -- the user's choice (#194): ``[news] sources = [ids]`` and ``custom = ["Name | url", ...]`` in config.toml ----
+CUSTOM_PREFIX = "custom:"
+LAST_ERRORS: dict[str, str] = {}  # source id -> error of its latest fetch; cleared once it works again
+
+
+def custom_sources() -> dict[str, Source]:
+    """The feeds the user added, keyed by their id (``custom:<url>``). Each is a general feed for any symbol."""
+    from tradebot.config import load_config
+
+    out = {}
+    for entry in load_config().get("news", {}).get("custom", []):
+        name, _, url = str(entry).partition("|")  # names never contain "|"
+        url = url.strip()
+        if url.startswith(("http://", "https://")):
+            out[CUSTOM_PREFIX + url] = Source(CUSTOM_PREFIX + url, name.strip() or url, "any", url)
+    return out
+
+
+def all_sources() -> dict[str, Source]:
+    return {**SOURCES, **custom_sources()}
+
+
+def enabled_sources() -> list[str]:
+    """The ids the user switched on; the defaults until the user chose. Ids that no longer exist are dropped."""
+    from tradebot.config import load_config
+
+    chosen = load_config().get("news", {}).get("sources")
+    known = all_sources()
+    return [i for i in chosen if i in known] if isinstance(chosen, list) else default_sources()
+
+
+def set_enabled(source_id: str, on: bool) -> bool:
+    """Switch one source on or off; takes effect with the next fetch. False if config.toml can't be written."""
+    from tradebot.config import save_config_value
+
+    current = [i for i in enabled_sources() if i != source_id]
+    return save_config_value("sources", current + [source_id] if on else current, table="news")
+
+
+def validate_feed(url: str) -> int:
+    """Fetch ``url`` once; the number of entries it has. Raises ValueError (or a network error) if it isn't a feed."""
+    if not url.startswith(("http://", "https://")):
+        raise ValueError("the address must start with http:// or https://")
+    try:
+        items = parse_feed(_download(url), "")
+    except ET.ParseError as exc:
+        raise ValueError(f"not an RSS or Atom feed ({exc})") from exc
+    if not items:
+        raise ValueError("the feed has no entries")
+    return len(items)
+
+
+def add_custom(name: str, url: str) -> bool:
+    """Remember a feed the user added, switched on. The caller validates it first (:func:`validate_feed`)."""
+    from tradebot.config import load_config, save_config_value
+
+    name, url = " ".join(name.replace("|", " ").split()), url.strip()
+    entries = [e for e in load_config().get("news", {}).get("custom", []) if not str(e).endswith("| " + url)]
+    on = enabled_sources()  # before the new feed exists, so the choice is kept as it is
+    ok = save_config_value("custom", entries + [f"{name or url} | {url}"], table="news")
+    return ok and save_config_value("sources", on + [CUSTOM_PREFIX + url], table="news")
+
+
+def remove_custom(source_id: str) -> bool:
+    from tradebot.config import load_config, save_config_value
+
+    url = source_id[len(CUSTOM_PREFIX):]
+    entries = [e for e in load_config().get("news", {}).get("custom", []) if not str(e).endswith("| " + url)]
+    on = [i for i in enabled_sources() if i != source_id]
+    LAST_ERRORS.pop(source_id, None)
+    return save_config_value("custom", entries, table="news") and save_config_value("sources", on, table="news")
+
+
 def _yfinance(sym: str) -> list[NewsItem]:
     import yfinance as yf
 
@@ -199,7 +272,8 @@ def fetch_news_report(symbols: list[str], limit: int = 50, sources: list[str] | 
                       ) -> tuple[list[NewsItem], dict[str, str]]:
     """Newest first, de-duplicated by URL and headline across symbols and sources; plus ``{source id: error}``
     for the sources that failed."""
-    chosen = [SOURCES[i] for i in (default_sources() if sources is None else sources) if i in SOURCES]
+    known = all_sources()
+    chosen = [known[i] for i in (enabled_sources() if sources is None else sources) if i in known]
     errors: dict[str, str] = {}
     jobs = []  # (source, symbol or None)
     for src in chosen:
@@ -230,6 +304,11 @@ def fetch_news_report(symbols: list[str], limit: int = 50, sources: list[str] | 
             errors.setdefault(src.id, err)
             log.warning("news source %s failed%s: %s", src.id, f" for {sym}" if sym else "", err)
         items += [i for i in batch if i.symbol]
+    for src in chosen:  # what the settings page marks
+        if src.id in errors:
+            LAST_ERRORS[src.id] = errors[src.id]
+        else:
+            LAST_ERRORS.pop(src.id, None)
     seen_url, seen_title, out = set(), set(), []
     for n in sorted(items, key=lambda n: n.published, reverse=True):
         url_key, title_key = n.url.split("?")[0] if "news.google" not in n.url else n.url, _title_key(n.title)
@@ -248,5 +327,5 @@ def replace_symbol(item: NewsItem, symbol: str) -> NewsItem:
 
 
 def fetch_news(symbols: list[str], limit: int = 50, sources: list[str] | None = None) -> list[NewsItem]:
-    """Newest first, merged from the enabled ``sources`` (ids of :data:`SOURCES`; default: all default-on ones)."""
+    """Newest first, merged from ``sources`` (ids; default: the ones enabled in the settings)."""
     return fetch_news_report(symbols, limit, sources)[0]
