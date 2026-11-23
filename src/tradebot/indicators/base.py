@@ -97,9 +97,10 @@ class BaseIndicator(ABC):
     #: What a label means, shown when hovering over it: ``{output: {code: sentence}}``.
     label_help: ClassVar[dict[str, dict[float, str]]] = {}
     #: Outputs drawn as horizontal bands instead of a line that steps diagonally from level to level (#164):
-    #: ``{output: (colour, letter)}``, the colour as for :class:`Style` and a letter that marks the band. The
-    #: band's half height is ``zone / 2`` of the price when the indicator has a ``zone`` parameter.
-    zones: ClassVar[dict[str, tuple[str, str]]] = {}
+    #: ``{output: (colour, letter[, "latest"])}``, the colour as for :class:`Style`, a letter that marks the
+    #: band and optionally ``"latest"`` to draw only the current band.
+    #: The band's half height is ``zone / 2`` of the price when the indicator has a ``zone`` parameter.
+    zones: ClassVar[dict[str, tuple[str, ...]]] = {}
     #: Colour of individual ``levels``: ``{level: Style(...)}``; levels without a style are dotted and muted.
     level_styles: ClassVar[dict[float, Style]] = {}
     #: Shaded areas between two outputs: ``[(output_a, output_b, Style(color=...))]``, drawn behind the lines.

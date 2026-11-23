@@ -1245,6 +1245,7 @@ class ChartView(QWidget):
         if self.volume_overlay and np.isfinite(volume_of(df)).any():
             self._draw_volume_overlay(x, volume_of(df), o, c, width, t)
 
+        self._label_last = {True: -10**9, False: -10**9}  # pattern labels of all indicators share their spacing
         for ind in self.indicators:
             if compare and ind.overlay:
                 continue
@@ -1404,12 +1405,16 @@ class ChartView(QWidget):
 
     def _draw_zone(self, target, ind, frame, col, x, width, t, values):
         """An output drawn as horizontal bands, one per run of a level, plus its letter at the latest one."""
-        colour, letter = ind.zones[ind.output_of(col)]
+        colour, letter = ind.zones[ind.output_of(col)][:2]
         raw = frame[col].to_numpy(dtype=float)
         slot = width / 0.7  # one candle's space on the x-axis
         half = raw * float(ind.values.get("zone", 0.006)) / 2
         ty = self._ty if target is self.price else (lambda v: v)
         segs = zone_segments(x, raw, half, slot)
+        # a level that held for a couple of candles is noise, not a zone; the current one is always kept
+        segs = [g for k, g in enumerate(segs) if k == len(segs) - 1 or g[1] - g[0] >= 4 * slot]
+        if len(ind.zones[ind.output_of(col)]) > 2:  # e.g. the point of control: only where it is now
+            segs = segs[-1:]
         # the log scale bends prices, so the bands are placed by their transformed edges
         segs = [(x0, x1, float(ty(lo)), float(ty(hi)), float(ty(level))) for x0, x1, lo, hi, level in segs]
         color = qcolor(resolve_color(t, colour))
@@ -1441,13 +1446,14 @@ class ChartView(QWidget):
         anchor_col = f"{ind.name}_{ind.label_anchor}" if ind.label_anchor else None
         anchor = frame[anchor_col].to_numpy() if anchor_col in frame else close
         codes = frame[col].to_numpy()
-        last_on = {True: -10**9, False: -10**9}
+        last_on = self._label_last
         for i in np.flatnonzero(~np.isnan(codes)):
             # label above swing highs (local maximum of the anchor line), below swing lows
             neighbours = anchor[max(i - 1, 0): i + 2]
             is_high = anchor[i] >= np.nanmax(neighbours)
             code = float(codes[i])
             colour = t.text
+            chip = {}
             if ind.label_signs:
                 # bullish patterns sit under the candle, bearish ones over it, whatever the neighbours say
                 is_high = code < 0 or (code >= 10 and is_high)
@@ -1455,13 +1461,20 @@ class ChartView(QWidget):
                     continue  # too close to the previous label on this side: the alert still fires
                 last_on[is_high] = i
                 colour = t.down if code < 0 else t.up if code < 10 else t.muted
-            item = pg.TextItem(texts.get(code, "?"), color=colour, anchor=(0.5, 1.15 if is_high else -0.15))
+                # a chip in the panel colour keeps the text readable on top of same-coloured candles
+                fill = qcolor(t.panel)
+                fill.setAlpha(235)
+                chip = {"fill": pg.mkBrush(fill), "border": pg.mkPen(qcolor(colour))}
+            item = pg.TextItem(texts.get(code, "?"), color=colour,
+                               anchor=(0.5, 1.45 if is_high else -0.45) if ind.label_signs
+                               else (0.5, 1.15 if is_high else -0.15), **chip)
             font = item.textItem.font()
             font.setBold(True)
             item.setFont(font)
             if code in helps:
                 item.setToolTip(helps[code])
             item.setPos(x[i], self._ty(anchor[i]) if target is self.price else anchor[i])
+            item.setZValue(10)
             target.addItem(item)
 
     # -- crosshair & drawing tools ---------------------------------------------------------------

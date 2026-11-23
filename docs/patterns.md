@@ -14,11 +14,11 @@ changes later. That makes them safe in the [Scanner](scanner.md), as combo condi
 
 * **Chart**: add the indicator. Patterns are short labels that pair the colour with a triangle: green `▲` under the
   candle for bullish, red `▼` over it for bearish, a grey `◆` for the symmetrical triangle (no direction). Hover a
-  label for its full name. Labels of one indicator closer than eight candles on the same side are thinned out so the
+  label for its full name. Labels sit in a small chip in the panel colour, and labels of all pattern indicators closer than eight candles on the same side are thinned out so the
   chart stays readable; every pattern is still an alert. The doji is an alert only (it is frequent).
 * **Levels** (`support_resistance`, `volume_levels`) are drawn as horizontal bands, one per stretch where the level
   stayed the same, with a thin line at the level and an `S` (green, support) or `R` (red, resistance) at the latest
-  one (`POC` in grey for the point of control). The band is `zone` of the price high. They are not lines that slant
+  one (a grey `POC` band only where the point of control is now). Stretches shorter than four candles are not drawn. The band is `zone` of the price high. They are not lines that slant
   from level to level, because a level does not move gradually: it is replaced.
 * **Combo filter**: `candles.bull_engulfing & rsi(14) < 40`, `chart_patterns.double_bottom`,
   `support_resistance.breakout_up & close > sma(200)`; parameters in brackets, e.g. `chart_patterns(8).bullish`.

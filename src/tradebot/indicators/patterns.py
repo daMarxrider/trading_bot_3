@@ -250,7 +250,7 @@ class VolumeLevels(BaseIndicator):
               }
     outputs = ("support", "resistance", "poc", "near_support", "near_resistance", "breakout_up", "breakout_down")
     uses_volume = True
-    zones = {"support": ("up", "S"), "resistance": ("down", "R"), "poc": ("muted", "POC")}
+    zones = {"support": ("up", "S"), "resistance": ("down", "R"), "poc": ("muted", "POC", "latest")}
     #: drawn as bands only; the levels move with the profile, so ``evolve`` is not offered them as numbers (the
     #: alerts below are the way to use them in rules)
     hidden = ("support", "resistance", "poc")
