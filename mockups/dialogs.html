@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dialogs and states · tradebot redesign</title><link rel="stylesheet" href="shared.css">
+<style>
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); gap: 28px 24px; padding: 20px; align-items: start; width: 100%; }
+  .cell > h3 { font-size: 12px; font-weight: 500; color: var(--muted); margin-bottom: 8px; }
+  .cell .dialog { width: 100%; max-height: none; }
+  .frame { border: 1px dashed var(--line-2); border-radius: 10px; padding: 18px; background: var(--rail); }
+</style></head>
+<body data-page="dialogs" data-title="Dialogs and states" data-status="Every dialog and system state, in the new style">
+<template id="top"><span class="muted">Dialogs open as a sheet over the page; modals only where a decision can't wait.</span></template>
+<div id="view" class="scroll" style="width:100%"><div class="grid">
+
+  <div class="cell"><h3>First live run: risk notice</h3><div class="frame"><div class="dialog">
+    <header>Before you trade live<span class="sp"></span></header>
+    <div class="body"><div class="notice warn"><i data-i="alert"></i><span>tradebot is not financial advice. Backtests and optimizer results don't predict future returns. A bug, a bad signal or a broker outage can cost you money.</span></div>
+      <p class="muted">You are responsible for your accounts and API keys. Run a strategy as a dry run, and on a testnet (<span class="mono">--sandbox</span>), before you use <span class="mono">--live</span>.</p>
+      <label class="chk">I have read this and accept the risk</label></div>
+    <footer><button class="btn">Cancel</button><button class="btn primary disabled">Start live bot</button></footer></div></div></div>
+
+  <div class="cell"><h3>About</h3><div class="frame"><div class="dialog">
+    <header>About tradebot<span class="sp"></span><button class="btn ghost icon sm"><i data-i="close"></i></button></header>
+    <div class="body"><div class="row"><b style="font-size:18px">tradebot</b><span class="pill">v1.12.0</span></div>
+      <p class="muted" style="line-height:1.55">Independent software. Not affiliated with, endorsed by, or sponsored by Binance, KuCoin, Pionex, Scalable Capital, Trade Republic or Yahoo. Provided as is, without warranty (GNU GPL v3, sections 15 and 16).</p>
+      <div class="row wrap"><a href="#">Licence · GPL-3.0-or-later</a><a href="#">Third-party notices</a><a href="#">Source code</a></div></div></div></div></div>
+
+  <div class="cell"><h3>Scan source</h3><div class="frame"><div class="dialog">
+    <header>Scan source<span class="sp"></span><button class="btn ghost icon sm"><i data-i="close"></i></button></header>
+    <div class="tabs"><button aria-selected="true">Watchlists</button><button>Indices</button></div>
+    <div class="body" style="gap:0;padding:0"><div class="listrow"><span class="chk on"></span><span>Crypto majors</span><span class="r muted">8 symbols</span></div><div class="listrow"><span class="chk"></span><span>Tech</span><span class="r muted">14 symbols</span></div><div class="listrow"><span class="chk on"></span><span>ETFs</span><span class="r muted">6 symbols</span></div></div>
+    <footer><span class="muted" style="margin-right:auto">14 symbols selected</span><button class="btn">Cancel</button><button class="btn primary">Use source</button></footer></div></div></div>
+
+  <div class="cell"><h3>Scan indicator</h3><div class="frame"><div class="dialog">
+    <header>Add column<span class="sp"></span><button class="btn ghost icon sm"><i data-i="close"></i></button></header>
+    <div class="body"><label class="input"><i data-i="search"></i><input placeholder="Search indicators"></label>
+      <div class="col" style="border:1px solid var(--line);border-radius:6px"><div class="listrow sel"><span class="sym">RSI</span><span class="muted">Relative strength index</span></div><div class="listrow"><span class="sym">MACD</span><span class="muted">Moving average convergence</span></div><div class="listrow"><span class="sym">Supertrend</span><span class="muted">Trend filter</span><span class="pill accent r" style="margin-left:auto">script</span></div></div>
+      <div class="form"><span class="label">Period</span><div class="input"><input value="14"></div><span class="label">Kind</span><div class="seg" style="width:fit-content"><button aria-pressed="true">number</button><button>true / false</button></div></div></div>
+    <footer><button class="btn">Cancel</button><button class="btn primary">Add column</button></footer></div></div></div>
+
+  <div class="cell"><h3>Filter</h3><div class="frame"><div class="dialog">
+    <header>New filter<span class="sp"></span><button class="btn ghost icon sm"><i data-i="close"></i></button></header>
+    <div class="body"><div class="row"><div class="select fill">RSI 14</div><div class="select" style="width:120px">is below</div><div class="input" style="width:90px"><input value="35"></div></div><div class="hint">Rows that don't match are hidden, not deleted. Remove the filter to see them again.</div></div>
+    <footer><button class="btn">Cancel</button><button class="btn primary">Add filter</button></footer></div></div></div>
+
+  <div class="cell" id="skipped"><h3>Skipped symbols</h3><div class="frame"><div class="dialog">
+    <header>3 symbols were skipped<span class="sp"></span><button class="btn ghost icon sm"><i data-i="close"></i></button></header>
+    <div class="body" style="gap:0;padding:0"><div class="listrow"><span class="sym">ATVI</span><span class="r muted">Delisted</span></div><div class="listrow"><span class="sym">TWTR</span><span class="r muted">No data for 1D</span></div><div class="listrow"><span class="sym">FB</span><span class="r muted">Renamed to META</span></div></div>
+    <footer><button class="btn">Copy list</button><button class="btn primary">Close</button></footer></div></div></div>
+
+  <div class="cell"><h3>Chart style</h3><div class="frame"><div class="dialog">
+    <header>Style · EMA 21<span class="sp"></span><button class="btn ghost icon sm"><i data-i="close"></i></button></header>
+    <div class="body"><div class="form"><span class="label">Colour</span><div class="row"><i style="width:18px;height:18px;border-radius:4px;background:var(--s5)"></i><div class="input" style="width:110px"><input value="#7ee0a8"></div></div><span class="label">Width</span><div class="seg" style="width:fit-content"><button>1</button><button aria-pressed="true">1.5</button><button>2</button><button>3</button></div><span class="label">Line</span><div class="seg" style="width:fit-content"><button aria-pressed="true">Solid</button><button>Dashed</button><button>Dotted</button></div></div></div>
+    <footer><button class="btn ghost" style="margin-right:auto">Reset</button><button class="btn">Cancel</button><button class="btn primary">Apply</button></footer></div></div></div>
+
+  <div class="cell"><h3>Strategy parameters</h3><div class="frame"><div class="dialog">
+    <header>EMA Cross<span class="sp"></span><button class="btn ghost icon sm"><i data-i="close"></i></button></header>
+    <div class="body"><div class="form"><span class="label">Fast EMA</span><div class="input"><input value="9"></div><span class="label">Slow EMA</span><div class="input"><input value="21"></div><span class="label">Stop loss %</span><div class="input" style="border-color:var(--dn)"><input value="-3"></div></div><div class="row dn" style="gap:6px">Stop loss must be above 0. Use 3 for a 3% stop.</div></div>
+    <footer><button class="btn">Cancel</button><button class="btn primary">Apply</button></footer></div></div></div>
+
+  <div class="cell"><h3>Empty state · scanner</h3><div class="frame"><div class="pane" style="height:260px"><div class="empty"><i data-i="scanner"></i><h3>Nothing scanned yet</h3><span>Pick a source, add an indicator column, then press Scan. Filters narrow the result.</span><button class="btn primary"><i data-i="db"></i>Choose a source</button></div></div></div></div>
+
+  <div class="cell"><h3>Error state · data failed</h3><div class="frame"><div class="pane" style="height:260px"><div class="empty"><i data-i="alert" style="color:var(--warn)"></i><h3>Couldn't load BTC/USDT 1h</h3><span>Binance didn't answer within 10 s. Your cached candles from yesterday are still available.</span><div class="row"><button class="btn">Use cached data</button><button class="btn primary">Retry</button></div></div></div></div></div>
+
+  <div class="cell"><h3>Loading state</h3><div class="frame"><div class="pane" style="height:260px;padding:16px;gap:12px"><div class="skel" style="width:40%;height:16px"></div><div class="skel" style="height:140px"></div><div class="row"><div class="skel" style="width:20%"></div><div class="skel" style="width:30%"></div></div></div></div></div>
+
+  <div class="cell"><h3>Kill switch on · live mode</h3><div class="frame" style="position:relative;height:260px;overflow:hidden"><div style="position:absolute;inset:0;background:var(--live-bg);color:#fff;padding:10px 16px;height:38px;display:flex;gap:10px;align-items:center;font-weight:500"><i data-i="power"></i>Kill switch is on. Every live bot stops at its next check and no new orders go out.</div>
+    <div style="position:absolute;left:18px;right:18px;top:60px;display:flex;gap:8px;align-items:center"><span class="mode live"><span class="dot live"></span>LIVE</span><button class="kill" aria-pressed="true"><i data-i="power"></i><span>Kill switch ON</span></button><span class="muted">Daily loss cap 2% · drawdown cap 10% · max exposure 40%</span></div>
+    <div class="notice" style="position:absolute;left:18px;right:18px;top:106px"><i data-i="lock"></i><span>3 bots stopped at 14:31:02. Positions stay open. Close them at your broker or turn the switch off to resume.</span></div></div></div>
+
+  <div class="cell"><h3>Hover tooltip · touch long-press shows the same card</h3><div class="frame" style="height:180px;position:relative"><div class="tip" style="left:30px;top:30px"><b>2026-09-09 14:00</b><br>O 60 120 &nbsp;H 61 004<br>L 59 874 &nbsp;C <span class="up">60 861</span><br><span class="muted">Sell signal · EMA Cross</span></div></div></div>
+</div></div>
+<script src="shell.js"></script></body></html>

@@ -13,6 +13,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QLabel, QStackedWidget, QToolButton, QVBoxLayout, QWidget
 
 from tradebot.config import Settings
+from tradebot.gui.icons import PATHS, bind_icon
 
 OPEN_KEY, CATEGORY_KEY = "chart.sidebar.open", "chart.sidebar.category"
 PANEL_WIDTH = 340
@@ -22,9 +23,10 @@ class ChartSidebar(QFrame):
     #: a category's page became visible (opened, or switched to while open): the key
     shown = pyqtSignal(str)
 
-    def __init__(self, settings: Settings | None = None, touch: bool = False, parent=None):
+    def __init__(self, settings: Settings | None = None, touch: bool = False, parent=None, themes=None):
         super().__init__(parent, objectName="ChartSidebar")
         self.settings = settings
+        self.themes = themes  # with a theme manager the buttons get drawn icons, otherwise plain text (#191)
         self.keys: list[str] = []
         self.button_size = 52 if touch else 42  # the strip's square buttons; finger-sized in touch mode
         self.toggle = QToolButton(objectName="SidebarToggle", toolTip="Hide the sidebar")
@@ -54,7 +56,10 @@ class ChartSidebar(QFrame):
         self._apply()
 
     def add_category(self, key: str, icon: str, name: str, page: QWidget):
-        btn = QToolButton(text=icon, objectName="SidebarTab", checkable=True, toolTip=name)
+        drawn = self.themes is not None and icon in PATHS
+        btn = QToolButton(text="" if drawn else icon, objectName="SidebarTab", checkable=True, toolTip=name)
+        if drawn:
+            bind_icon(btn, icon, self.themes, off="muted", on="accent", size=20)
         self._square(btn)
         btn.clicked.connect(lambda: self.show_category(key))
         self.group.addButton(btn)
@@ -108,6 +113,9 @@ class ChartSidebar(QFrame):
 
     def _apply(self):
         self.panel.setVisible(self._open)
-        self.toggle.setText("»" if self._open else "«")  # » pushes it closed to the right, « pulls it open
+        if self.themes is not None:
+            bind_icon(self.toggle, "chevr" if self._open else "chevl", self.themes, off="muted", size=20)  # pushes it closed / pulls it open
+        else:
+            self.toggle.setText("»" if self._open else "«")
         self.toggle.setToolTip("Hide the sidebar" if self._open else "Show the sidebar")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)

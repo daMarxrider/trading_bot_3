@@ -4,14 +4,15 @@
 
 from __future__ import annotations
 
+import html
 import math
 import re
 
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
-from PyQt6.QtCore import QEvent, QRectF, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPen
+from PyQt6.QtCore import QEvent, QRectF, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import QColor, QDesktopServices, QPainter, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -20,6 +21,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
@@ -33,6 +35,8 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QSplitter,
+    QStackedWidget,
     QTabWidget,
     QTableView,
     QToolButton,
@@ -59,7 +63,10 @@ from tradebot.glossary import AGGREGATES, METHODS, OBJECTIVES, STRATEGIES, expla
 from tradebot.gui.common import (
     DataFrameModel,
     DateRange,
+    EmptyState,
     Kpi,
+    TableWithEmpty,
+    kpi_strip,
     Panes,
     SymbolCompleter,
     card,
@@ -132,6 +139,7 @@ def _signed_color(themes: ThemeManager, cols: set[str]):
             return qcolor(themes.current.up if value >= 0 else themes.current.down)
         return None
 
+    color.marked = cols  # DataFrameModel prefixes these columns' numbers with an up / down triangle (#191)
     return color
 
 
@@ -381,7 +389,9 @@ class ScreenerView(QWidget):
         box.layout().addLayout(top)
         lay.addWidget(box)
         lay.addWidget(self.progress)
-        lay.addWidget(table, 1)
+        self.results = TableWithEmpty(table, self.model, themes, "screener", "Nothing screened yet",
+                                      "Pick a preset or type filters, then press Run screen.")
+        lay.addWidget(self.results, 1)
         lay.addWidget(hint)
 
     def run(self):
@@ -395,6 +405,7 @@ class ScreenerView(QWidget):
 
         def done(table):
             self.progress.hide()
+            self.results.empty.set_message("No symbol matches", "Loosen a filter, or add symbols to the universe.")
             self.model.set_frame(table)
             self.status.emit(f"screener: {len(table)} of {len(symbols)} match")
 
@@ -408,6 +419,7 @@ class ScreenerView(QWidget):
 # -- news -------------------------------------------------------------------------------------------------
 class NewsView(QWidget):
     status = pyqtSignal(str)
+    open_symbol = pyqtSignal(str)
     REFRESH_MS = 5 * 60 * 1000
 
     def __init__(self, themes: ThemeManager, symbols_fn):
@@ -438,11 +450,66 @@ class NewsView(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 16, 16, 16)
         lay.addLayout(head)
-        lay.addWidget(self.list, 1)
-        hint = QLabel("Watchlist and portfolio symbols · double-click a headline to open it in the browser")
+        self.shown = []  # the headlines in the list, in row order
+        self.list.currentRowChanged.connect(self._show_detail)
+        self.reader = self._build_reader()
+        split = QSplitter(Qt.Orientation.Horizontal)
+        split.addWidget(self.list)
+        split.addWidget(self.reader)
+        split.setStretchFactor(0, 2)
+        split.setStretchFactor(1, 3)
+        lay.addWidget(split, 1)
+        hint = QLabel("Watchlist and portfolio symbols · pick a headline to read it, double-click to open it in the browser")
         hint.setObjectName("Muted")
         lay.addWidget(hint)
         themes.changed.connect(lambda _: self._render())
+
+    def _build_reader(self) -> QFrame:
+        """The reading pane (#191): the picked headline in full, with the two things to do with it."""
+        pane = QFrame(objectName="Card")
+        self.reader_meta = QLabel(wordWrap=True)
+        self.reader_title = QLabel(objectName="Title", wordWrap=True)
+        self.reader_body = QLabel(wordWrap=True, alignment=Qt.AlignmentFlag.AlignTop)
+        self.reader_body.setObjectName("Muted")
+        self.reader_open = QPushButton("Open article")
+        self.reader_chart = QPushButton("Open chart")
+        self.reader_open.clicked.connect(lambda: self.shown and self._open_row(self.list.currentRow()))
+        self.reader_chart.clicked.connect(lambda: self.shown and self.open_symbol.emit(self.shown[self.list.currentRow()].symbol))
+        self.reader_empty = EmptyState(self.themes, "news", "Pick a headline", "Its summary and the links appear here.")
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.reader_open)
+        buttons.addWidget(self.reader_chart)
+        buttons.addStretch()
+        self.reader_page = QWidget()
+        page = QVBoxLayout(self.reader_page)
+        page.setContentsMargins(20, 20, 20, 20)
+        page.setSpacing(12)
+        for w in (self.reader_meta, self.reader_title, self.reader_body):
+            page.addWidget(w)
+        page.addLayout(buttons)
+        page.addStretch()
+        self.reader_stack = QStackedWidget()
+        self.reader_stack.addWidget(self.reader_empty)
+        self.reader_stack.addWidget(self.reader_page)
+        box = QVBoxLayout(pane)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.addWidget(self.reader_stack)
+        return pane
+
+    def _open_row(self, row: int):
+        if 0 <= row < len(self.shown):
+            QDesktopServices.openUrl(QUrl(self.shown[row].url))
+
+    def _show_detail(self, row: int):
+        if not 0 <= row < len(self.shown):
+            self.reader_stack.setCurrentWidget(self.reader_empty)
+            return
+        n, t = self.shown[row], self.themes.current
+        self.reader_meta.setText(f"<span style='color:{t.accent}; font-weight:600'>{html.escape(n.symbol)}</span>"
+                                 f"&nbsp;&nbsp;<span style='color:{t.muted}'>{html.escape(n.publisher)} · {n.published:%Y-%m-%d %H:%M}</span>")
+        self.reader_title.setText(n.title)
+        self.reader_body.setText(n.summary or "No summary from the publisher. Open the article to read it.")
+        self.reader_stack.setCurrentWidget(self.reader_page)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -469,7 +536,9 @@ class NewsView(QWidget):
     def _render(self):
         needle = self.filter.text().lower()
         items = [n for n in self.items if not needle or needle in (n.title + n.summary + n.symbol).lower()]
+        self.shown = items
         fill_news_list(self.list, items, self.themes)
+        self._show_detail(self.list.currentRow())
 
 
 # -- portfolio --------------------------------------------------------------------------------------------
@@ -541,9 +610,7 @@ class PortfolioView(QWidget):
         self.kpis = {k: Kpi(label) for k, label in (
             ("value", "Total equity"), ("income", "Annual dividend income"), ("current", "Current dividend yield"),
             ("annual", "Annual (trailing) yield"), ("yoc", "Yield on cost"))}
-        kpi_row = QHBoxLayout()
-        for k in self.kpis.values():
-            kpi_row.addWidget(k)
+        kpi_row = kpi_strip(self.kpis.values())
         self.donut = DonutChart(themes)
         self.by_class = DonutChart(themes)
         self.model = DataFrameModel(formats={
@@ -562,9 +629,10 @@ class PortfolioView(QWidget):
         box = card()
         box.layout().addLayout(brokers)
         lay.addWidget(box)
-        lay.addLayout(kpi_row)
+        lay.addWidget(kpi_row)
         lay.addLayout(charts)
-        lay.addWidget(table, 1)
+        lay.addWidget(TableWithEmpty(table, self.model, themes, "wallet", "No portfolio loaded",
+                                     "Tick your brokers and press Load portfolio to see holdings and dividend income."), 1)
 
         # analytics (#169)
         self.benchmark = QLineEdit("SPY", toolTip="Benchmark symbol, e.g. SPY, URTH (MSCI World) or BTC/USDT")

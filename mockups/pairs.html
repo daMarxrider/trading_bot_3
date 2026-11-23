@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pairs · tradebot redesign</title><link rel="stylesheet" href="shared.css"></head>
+<body data-page="pairs" data-title="Pairs" data-status="Analysed KO / PEP · 1 000 daily bars">
+<template id="top">
+  <label class="input" style="width:150px"><input value="KO" aria-label="Leg A"></label><span class="muted">vs</span><label class="input" style="width:150px"><input value="PEP" aria-label="Leg B"></label>
+  <div class="select" style="width:90px">1D</div><button class="btn primary"><i data-i="play"></i>Analyse</button>
+</template>
+<div id="view" class="pages" style="flex-direction:column">
+  <div class="strip reveal" style="flex:none"><div class="s"><span>Correlation</span><b>0.91</b></div><div class="s"><span>Hedge ratio</span><b>0.84</b></div><div class="s"><span>Spread z-score</span><b class="dn">−2.12</b></div><div class="s"><span>Half-life</span><b>11 days</b></div><div class="s"><span>Cointegration p</span><b class="up">0.018</b></div><div class="s"><span>Reading</span><b>Spread cheap</b></div></div>
+  <div class="row fill" style="gap:12px;align-items:stretch">
+    <div class="col fill" style="gap:12px">
+      <div class="pane fill reveal"><header>Prices, rebased to 100</header><div class="plot fill" data-lines='{"n":160,"labels":["2023","2024","2025","2026"],"xl":4,"series":[{"seed":81,"start":100,"vol":0.014,"drift":0.0012,"c":1,"w":2},{"seed":82,"start":100,"vol":0.016,"drift":0.001,"c":2,"w":2}]}'><div class="legend"><span><i class="sw" style="background:var(--s1)"></i>KO</span><span><i class="sw" style="background:var(--s2)"></i>PEP</span></div></div></div>
+      <div class="pane fill reveal" style="animation-delay:0.05s"><header>Spread z-score<span class="sp"></span><span class="hint">Entry at ±2, exit at 0</span></header><div class="plot fill" data-lines='{"n":160,"labels":["2023","2024","2025","2026"],"xl":4,"series":[{"seed":91,"start":3,"vol":0.35,"drift":0,"c":4,"w":1.8}]}'></div></div>
+    </div>
+    <div class="pane" style="width:300px;flex:none"><header>Candidate pairs</header><div class="fill scroll">
+      <div class="listrow sel"><span class="sym">KO / PEP</span><span class="r"><span class="dn">z −2.12</span><br><span class="muted">ρ 0.91</span></span></div>
+      <div class="listrow"><span class="sym">V / MA</span><span class="r"><span class="up">z +1.04</span><br><span class="muted">ρ 0.97</span></span></div>
+      <div class="listrow"><span class="sym">XOM / CVX</span><span class="r"><span class="up">z +0.31</span><br><span class="muted">ρ 0.93</span></span></div>
+      <div class="listrow"><span class="sym">GS / MS</span><span class="r"><span class="dn">z −1.48</span><br><span class="muted">ρ 0.95</span></span></div>
+    </div></div>
+  </div>
+</div>
+<script src="shell.js"></script></body></html>

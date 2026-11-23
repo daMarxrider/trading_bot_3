@@ -44,6 +44,14 @@ tradebot evolve AAPL,MSFT,NVDA --generations 60 --save my_rule
 tradebot bot run ETH/USDT sma_cross --tf 1h --stake 50 --paper
 ```
 
+## Screenshots
+
+The desktop app in its two main themes (synthetic demo candles). Up is blue-teal and down is vermilion, so the
+chart reads the same with red-green colour blindness.
+
+![Chart in the Graphite theme](docs/screenshots/chart-graphite.png)
+![Chart in the Paper theme](docs/screenshots/chart-paper.png)
+
 ## Documentation
 
 * **Getting started**: [install, binary, GPU, first run, cache](docs/getting-started.md)

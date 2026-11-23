@@ -4,7 +4,7 @@
 
 Example::
 
-    theme = "glass"
+    theme = "graphite"
 
     [watchlists]
     Main = ["AAPL", "MSFT", "BTC/USDT", "ETH/USDT"]

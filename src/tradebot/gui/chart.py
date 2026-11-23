@@ -39,10 +39,12 @@ from tradebot.gui.common import (
     FlowLayout,
     SymbolCompleter,
     epoch_seconds,
+    StateOverlay,
     run_async,
     shortfall,
     toolbar_group,
 )
+from tradebot.gui.icons import bind_icon
 from tradebot.gui.drawings import FibItem, MeasureItem, NoteItem, color_of, set_color, to_spec
 from tradebot.gui.news import NewsPanel
 from tradebot.gui.params import ParamDialog
@@ -476,6 +478,7 @@ class ChartView(QWidget):
         self.indicators: list = []
         self.algorithm = None
         self.drawings: list = []
+        self._preview = None  # the rubber-band shape between the first click of a two-point tool and the cursor
         self._pending_point = None
         self._x = np.empty(0)
         self._fit_series: dict = {}  # plot -> the arrays its y-axis auto-fit covers
@@ -525,7 +528,9 @@ class ChartView(QWidget):
         self.versus.setVisible(False)
         self.compare: dict[str, pd.DataFrame] = {}  # the other symbols' candles in Compare mode
 
-        self.ind_btn = QToolButton(text="Indicators ▾")
+        self.ind_btn = QToolButton(text="Indicators")
+        self.ind_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        bind_icon(self.ind_btn, "layers", themes, off="muted")
         self.ind_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.ind_menu = QMenu(self)
         self.ind_menu.aboutToShow.connect(self._fill_indicator_menu)
@@ -538,22 +543,28 @@ class ChartView(QWidget):
 
         self.tools: dict[str, QToolButton] = {}
         tool_group = []
-        for key, label, tip in (("trend", "╱ Trend", "Trendline: click two points"),
-                                ("hline", "― Level", "Support/resistance: click a price"),
-                                ("rect", "▭ Zone", "Rectangle: click two corners"),
-                                ("fib", "𝔽 Fib", "Fibonacci retracement/extension: click the 0 and the 1 point"),
-                                ("vline", "│ Time", "Vertical line: click a point in time"),
-                                ("text", "𝐓 Note", "Text note: click where it goes, then type it"),
-                                ("measure", "↕ Measure", "Price range measure: click two points to read the change "
+        for key, glyph, label, tip in (("trend", "trend", "Trend", "Trendline: click two points"),
+                                ("hline", "hline", "Level", "Support/resistance: click a price"),
+                                ("rect", "rect", "Zone", "Rectangle: click two corners"),
+                                ("fib", "fib", "Fib", "Fibonacci retracement/extension: click the 0 and the 1 point"),
+                                ("vline", "vline", "Time", "Vertical line: click a point in time"),
+                                ("text", "text", "Note", "Text note: click where it goes, then type it"),
+                                ("measure", "ruler", "Measure", "Price range measure: click two points to read the change "
                                                          "in price, percent and time")):
             btn = QToolButton(text=label, checkable=True, toolTip=tip)
+            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            bind_icon(btn, glyph, themes, off="muted", on="accent_ink", size=14)
             btn.toggled.connect(lambda on, k=key: self._tool_toggled(k, on))
             self.tools[key] = btn
             tool_group.append(btn)
-        clear = QToolButton(text="✕ Clear", toolTip="Remove all drawings of this symbol (right-click a single drawing to recolour, edit or delete it)")
+        clear = QToolButton(text="Clear", toolTip="Remove all drawings of this symbol (right-click a single drawing to recolour, edit or delete it)")
+        clear.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        bind_icon(clear, "trash", themes, off="muted", size=14)
         clear.clicked.connect(self.clear_drawings)
         self.loadouts = LoadoutStore(settings)
-        self.loadout_btn = QToolButton(text="Loadouts ▾", toolTip="Saved sets of indicators and a signal")
+        self.loadout_btn = QToolButton(text="Loadouts", toolTip="Saved sets of indicators and a signal")
+        self.loadout_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        bind_icon(self.loadout_btn, "folder", themes, off="muted", size=14)
         self.loadout_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.loadout_menu = QMenu(self)
         self.loadout_menu.aboutToShow.connect(self._fill_loadout_menu)
@@ -582,6 +593,7 @@ class ChartView(QWidget):
         self.price.setMenuEnabled(False)
         _fast_curves(self.price)
         self.price.getAxis("right").setWidth(70)
+        self.price.getAxis("right").setStyle(maxTickLevel=0)  # minor y gridlines cost half of every pan/zoom frame
         self.price.showAxis("right")
         self.price.hideAxis("left")
         self.panes: list[pg.PlotItem] = []
@@ -612,16 +624,17 @@ class ChartView(QWidget):
                                    objectName="ChartCorner")
         self.vol_btn.setFixedSize(size, size)
         self.vol_btn.toggled.connect(self._volume_toggled)
+        self.state = StateOverlay(themes, self.canvas)  # loading / error message over the plot (#191)
         self.canvas.installEventFilter(self)  # keeps the button in the bottom-left corner
 
         # -- sidebar at the right (#41): news for the charted symbol, the watchlists (#67) ----------------
-        self.sidebar = ChartSidebar(settings, touch=themes.touch)
+        self.sidebar = ChartSidebar(settings, touch=themes.touch, themes=themes)
         self.news = NewsPanel(themes)
-        self.sidebar.add_category("news", "📰", "News", self.news)
+        self.sidebar.add_category("news", "news", "News", self.news)
         self.watchlists = WatchlistPanel(engine, themes, settings, symbol_search)
         self.watchlists.open_symbol.connect(self.open_symbol)
         self.watchlists.status.connect(self.status)
-        self.sidebar.add_category("watchlists", "⭐", "Watchlists", self.watchlists)
+        self.sidebar.add_category("watchlists", "star", "Watchlists", self.watchlists)
         self.sidebar.shown.connect(self._sidebar_shown)
         self.sidebar.toggle.clicked.connect(self._sidebar_toggled)
 
@@ -687,10 +700,18 @@ class ChartView(QWidget):
         cached = self.engine.peek(symbol, tf, start=start, end=end, bars=bars)  # from disk, no network (#63)
         if cached is not None:
             self._loaded(symbol, cached, " · from the cache, updating …")
+        elif self.df is None:
+            self.state.show_loading(f"Loading {symbol} {tf} …")  # nothing to show yet
+
+        def failed(err):
+            self.status.emit(f"{symbol}: {err}")
+            if cached is None:  # nothing on screen to fall back on: say so on the chart, with a way to try again
+                self.state.show_error(f"Couldn't load {symbol} {tf}", str(err), self.load)
+
         run_async(lambda: self.engine.get_ohlc(symbol, tf, start=start, end=end, bars=bars),
                   lambda df: self._loaded(symbol, df, shortfall(df, bars, start) + _offline_note(df),
                                           refresh=cached is not None),
-                  lambda err: self.status.emit(f"{symbol}: {err}"))
+                  failed)
 
     def _others(self) -> list[str]:
         return [t for t in (p.strip() for p in self.versus.text().split(",")) if t]
@@ -716,6 +737,7 @@ class ChartView(QWidget):
         if refresh and (symbol != self._loaded_symbol or self.df is None):
             return  # the user moved on to another symbol meanwhile
         self.df = df
+        self.state.clear()
         if symbol != self._loaded_symbol:
             self._switch_drawings(symbol)
         self._loaded_symbol = symbol
@@ -1133,6 +1155,7 @@ class ChartView(QWidget):
         pane.showAxis("right")
         pane.hideAxis("left")
         pane.getAxis("right").setWidth(70)
+        pane.getAxis("right").setStyle(maxTickLevel=0)
         pane.setMenuEnabled(False)
         _fast_curves(pane)
         pane.vb.sigRangeChanged.connect(self._range_changed)
@@ -1198,6 +1221,7 @@ class ChartView(QWidget):
         if self.df is None or self.df.empty or plot is None:
             return
         pt = plot.vb.mapSceneToView(pos)
+        self._update_preview(plot, pt)
         i = nearest_bar(self._x, pt.x())
         for p, (vline, hline) in self._cross.items():
             vline.setPos(self._x[i])  # panes are x-linked: the same time everywhere, snapped to the bar
@@ -1219,6 +1243,36 @@ class ChartView(QWidget):
                 if k != key:
                     btn.setChecked(False)
         self._pending_point = None
+        self._clear_preview()
+
+    def _clear_preview(self):
+        if self._preview is not None:
+            self.price.removeItem(self._preview)
+            self._preview = None
+
+    def _make_shape(self, tool, p1, pt):
+        """The drawing for ``tool`` between two view points (also used, inert, as the preview before the 2nd click)."""
+        pen = pg.mkPen(qcolor(self.themes.current.accent), width=2)
+        if tool == "trend":
+            return pg.LineSegmentROI([[p1.x(), p1.y()], [pt.x(), pt.y()]], pen=pen)
+        if tool in ("fib", "measure"):
+            return self._two_point(tool, [p1.x(), p1.y()], [pt.x(), pt.y()], self._accent_hex())
+        return pg.RectROI([min(p1.x(), pt.x()), min(p1.y(), pt.y())], [abs(pt.x() - p1.x()), abs(pt.y() - p1.y())],
+                          pen=pen)
+
+    def _update_preview(self, plot, pt):
+        """After the first click: show what the second one would create, following the cursor."""
+        tool = self._active_tool()
+        if self._pending_point is None or tool is None or plot is not self.price:
+            return
+        self._clear_preview()
+        item = self._make_shape(tool, self._pending_point, pt)
+        item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        for h in item.getHandles():
+            h.hide()
+        item.setOpacity(0.6)
+        self.price.addItem(item, ignoreBounds=True)
+        self._preview = item
 
     def _active_tool(self):
         return next((k for k, b in self.tools.items() if b.isChecked()), None)
@@ -1260,15 +1314,8 @@ class ChartView(QWidget):
             self.status.emit("tap/click the second point")
             return
         p1, self._pending_point = self._pending_point, None
-        pen = pg.mkPen(qcolor(self.themes.current.accent), width=2)
-        if tool == "trend":
-            item = pg.LineSegmentROI([[p1.x(), p1.y()], [pt.x(), pt.y()]], pen=pen)
-        elif tool in ("fib", "measure"):
-            item = self._two_point(tool, [p1.x(), p1.y()], [pt.x(), pt.y()], self._accent_hex())
-        else:
-            item = pg.RectROI([min(p1.x(), pt.x()), min(p1.y(), pt.y())], [abs(pt.x() - p1.x()), abs(pt.y() - p1.y())],
-                              pen=pen)
-        self._add_drawing(item, tool)
+        self._clear_preview()
+        self._add_drawing(self._make_shape(tool, p1, pt), tool)
 
     def _accent_hex(self) -> str:
         return qcolor(self.themes.current.accent).name()
@@ -1417,6 +1464,7 @@ class ChartView(QWidget):
             self.fit_btn.move(8, bottom)
             self.log_btn.move(8 + self.fit_btn.width() + 4, bottom)
             self.vol_btn.move(8 + self.fit_btn.width() + self.log_btn.width() + 8, bottom)
+            self.state.setGeometry(self.canvas.rect())
         elif obj is self.canvas and event.type() == QEvent.Type.Leave and self._hover is not None:
             self._hover = None  # cursor left the chart: show the latest bar again
             self._show_values()

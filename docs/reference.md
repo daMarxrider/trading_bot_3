@@ -35,7 +35,7 @@ delete. Saved evolver results (`--save`) go to the first plugin folder.
 Edited by hand or by [Settings](settings.md) (which only changes its own lines and keeps your comments).
 
 ```toml
-theme = "glass"                 # glass, dark, light, or the file name (without .json) of your own theme
+theme = "graphite"              # graphite, paper, glass, dark, light, or the file name (without .json) of your own theme
 touch_mode = "auto"             # auto (on when a touchscreen is present), on, off
 gpu_rendering = false           # chart through OpenGL, needs a restart
 live_risk_accepted = "2026-11-01"   # written when you accept the live-trading notice

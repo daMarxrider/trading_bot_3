@@ -84,7 +84,7 @@ def test_highlight_and_pretty():
 def test_defaults_first_start(make):
     v = make()
     assert v.source == ("watchlist", "Main") and v.cls.name == "ma_cross" and v.timeframe == "1d"
-    assert v.source_btn.text() == "⭐ Main · 2 symbols"
+    assert v.source_btn.text() == "Main · 2 symbols"
     assert v.indicator_btn.text() == "ƒ MA Cross (9, 21, 0)"
     assert list(v.model.df.columns) == ["symbol", "fast", "slow"] and list(v.model.df.symbol) == ["AAPL", "MSFT"]
     assert [v.tf.itemData(i) for i in range(v.tf.count())] == list(gs.TF_LABELS)
@@ -320,7 +320,7 @@ def test_main_window_has_the_scanner_page_after_the_screener(app, themes, tmp_pa
     monkeypatch.setenv("TRADEBOT_CONFIG", str(tmp_path / "config.toml"))
     win = MainWindow(themes, "dark", Settings(tmp_path / "s.json"))
     names = [b.text() for b in win.findChildren(gs.QPushButton) if b.objectName() == "Nav"]
-    assert names.index("📡  Scanner") == names.index("🔎  Screener") + 1
+    assert names.index("Scanner") == names.index("Screener") + 1
     win.scanner.open_chart.emit("AAPL", "1h", "ma_cross", {"fast": 5})
     assert win.chart.tf.currentText() == "1h" and any(i.name == "ma_cross" for i in win.chart.indicators)
     QThreadPool.globalInstance().waitForDone(3000)

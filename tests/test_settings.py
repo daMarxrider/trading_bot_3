@@ -146,7 +146,7 @@ def test_choosing_a_theme_saves_it_but_starting_up_doesnt(config_file, monkeypat
     window.close()
 
 
-def test_unknown_configured_theme_falls_back_to_glass(config_file, monkeypatch):
+def test_unknown_configured_theme_falls_back_to_graphite(config_file, monkeypatch):
     import os
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -162,6 +162,6 @@ def test_unknown_configured_theme_falls_back_to_glass(config_file, monkeypatch):
     themes = ThemeManager(user_dir=config_file.parent / "themes")
     window = gui.MainWindow(themes, "deleted-user-theme", Settings(config_file.parent / "settings.json"))
     window.show_settings()
-    assert themes.current.name == "Glass" and window._settings_dialog.theme_box.currentData() == "glass"
+    assert themes.current.name == "Graphite" and window._settings_dialog.theme_box.currentData() == "graphite"
     assert not config_file.exists()  # and nothing written
     window.close()

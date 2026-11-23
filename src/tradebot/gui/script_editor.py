@@ -42,6 +42,7 @@ from PyQt6.QtWidgets import (
 )
 
 from tradebot import scripts
+from tradebot.gui.icons import bind_icon
 from tradebot.gui.theme import Theme, ThemeManager, qcolor
 
 INDENT = "    "
@@ -323,7 +324,8 @@ class ScriptEditor(QWidget):
         self.save_btn = QPushButton("Save", toolTip="Save and reload (Ctrl+S)")
         self.save_btn.clicked.connect(self.save)
         self.auto = QCheckBox("Auto-reload", toolTip="Reload one second after typing stops, without saving the file")
-        self.close_btn = QPushButton("✕", toolTip="Close the editor")
+        self.close_btn = QPushButton(toolTip="Close the editor")
+        bind_icon(self.close_btn, "close", themes, off="muted")
         self.close_btn.clicked.connect(self.request_close)
         self.error = QLabel(wordWrap=True, textInteractionFlags=Qt.TextInteractionFlag.TextSelectableByMouse)
         self.error.setObjectName("Muted")

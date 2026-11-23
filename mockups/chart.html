@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chart · tradebot redesign</title><link rel="stylesheet" href="shared.css"></head>
+<body data-page="chart" data-title="Chart" data-mode="dry" data-status="Loaded BTC/USDT 1h · 1 240 bars in 0.4 s">
+<template id="top">
+  <label class="input" style="width:210px"><i data-i="search"></i><input value="BTC/USDT" aria-label="Symbol"><kbd>/</kbd></label>
+  <span class="muted" style="white-space:nowrap">Bitcoin / Tether · Binance</span>
+  <span class="vdiv"></span>
+  <div class="seg" role="group" aria-label="Timeframe">
+    <button>1m</button><button>5m</button><button>15m</button><button aria-pressed="true">1h</button><button>4h</button><button>1D</button><button>1W</button>
+  </div>
+  <button class="btn"><i data-i="chart"></i>Candles<i data-i="chev"></i></button>
+  <button class="btn"><i data-i="layers"></i>Indicators<span class="pill accent">3</span></button>
+  <span class="sp"></span>
+  <button class="btn"><i data-i="bolt"></i>EMA Cross 9/21<i data-i="chev"></i></button>
+  <button class="btn primary"><i data-i="refresh"></i>Load</button>
+</template>
+
+<div id="view" class="pages">
+  <!-- drawing tools -->
+  <div class="pane" style="width:40px;align-items:center;padding:6px 0;gap:2px;flex:none">
+    <button class="btn ghost icon sm" aria-pressed="true" style="background:var(--accent-soft);color:var(--accent)" title="Cursor"><i data-i="cursor"></i></button>
+    <button class="btn ghost icon sm" title="Trend line"><i data-i="trend"></i></button>
+    <button class="btn ghost icon sm" title="Fibonacci retracement"><i data-i="fib"></i></button>
+    <button class="btn ghost icon sm" title="Vertical line"><i data-i="vline"></i></button>
+    <button class="btn ghost icon sm" title="Text note"><i data-i="text"></i></button>
+    <button class="btn ghost icon sm" title="Measure"><i data-i="ruler"></i></button>
+    <div class="divider" style="width:20px"></div>
+    <button class="btn ghost icon sm" title="Delete selected drawing"><i data-i="trash"></i></button>
+  </div>
+
+  <!-- chart -->
+  <div class="pane fill reveal" style="position:relative">
+    <div class="plot fill" style="display:flex;flex-direction:column" id="main" data-candles='{"seed":14,"n":96,"ema":[9,21],"signals":true,"sub":true,"draw":true}'>
+      <div class="ohlc"><b>BTC/USDT</b><span class="muted">O <span data-o>62 118</span> H <span data-h>62 840</span> L <span data-l>61 902</span> C <span data-c class="up">62 611</span></span><span class="up">+1.12%</span></div>
+      <div class="legend" style="top:34px"><span><i class="sw" style="background:var(--s3)"></i>EMA 9</span><span><i class="sw" style="background:var(--s5)"></i>EMA 21</span><span class="muted">Volume</span></div>
+    </div>
+    <div class="row" style="padding:0 12px;height:30px;border-top:1px solid var(--line);color:var(--muted);flex:none">
+      <span><span class="up">▲</span> 7 buy</span><span><span class="dn">▼</span> 6 sell</span>
+      <span class="vdiv"></span><span>Signals from <b style="color:var(--text);font-weight:500">EMA Cross 9/21</b></span><span class="sp"></span>
+      <button class="btn ghost sm">Style…</button><button class="btn ghost sm"><i data-i="eye"></i>Log scale</button><button class="btn ghost sm">Auto fit</button>
+    </div>
+  </div>
+
+  <!-- dock -->
+  <div class="pane" style="width:320px;flex:none">
+    <div class="tabs" role="tablist"><button aria-selected="true">Watchlists</button><button>News</button><button>Signals</button></div>
+    <div class="row" style="padding:8px 10px;gap:6px;flex:none">
+      <div class="select fill">Crypto majors</div>
+      <button class="btn sm"><i data-i="plus"></i>Add BTC/USDT</button>
+    </div>
+    <div class="fill scroll" style="border-top:1px solid var(--line)">
+      <div class="listrow sel"><span class="sym">BTC/USDT</span><span class="muted">Bitcoin</span><span class="r"><b style="font-weight:500">62 611</b><br><span class="up">1.12%</span></span></div>
+      <div class="listrow"><span class="sym">ETH/USDT</span><span class="muted">Ethereum</span><span class="r"><b style="font-weight:500">3 284.5</b><br><span class="dn">0.48%</span></span></div>
+      <div class="listrow"><span class="sym">SOL/USDT</span><span class="muted">Solana</span><span class="r"><b style="font-weight:500">148.92</b><br><span class="up">3.07%</span></span></div>
+      <div class="listrow"><span class="sym">BNB/USDT</span><span class="muted">BNB</span><span class="r"><b style="font-weight:500">591.3</b><br><span class="up">0.21%</span></span></div>
+      <div class="listrow"><span class="sym">XRP/USDT</span><span class="muted">XRP</span><span class="r"><b style="font-weight:500">0.5421</b><br><span class="dn">1.94%</span></span></div>
+      <div class="listrow"><span class="sym">ADA/USDT</span><span class="muted">Cardano</span><span class="r"><b style="font-weight:500">0.4388</b><br><span class="up">0.65%</span></span></div>
+      <div class="listrow"><span class="sym">AVAX/USDT</span><span class="muted">Avalanche</span><span class="r"><b style="font-weight:500">34.07</b><br><span class="dn">2.31%</span></span></div>
+      <div class="listrow"><span class="sym">LINK/USDT</span><span class="muted">Chainlink</span><span class="r"><b style="font-weight:500">14.82</b><br><span class="up">0.09%</span></span></div>
+    </div>
+    <div class="row" style="padding:8px 10px;border-top:1px solid var(--line);flex:none"><button class="btn sm ghost"><i data-i="plus"></i>New list</button><span class="sp"></span><span class="hint">Drag a symbol to reorder</span></div>
+  </div>
+</div>
+<script src="shell.js"></script></body></html>

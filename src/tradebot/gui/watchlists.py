@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
 
 from tradebot.config import Settings, delete_watchlist, save_watchlist, watchlists
 from tradebot.gui.common import SymbolCompleter, run_async
+from tradebot.gui.icons import bind_icon
 from tradebot.gui.theme import ThemeManager
 from tradebot.gui.touch import LongPressTooltips, enable_kinetic_scroll
 from tradebot.symbols import SymbolSearch, symbol_name
@@ -62,12 +63,14 @@ class _SymbolList(QListWidget):
 class _Row(QWidget):
     """One symbol: ticker and name on the left, price and day change on the right, ✕ on hover (always on touch)."""
 
-    def __init__(self, symbol: str, on_remove, touch: bool):
+    def __init__(self, symbol: str, on_remove, touch: bool, themes=None):
         super().__init__()
         self.touch = touch
         self.label = QLabel()
         self.quote = QLabel(alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.remove = QToolButton(text="✕", toolTip=f"Remove {symbol}", objectName="WatchlistRemove")
+        self.remove = QToolButton(text="" if themes else "✕", toolTip=f"Remove {symbol}", objectName="WatchlistRemove")
+        if themes:
+            bind_icon(self.remove, "close", themes, off="muted", size=14)
         self.remove.clicked.connect(lambda: on_remove(symbol))
         self.remove.setVisible(touch)
         for w in (self, self.label, self.quote):
@@ -364,7 +367,7 @@ class WatchlistPanel(QWidget):
         for symbol in self.symbols():
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, symbol)
-            row = _Row(symbol, self.remove_symbol, self.themes.touch)
+            row = _Row(symbol, self.remove_symbol, self.themes.touch, self.themes)
             self.list.addItem(item)
             self.list.setItemWidget(item, row)
             self._update_row(symbol)
@@ -396,7 +399,8 @@ class WatchlistPanel(QWidget):
             last, change, _ = quote
             text = f"<b>{fmt_price(last)}</b>"
             if change is not None:
-                text += f"<br><span style='color:{t.up if change >= 0 else t.down}'>{change * 100:+.2f}%</span>"
+                mark = "▲" if change > 0 else "▼" if change < 0 else ""
+                text += f"<br><span style='color:{t.up if change >= 0 else t.down}'>{mark} {change * 100:+.2f}%</span>"
             row.quote.setText(text)
         item.setSizeHint(row.sizeHint())
 

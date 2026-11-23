@@ -22,6 +22,8 @@ os.makedirs(workpath, exist_ok=True)
 with open(notices, "w", encoding="utf-8") as fh:
     fh.write(third_party_notices.render())
 datas += [(os.path.join(SPECPATH, "..", "LICENSE"), "."), (notices, ".")]
+# the UI fonts and drawn icons (#191)
+datas += [(os.path.join(SPECPATH, "..", "src", "tradebot", "gui", "assets"), os.path.join("tradebot", "gui", "assets"))]
 binaries = collect_dynamic_libs("plotext", search_patterns=["*.so", "*.dll", "*.pyd"])
 
 options = dict(

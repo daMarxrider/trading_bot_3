@@ -1,13 +1,16 @@
 # Settings
 
-**⚙ Settings** (bottom of the left navigation) opens a dialog with the categories on the left. Changes are saved to
+**Settings** (bottom of the left navigation) opens a page with the categories on the left. Changes are saved to
 `config.toml` right away; only the lines you change are rewritten, your comments and other settings stay, a missing
 file is created, and an empty field removes its line.
 
 ## Appearance
 
-* **Theme**: **Glass** (translucent frosted panels over a soft gradient backdrop), **Modern Dark** and **Light**,
-  plus your own. It applies right away (`theme = "glass"` in the config).
+* **Theme**: **Graphite** (the default: solid warm-graphite panels, one violet accent) and **Paper** (its light twin),
+  plus the older **Glass** (translucent frosted panels over a soft gradient backdrop), **Modern Dark** and **Light**,
+  and your own. In every theme, up is blue-teal and down is vermilion rather than green and red, and a triangle
+  always goes with the colour. The UI font is IBM Plex Sans (SIL Open Font License, bundled). It applies right away
+  (`theme = "graphite"` in the config).
 * **GPU rendering (experimental)**: draws the chart through OpenGL for smoother panning (`gpu_rendering = true`). Off
   by default, applies after a restart. Without OpenGL (no driver, a VM, a remote desktop) the chart uses the normal
   renderer and the status bar says so.
@@ -45,8 +48,9 @@ Switch the disk cache on or off and set its maximum size (50 to 50,000 MB). The 
 how many symbol lists are cached, and where (**Open folder**). *Clear chart data*, *Clear symbol lists* and *Clear
 all* delete them after asking. See [Data providers, timeframes and the cache](data.md#the-cache).
 
-## Other buttons of the navigation
+## Other buttons
 
-* **⛔ Kill switch**: stops every running live bot at its next check, the same as `tradebot bot kill`. Untick it to
-  resume (a bot that already halted needs a restart).
-* **ⓘ About**: version, the disclaimers and the licence, the same text as [Disclaimer and licence](legal.md).
+* **Kill switch** (bottom right, in the status bar next to a chip that says the app only analyses and places no orders):
+  stops every running live bot at its next check, the same as `tradebot bot kill`. While it is on, a red banner runs
+  across the top. Switch it off to resume (a bot that already halted needs a restart).
+* **About** (bottom of the left navigation): version, the disclaimers and the licence, the same text as [Disclaimer and licence](legal.md).

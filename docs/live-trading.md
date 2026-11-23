@@ -97,7 +97,7 @@ realised plus open profit, from its peak since the start.
 | `--cooldown-losses`, `--cooldown-minutes` | Pause entries (60 minutes by default) after this many losing trades in a row |
 | `--close-on-halt` | Sell the open position when a limit halts the bot |
 
-**Kill switch**: `tradebot bot kill` (or the **⛔ Kill switch** button in the app) stops every running `bot run` at its
+**Kill switch**: `tradebot bot kill` (or the **Kill switch** button in the app's status bar) stops every running `bot run` at its
 next check; `tradebot bot resume` turns it off again, but a bot that already halted needs a restart. It is a file named
 `KILL` in the config folder, so the CLI, the GUI and bots in other processes share it. Every trigger is logged and sent
 to the `risk` notification channel.

@@ -188,3 +188,31 @@ def test_tools_place_drawings(chart):
         chart._click(scene)
         chart._click(chart.canvas.mapToScene(vp.rect().center() + vp.rect().topLeft() + pg.QtCore.QPoint(40, 40)))
     assert [d._kind for d in chart.drawings] == ["vline", "text", "fib", "measure"]
+
+
+@pytest.mark.parametrize("tool", ["trend", "fib", "measure", "rect"])
+def test_two_point_tools_preview_after_first_click(chart, tool):
+    vp = chart.canvas.viewport()
+    scene = chart.canvas.mapToScene(vp.rect().center())
+    chart.tools[tool].setChecked(True)
+    chart._mouse_moved(scene)
+    assert chart._preview is None  # nothing before the first click
+    chart._click(scene)
+    chart._mouse_moved(chart.canvas.mapToScene(vp.rect().center() + pg.QtCore.QPoint(40, 30)))
+    first = chart._preview
+    assert first is not None and first in chart.price.items and chart.drawings == []
+    chart._mouse_moved(chart.canvas.mapToScene(vp.rect().center() + pg.QtCore.QPoint(60, 50)))
+    assert chart._preview is not first and first not in chart.price.items  # follows the cursor, one at a time
+    chart._click(chart.canvas.mapToScene(vp.rect().center() + pg.QtCore.QPoint(60, 50)))
+    assert chart._preview is None and len(chart.drawings) == 1 and chart.drawings[0]._kind == tool
+
+
+def test_preview_goes_when_the_tool_is_switched_off(chart):
+    vp = chart.canvas.viewport()
+    scene = chart.canvas.mapToScene(vp.rect().center())
+    chart.tools["trend"].setChecked(True)
+    chart._click(scene)
+    chart._mouse_moved(chart.canvas.mapToScene(vp.rect().center() + pg.QtCore.QPoint(40, 30)))
+    assert chart._preview is not None
+    chart.tools["trend"].setChecked(False)
+    assert chart._preview is None

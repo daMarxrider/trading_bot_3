@@ -182,7 +182,7 @@ def test_gear_button_is_at_the_bottom_of_the_sidebar(app, config_file, tmp_path,
     side = window.settings_btn.parentWidget()
     lay = side.layout()
     assert lay.itemAt(lay.count() - 1).widget() is window.settings_btn  # last: the bottom left
-    assert "⚙" in window.settings_btn.text()
+    assert window.settings_btn.text() == "Settings" and not window.settings_btn.icon().isNull()  # a drawn icon (#191)
     assert not side.findChildren(QComboBox)  # the theme selector moved into the dialog
     window.close()
 

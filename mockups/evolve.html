@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Evolve · tradebot redesign</title><link rel="stylesheet" href="shared.css"></head>
+<body data-page="evolve" data-title="Evolve" data-status="Generation 64 of 120 · best score 2.84 · GPU">
+<template id="top">
+  <div class="seg" role="group" aria-label="Search effort"><button>Fast (defaults)</button><button>Good</button><button>Best result</button><button aria-pressed="true">Auto: good</button><button>Auto: best</button></div>
+  <span class="sp"></span>
+  <button class="btn danger"><i data-i="stop"></i>Stop</button>
+  <button class="btn primary busy" style="width:84px">Evolve</button>
+</template>
+<div id="view" class="pages">
+  <div class="pane" style="width:300px;flex:none">
+    <header>Search space</header>
+    <div class="fill scroll pad col" style="gap:14px">
+      <div class="field"><span class="label">Symbols</span>
+        <div class="input" style="height:auto;min-height:28px;flex-wrap:wrap;padding:4px 6px;gap:4px"><span class="pill">BTC/USDT <i data-i="close"></i></span><span class="pill">ETH/USDT <i data-i="close"></i></span><span class="pill">NVDA <i data-i="close"></i></span></div></div>
+      <div class="row"><div class="field fill"><span class="label">From</span><div class="input"><input value="2019-01-01"></div></div><div class="field fill"><span class="label">To</span><div class="input"><input value="2026-10-31"></div></div></div>
+      <label class="chk on">Common date range only</label>
+      <div class="divider"></div>
+      <div class="field"><span class="label">Building blocks</span>
+        <div class="col" style="gap:8px">
+          <label class="chk on">Candles and maths only</label>
+          <label class="chk on">Bars in trade, stops, targets</label>
+          <label class="chk">Indicators <span class="muted">(RSI, EMA, ATR…)</span></label>
+        </div><span class="hint">Starting from candles and maths only invents indicators from scratch.</span></div>
+      <div class="field"><span class="label">Fitness</span><div class="select">Sharpe, penalised for drawdown</div></div>
+      <div class="field"><span class="label">Population · generations</span><div class="row"><div class="input" style="width:90px"><input value="400"></div><div class="input" style="width:90px"><input value="120"></div></div></div>
+      <div class="notice"><i data-i="bolt"></i><span>GPU backend ready. Auto mode picks settings from your data size.</span></div>
+    </div>
+  </div>
+
+  <div class="col fill" style="gap:12px">
+    <div class="pane fill reveal">
+      <header>Best score per generation<span class="sp"></span><label class="chk">log scale</label><span class="pill accent">Gen 64 / 120</span></header>
+      <div class="plot fill" data-lines='{"n":64,"padR":50,"labels":["0","20","40","60","80","100","120"],"series":[{"seed":71,"start":0.8,"vol":0.03,"drift":0.022,"c":1,"area":1,"w":2.2},{"seed":73,"start":0.5,"vol":0.06,"drift":0.018,"c":3,"w":1.2,"op":0.6}]}'><div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Best</span><span><i class="sw" style="background:var(--s3)"></i>Population mean</span></div></div>
+      <div class="row" style="padding:8px 12px;border-top:1px solid var(--line)"><div class="bar fill"><i style="width:53%"></i></div><span class="muted">53% · about 2 min left</span></div>
+    </div>
+    <div class="pane reveal" style="height:230px;flex:none;animation-delay:0.05s">
+      <header>Best strategy so far<span class="sp"></span><button class="btn sm"><i data-i="chart"></i>Show on chart</button><button class="btn sm primary"><i data-i="save"></i>Save as plugin…</button></header>
+      <div class="pad mono scroll fill" style="line-height:1.7"><span class="faint">entry</span> when <span style="color:var(--s4)">ema</span>(<span style="color:var(--s3)">close</span>, 14) &gt; <span style="color:var(--s4)">ema</span>(<span style="color:var(--s3)">close</span>, 41) <b>and</b> <span style="color:var(--s4)">zscore</span>(<span style="color:var(--s3)">volume</span>, 20) &lt; 1.3<br>
+        <span class="faint">exit </span> when <span style="color:var(--s3)">bars_in_trade</span> &gt; 19 <b>or</b> <span style="color:var(--s3)">close</span> &lt; <span style="color:var(--s3)">entry_price</span> × 0.971<br>
+        <span class="faint">size </span> 1 ÷ <span style="color:var(--s4)">atr</span>(14) <span class="faint">· 3 invented terms, 11 nodes</span></div>
+    </div>
+  </div>
+
+  <div class="pane" style="width:320px;flex:none">
+    <header>Per symbol</header>
+    <div class="fill scroll"><table class="data"><thead><tr><th>Symbol</th><th class="r">Return</th><th class="r">Max DD</th><th class="r">Trades</th></tr></thead><tbody>
+      <tr><td class="sym">BTC/USDT</td><td class="r up">+412%</td><td class="r dn">−24%</td><td class="r">96</td></tr>
+      <tr><td class="sym">ETH/USDT</td><td class="r up">+233%</td><td class="r dn">−31%</td><td class="r">102</td></tr>
+      <tr><td class="sym">NVDA</td><td class="r up">+181%</td><td class="r dn">−19%</td><td class="r">71</td></tr></tbody></table>
+      <div class="pad col" style="gap:8px"><div class="group-t" style="padding:0">Out-of-sample</div><div class="notice warn"><i data-i="alert"></i><span>Score drops 38% on the last 20% of data. Check walk-forward before trusting it.</span></div><button class="btn sm" style="align-self:flex-start">Run walk-forward</button></div>
+    </div>
+  </div>
+</div>
+<script src="shell.js"></script></body></html>

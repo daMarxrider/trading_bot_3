@@ -19,6 +19,7 @@ from packaging.markers import default_environment
 from packaging.requirements import Requirement
 
 ROOT, EXTRAS = "tradebot", ("gui",)
+ROOT_DIR = Path(__file__).resolve().parent.parent
 
 
 def bundled() -> list[md.Distribution]:
@@ -60,6 +61,9 @@ def render() -> str:
     out = ["tradebot bundles the following third-party software. Each is distributed under its own licence,",
            "reproduced below. tradebot itself is licensed under the GNU GPL v3.0 or later (see LICENSE).", ""]
     sections = [(f"Python {sys.version.split()[0]}", "PSF-2.0", [python_licence() or "see https://docs.python.org/3/license.html"])]
+    ofl = ROOT_DIR / "src" / "tradebot" / "gui" / "assets" / "fonts" / "OFL.txt"
+    if ofl.is_file():  # the bundled UI fonts (#191)
+        sections.append(("IBM Plex Sans and IBM Plex Mono (fonts)", "OFL-1.1", [ofl.read_text(encoding="utf-8").strip()]))
     for dist in bundled():
         meta = dist.metadata
         licence = meta.get("License-Expression") or (meta.get("License") or "").split("\n")[0]

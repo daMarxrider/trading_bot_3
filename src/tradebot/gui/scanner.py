@@ -52,6 +52,7 @@ from tradebot.core.series import OHLC
 from tradebot.gui.common import DataFrameModel, Panes, pct, run_async, tooltip
 from tradebot.gui.params import ParamDialog
 from tradebot.gui.script_editor import ScriptEditor
+from tradebot.gui.icons import bind_icon
 from tradebot.gui.theme import ThemeManager
 from tradebot.gui.touch import enable_kinetic_scroll
 from tradebot.indicators import INDICATORS
@@ -414,7 +415,8 @@ class ScannerView(QWidget):
         self.source_btn.clicked.connect(self.choose_source)
         self.indicator_btn = QPushButton(objectName="Pill", toolTip="The indicator to scan with")
         self.indicator_btn.clicked.connect(self.choose_indicator)
-        self.params_btn = QToolButton(text="⚙", toolTip="Indicator inputs")
+        self.params_btn = QToolButton(toolTip="Indicator inputs")
+        bind_icon(self.params_btn, "settings", self.themes, off="text")
         self.params_btn.clicked.connect(self.edit_params)
         self.tf = QComboBox(toolTip="Candle timeframe (the last 500 candles are scanned)")
         for key, label in TF_LABELS.items():
@@ -723,7 +725,8 @@ class ScannerView(QWidget):
     def _source_loaded(self):
         kind, key = self.source
         if kind == "watchlist":
-            self.source_btn.setText(f"⭐ {key} · {len(self.symbols)} symbols")
+            bind_icon(self.source_btn, "star", self.themes, off="accent", size=14)
+            self.source_btn.setText(f"{key} · {len(self.symbols)} symbols")
         else:
             index = universes.INDICES[key]
             count = f" · {len(self.symbols)}" if self.symbols else " · loading …"
@@ -778,7 +781,8 @@ class ScannerView(QWidget):
             row.setContentsMargins(6, 0, 2, 0)
             main = QToolButton(text=self.chip_text(chip), autoRaise=True)
             main.clicked.connect(lambda _, c=chip: self._chip_clicked(c))
-            close = QToolButton(text="✕", autoRaise=True, toolTip="Remove this filter")
+            close = QToolButton(autoRaise=True, toolTip="Remove this filter")
+            bind_icon(close, "close", self.themes, off="muted", size=12)
             close.clicked.connect(lambda _, c=chip: self._remove_chip(c))
             row.addWidget(main)
             row.addWidget(close)

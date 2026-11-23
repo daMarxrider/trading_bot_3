@@ -144,7 +144,7 @@ Two files in the config folder (`~/.config/tradebot/`, see [Reference](reference
 * `settings.json`: what the app remembers by itself (toggles, loadouts, drawings, pane sizes). Delete it to reset.
 
 ```toml
-theme = "glass"
+theme = "graphite"
 
 [watchlists]
 Main = ["AAPL", "MSFT", "SAP.DE", "BTC/USDT", "ETH/USDT"]
