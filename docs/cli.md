@@ -24,10 +24,12 @@ tradebot chart AAPL -i sma:period=50 --line --no-volume
 tradebot news AAPL NVDA BTC/USDT
 tradebot news --watchlist Crypto           # without symbols: one watchlist (default: all of them)
 tradebot news BTC/USDT -s coindesk -s decrypt   # only some sources (`--list-sources` shows them)
+tradebot market BTC/USDT --depth           # funding rate, open interest, Fear & Greed, MVRV, order book (see Crypto market data)
 tradebot cache info                        # cache folder, size, number of cached series
 tradebot cache clear [--ohlc|--symbols]
 ```
 
+`tradebot market` and the market data indicators are described in [Crypto market data](market-data.md).
 `--bars N` returns exactly N candles; `--start`/`--end` select a date range. See
 [Data providers, timeframes and the cache](data.md).
 
