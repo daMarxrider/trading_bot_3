@@ -65,7 +65,7 @@ sma:period=50,tf=1d`.
 
 Built-in indicators: SMA, EMA, `ma_cross`, RSI, MACD, Bollinger bands, ATR, Stochastic, Donchian, Ichimoku, Elliott
 waves, Bitcoin halving cycle, ADX, Supertrend, Parabolic SAR, Keltner, CCI, Williams %R, ROC, momentum, pivots,
-volume profile, anchored VWAP, Volume, OBV, VWAP, MFI and volume ratio. `tradebot list indicators` prints the full
+volume profile, anchored VWAP, Volume, OBV, VWAP, MFI, volume ratio and [pattern detection](patterns.md) (`candles`, `chart_patterns`, `support_resistance`). `tradebot list indicators` prints the full
 list of your installation.
 
 ## Signals

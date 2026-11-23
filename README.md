@@ -63,7 +63,7 @@ chart reads the same with red-green colour blindness.
   [turning an indicator into an algorithm](docs/indicators-as-algorithms.md), `examples/plugins/`
 * **Concepts**: [strategies](docs/strategies.md) (incl. Elliott waves and the halving cycle), [metrics](docs/metrics.md),
   [the optimizers](docs/optimizers.md), [data and the cache](docs/data.md),
-  [brokers, bots, paper trading and risk guards](docs/live-trading.md), [pairs trading](docs/pairs-trading.md), [regimes and position sizing](docs/regimes-and-sizing.md),
+  [brokers, bots, paper trading and risk guards](docs/live-trading.md), [pairs trading](docs/pairs-trading.md), [regimes and position sizing](docs/regimes-and-sizing.md), [pattern detection](docs/patterns.md),
   [multi-timeframe indicators](docs/multi-timeframe.md) (e.g. `close > sma(200, tf=1d)` on hourly candles),
   [shorts, leverage and liquidation](docs/shorts-and-leverage.md), [alerts](docs/alerts.md)
 * **Reference**: [config keys, settings.json, environment variables, file locations](docs/reference.md)

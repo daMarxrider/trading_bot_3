@@ -205,7 +205,7 @@ def test_registered_with_alerts_and_labels():
     for name in NAMES:
         cls = INDICATORS.get(name)
         assert cls.alerts and set(cls.alerts) <= set(cls.outputs)
-    assert INDICATORS.get("candles").labels["pattern"][2] == "Engulf+"
+    assert INDICATORS.get("candles").labels["pattern"][2] == "Eng+"
     assert list(INDICATORS.get("candles").alerts)[:2] == ["bullish", "bearish"]
 
 
@@ -273,3 +273,35 @@ def test_combinator_conditions():
         combo = check(rule)
         sig = combo.signals(o, {k: p.default for k, p in combo.param_space().items()})
         assert np.asarray(sig).reshape(-1).size == 200
+
+
+# -- robustness and speed ------------------------------------------------------------------------------------
+def _check_full(df):
+    for name in NAMES:
+        out = INDICATORS.get(name)()(df)
+        assert len(out) == len(df)
+        assert not np.isinf(out.to_numpy(dtype=float)).any(), name
+
+
+def test_robust_to_odd_data():
+    base = make_ohlc(120, seed=2)
+    gaps = base.copy()
+    gaps.iloc[30:35, :4] = np.nan
+    gaps.iloc[60, 3] = np.nan
+    flat = base.copy()
+    flat[["open", "high", "low", "close"]] = 100.0
+    same_vol = base.assign(volume=5.0)
+    no_vol = base.drop(columns="volume")
+    zero_vol = base.assign(volume=0.0)
+    dup = base.iloc[list(range(60)) + list(range(55, 120))]
+    for df in (base, gaps, flat, same_vol, no_vol, zero_vol, dup, base.iloc[:2], base.iloc[:0]):
+        _check_full(df)
+
+
+def test_scales_linearly_enough():
+    import time
+    df = make_ohlc(20000, seed=4, freq="h")
+    for name in NAMES:
+        t = time.perf_counter()
+        INDICATORS.get(name)()(df)
+        assert time.perf_counter() - t < 15, name  # generous: ~1 s normally; catches a quadratic blow-up

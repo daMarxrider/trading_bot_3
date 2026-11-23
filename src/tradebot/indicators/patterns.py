@@ -20,8 +20,9 @@ from tradebot.indicators.elliott import to_numpy
 
 #: marker codes of the ``pattern`` outputs: positive bullish, negative bearish, 10+ neutral
 CANDLE_CODES = {"hammer": 1, "bull_engulfing": 2, "morning_star": 3, "shooting_star": -1, "bear_engulfing": -2,
-                "evening_star": -3, "doji": 10}
-CANDLE_LABELS = {1: "Hammer", 2: "Engulf+", 3: "Morning*", -1: "Shoot*", -2: "Engulf-", -3: "Evening*", 10: "Doji"}
+                "evening_star": -3}
+#: doji is an alert only: it is frequent and neutral, so marking every one clutters the chart
+CANDLE_LABELS = {1: "Ham", 2: "Eng+", 3: "MStar", -1: "Star", -2: "Eng-", -3: "EStar"}
 CHART_CODES = {"double_bottom": 1, "inverse_head_shoulders": 2, "ascending_triangle": 3, "bull_flag": 4,
                "double_top": -1, "head_shoulders": -2, "descending_triangle": -3, "bear_flag": -4,
                "symmetrical_triangle": 10}

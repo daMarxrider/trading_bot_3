@@ -44,7 +44,7 @@ def candlestick(open_, high, low, close, doji_ratio: float = 0.1, trend: int = 5
     * doji: body at most ``doji_ratio`` of the candle's range
     * hammer / shooting star: long lower / upper shadow (at least twice the body), almost no opposite shadow, after
       a fall / rise over the last ``trend`` candles
-    * engulfing: the body covers the previous, opposite coloured body
+    * engulfing: the body (at least half of the candle's range) covers the previous, opposite coloured body
     * morning / evening star: a long (``long_ratio`` of the range) candle, a small body, then a candle closing past
       the middle of the first one, in the opposite direction
     """
@@ -62,8 +62,9 @@ def candlestick(open_, high, low, close, doji_ratio: float = 0.1, trend: int = 5
         hammer = ok & (lower >= 2 * body) & (upper <= 0.1 * rng) & (lower > 0) & down
         star = ok & (upper >= 2 * body) & (lower <= 0.1 * rng) & (upper > 0) & up
         po, pc, pb = _prev(o), _prev(c), _prev(body)
-        bull_eng = (pc < po) & (c > o) & (o <= pc) & (c >= po) & (body > pb)
-        bear_eng = (pc > po) & (c < o) & (o >= pc) & (c <= po) & (body > pb)
+        strong = body >= 0.5 * rng  # a real body, not a candle that is mostly shadow
+        bull_eng = (pc < po) & (c > o) & (o <= pc) & (c >= po) & (body > pb) & strong
+        bear_eng = (pc > po) & (c < o) & (o >= pc) & (c <= po) & (body > pb) & strong
         o2, c2, b2, r2 = _prev(o, 2), _prev(c, 2), _prev(body, 2), _prev(rng, 2)
         small = pb <= 0.5 * b2
         long2 = (b2 >= long_ratio * r2) & (r2 > 0)
@@ -207,7 +208,7 @@ def support_resistance(high, low, close, volume=None, strength: int = 5, zone: f
     known: list[Pivot] = []
     levels = np.empty(0)
     for t in range(n):
-        expired = any(p.index < t - lookback for p in known)
+        expired = bool(known) and known[0].index < t - lookback  # known is in bar order
         if t in by_bar or expired:
             known = [p for p in known + by_bar.get(t, []) if p.index >= t - lookback]
             clusters: list[list] = []  # [mean price, touches, on a heavy-volume candle]
