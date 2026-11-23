@@ -143,3 +143,15 @@ def test_news_reading_pane_shows_the_picked_headline(qapp, tmp_path):
     view.reader_chart.click()
     assert got == ["NVDA"]
     view.deleteLater()
+
+
+def test_about_dialog_carries_the_disclaimers(qapp):
+    from tradebot import __version__
+    from tradebot.gui.about import AboutDialog
+    from tradebot.legal import NO_WARRANTY, NOT_AFFILIATED
+
+    dlg = AboutDialog()
+    texts = [w.text() for w in dlg.findChildren(QLabel)]
+    assert f"v{__version__}" in texts and NOT_AFFILIATED in texts and NO_WARRANTY in texts
+    assert any("github.com/daMarxrider/trading_bot_3" in t for t in texts)
+    dlg.deleteLater()

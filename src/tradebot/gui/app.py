@@ -32,6 +32,7 @@ from tradebot.core.registry import load_plugins
 from tradebot.data import MarketDataEngine
 from tradebot.data.cache import DiskCache
 from tradebot.data.providers import quiet_yfinance
+from tradebot.gui.about import AboutDialog
 from tradebot.gui.chart import ChartView
 from tradebot.gui.common import run_async
 from tradebot.gui.evolve import EvolveView
@@ -39,7 +40,6 @@ from tradebot.gui.icons import pixmap
 from tradebot.gui.pairs import PairView
 from tradebot.gui.settings import SettingsDialog
 from tradebot.live.risk import kill_active, set_kill
-from tradebot.legal import NOT_AFFILIATED, NO_WARRANTY
 from tradebot.gui.theme import GlassBackdrop, ThemeManager
 from tradebot.gui.touch import has_touchscreen
 from tradebot.gui.scanner import ScannerView
@@ -196,11 +196,7 @@ class MainWindow(QMainWindow):
         run_async(partial(warm_up, engine, symbols), lambda _: None, lambda err: None)
 
     def show_about(self):
-        QMessageBox.about(self, "About tradebot",
-                          f"<h3>tradebot v{__version__}</h3><p>{NOT_AFFILIATED}</p><p>{NO_WARRANTY}</p>"
-                          "<p>Licensed under the GNU GPL v3.0 or later. Licences of the bundled libraries: "
-                          "THIRD_PARTY_NOTICES.txt next to the program. Source code: "
-                          "<a href='https://github.com/daMarxrider/trading_bot_3'>github.com/daMarxrider/trading_bot_3</a></p>")
+        AboutDialog(self).exec()
 
     def _build_kill_banner(self) -> QFrame:
         banner = QFrame(objectName="KillBanner")
