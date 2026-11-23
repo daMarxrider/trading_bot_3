@@ -366,6 +366,57 @@ def _rects(x, bottom, top, width) -> list[QRectF]:
     return list(map(QRectF, (x - width / 2).tolist(), bottom.tolist(), [width] * len(x), height.tolist()))
 
 
+class ZonesItem(pg.GraphicsObject):
+    """Horizontal bands (support / resistance, #164): each run of one level is a flat band from the bar it starts
+    on to the bar it ends on, with a thin line at the level, so levels read as areas instead of lines that slant
+    from one level to the next."""
+
+    def __init__(self, segments, color: QColor, text: str, text_color: QColor):
+        super().__init__()
+        #: ``(x0, x1, low, high, level)`` per run
+        self.segments = segments
+        fill = QColor(color)
+        fill.setAlpha(46)
+        self._fill, self._line, self._text, self._tcolor = fill, color, text, text_color
+        self._bounds = QRectF()
+        if segments:
+            x0, x1 = min(s[0] for s in segments), max(s[1] for s in segments)
+            lo, hi = min(s[2] for s in segments), max(s[3] for s in segments)
+            self._bounds = QRectF(x0, lo, x1 - x0, max(hi - lo, 1e-12))
+        self.setZValue(-4)
+
+    def boundingRect(self):
+        return QRectF(self._bounds)
+
+    def paint(self, p, *_):
+        p.setPen(pg.mkPen(None))
+        p.setBrush(pg.mkBrush(self._fill))
+        for x0, x1, lo, hi, _level in self.segments:
+            p.drawRect(QRectF(x0, lo, x1 - x0, max(hi - lo, 1e-12)))
+        pen = pg.mkPen(self._line, width=1)
+        pen.setCosmetic(True)
+        p.setPen(pen)
+        for x0, x1, _lo, _hi, level in self.segments:
+            p.drawLine(QPointF(x0, level), QPointF(x1, level))
+
+
+def zone_segments(x, y, half, width_x):
+    """``(x0, x1, low, high, level)`` per run of one level in ``y`` (NaN ends a run); ``half`` is the band's half
+    height in price (an array like ``y``), ``width_x`` the space one candle takes on the x-axis."""
+    y = np.asarray(y, dtype=float)
+    out = []
+    start = None
+    for i in range(len(y) + 1):
+        cur = y[i] if i < len(y) else np.nan
+        if start is not None and not (np.isfinite(cur) and cur == y[start]):
+            level = y[start]
+            out.append((x[start] - width_x / 2, x[i - 1] + width_x / 2, level - half[start], level + half[start], level))
+            start = None
+        if start is None and np.isfinite(cur):
+            start = i
+    return out
+
+
 class CandlestickItem(pg.GraphicsObject):
     """Candles: only the visible ones are drawn, and with more candles than pixels, one merged candle per
     pixel (#68), so panning stays fast with tens of thousands of bars."""
@@ -1194,6 +1245,7 @@ class ChartView(QWidget):
         if self.volume_overlay and np.isfinite(volume_of(df)).any():
             self._draw_volume_overlay(x, volume_of(df), o, c, width, t)
 
+        self._label_last = {True: -10**9, False: -10**9}  # pattern labels of all indicators share their spacing
         for ind in self.indicators:
             if compare and ind.overlay:
                 continue
@@ -1224,6 +1276,9 @@ class ChartView(QWidget):
             slot = self._palette_slot(ind)
             curves = {}  # output -> (x, y) as drawn, for the fills
             for k, col in enumerate(frame.columns):
+                if ind.output_of(col) in ind.zones:
+                    self._draw_zone(target, ind, frame, col, x, width, t, values)
+                    continue
                 if not ind.is_line(col):
                     self._draw_labels(target, ind, frame, col, x, c, t)
                     continue
@@ -1348,23 +1403,78 @@ class ChartView(QWidget):
                     band.setZValue(-10)
                     self.price.addItem(band, ignoreBounds=True)
 
+    def _draw_zone(self, target, ind, frame, col, x, width, t, values):
+        """An output drawn as horizontal bands, one per run of a level, plus its letter at the latest one."""
+        colour, letter = ind.zones[ind.output_of(col)][:2]
+        raw = frame[col].to_numpy(dtype=float)
+        slot = width / 0.7  # one candle's space on the x-axis
+        half = raw * float(ind.values.get("zone", 0.006)) / 2
+        ty = self._ty if target is self.price else (lambda v: v)
+        segs = zone_segments(x, raw, half, slot)
+        # a level that held for a couple of candles is noise, not a zone; the current one is always kept
+        segs = [g for k, g in enumerate(segs) if k == len(segs) - 1 or g[1] - g[0] >= 4 * slot]
+        if len(ind.zones[ind.output_of(col)]) > 2:  # e.g. the point of control: only where it is now
+            segs = segs[-1:]
+        # the log scale bends prices, so the bands are placed by their transformed edges
+        segs = [(x0, x1, float(ty(lo)), float(ty(hi)), float(ty(level))) for x0, x1, lo, hi, level in segs]
+        color = qcolor(resolve_color(t, colour))
+        item = ZonesItem(segs, color, letter, qcolor(t.text))
+        target.addItem(item, ignoreBounds=True)
+        if segs:  # the letter pairs the colour with a name; it sits at the right end of the latest band
+            last = segs[-1]
+            tag = pg.TextItem(letter, color=color, anchor=(0, 0.5))
+            font = tag.textItem.font()
+            font.setBold(True)
+            tag.setFont(font)
+            tag.setPos(last[1], last[4])
+            tag.setZValue(5)
+            target.addItem(tag, ignoreBounds=True)
+        y = ty(raw)
+        self._fit_series.setdefault(target, []).append(y)
+        values.append((raw, color.name(), fmt_value))
+
+    #: labels of one side closer than this many candles are thinned out (``label_signs`` indicators)
+    LABEL_GAP = 8
+
     def _draw_labels(self, target, ind, frame, col, x, close, t):
         """Text labels of an indicator output (e.g. Elliott wave numbers) at its anchor values."""
-        texts = ind.labels.get(ind.output_of(col))
+        output = ind.output_of(col)
+        texts = ind.labels.get(output)
         if not texts:
             return  # hidden output
+        helps = ind.label_help.get(output, {})
         anchor_col = f"{ind.name}_{ind.label_anchor}" if ind.label_anchor else None
         anchor = frame[anchor_col].to_numpy() if anchor_col in frame else close
         codes = frame[col].to_numpy()
+        last_on = self._label_last
         for i in np.flatnonzero(~np.isnan(codes)):
             # label above swing highs (local maximum of the anchor line), below swing lows
             neighbours = anchor[max(i - 1, 0): i + 2]
             is_high = anchor[i] >= np.nanmax(neighbours)
-            item = pg.TextItem(texts.get(float(codes[i]), "?"), color=t.text, anchor=(0.5, 1.15 if is_high else -0.15))
+            code = float(codes[i])
+            colour = t.text
+            chip = {}
+            if ind.label_signs:
+                # bullish patterns sit under the candle, bearish ones over it, whatever the neighbours say
+                is_high = code < 0 or (code >= 10 and is_high)
+                if i - last_on[is_high] < self.LABEL_GAP:
+                    continue  # too close to the previous label on this side: the alert still fires
+                last_on[is_high] = i
+                colour = t.down if code < 0 else t.up if code < 10 else t.muted
+                # a chip in the panel colour keeps the text readable on top of same-coloured candles
+                fill = qcolor(t.panel)
+                fill.setAlpha(235)
+                chip = {"fill": pg.mkBrush(fill), "border": pg.mkPen(qcolor(colour))}
+            item = pg.TextItem(texts.get(code, "?"), color=colour,
+                               anchor=(0.5, 1.45 if is_high else -0.45) if ind.label_signs
+                               else (0.5, 1.15 if is_high else -0.15), **chip)
             font = item.textItem.font()
             font.setBold(True)
             item.setFont(font)
+            if code in helps:
+                item.setToolTip(helps[code])
             item.setPos(x[i], self._ty(anchor[i]) if target is self.price else anchor[i])
+            item.setZValue(10)
             target.addItem(item)
 
     # -- crosshair & drawing tools ---------------------------------------------------------------

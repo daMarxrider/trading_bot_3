@@ -179,7 +179,7 @@ def test_alerts_are_hidden_zero_one_and_nan_in_warmup(ohlc):
     assert [c.name for c in INDICATORS if c.alerts] == [
         "adx", "avwap", "bbands", "candles", "cci", "chart_patterns", "donchian", "ema", "ichimoku", "keltner", "ma_cross", "macd", "mfi",
         "momentum", "obv", "pivots", "psar", "regime", "roc", "rsi", "sma", "stoch", "supertrend", "support_resistance", "volume",
-        "volume_profile",
+        "volume_levels", "volume_profile",
         "volume_ratio", "vwap", "williams_r"]
 
 
