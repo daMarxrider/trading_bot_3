@@ -741,6 +741,8 @@ class Evolver:
         """``program`` after :meth:`joint_tune` (a newly built shape is judged only once its constants fit)."""
         if not self.joint:
             return program
+        if "held" in self.ps and self.rng.random() < 0.5:  # a fixed holding period: the plain way to take a signal
+            program = Program(program.entry, Node(self.ps["held"], (random_const(self.ps["held"].args[0], self.rng, True),)))
         fit = self.fitness(program)
         return self.joint_tune(program, fit)[0] if fit > REJECTED / 2 else program
 
