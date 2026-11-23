@@ -396,7 +396,8 @@ class WatchlistPanel(QWidget):
             last, change, _ = quote
             text = f"<b>{fmt_price(last)}</b>"
             if change is not None:
-                text += f"<br><span style='color:{t.up if change >= 0 else t.down}'>{change * 100:+.2f}%</span>"
+                mark = "▲" if change > 0 else "▼" if change < 0 else ""
+                text += f"<br><span style='color:{t.up if change >= 0 else t.down}'>{mark} {change * 100:+.2f}%</span>"
             row.quote.setText(text)
         item.setSizeHint(row.sizeHint())
 

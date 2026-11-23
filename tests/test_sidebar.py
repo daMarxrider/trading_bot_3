@@ -70,18 +70,18 @@ def test_open_by_default_and_the_topmost_entry_collapses_it(themes, tmp_path):
     settings = Settings(tmp_path / "s.json")
     chart = make_chart(themes, settings)
     bar = chart.sidebar
-    assert bar.is_open and bar.panel.isVisible() and bar.toggle.text() == "»"
+    assert bar.is_open and bar.panel.isVisible() and bar.toggle.toolTip() == "Hide the sidebar"
     assert bar.strip.itemAt(0).widget() is bar.toggle  # the topmost entry
     wide = bar.width()
     bar.toggle.click()
     for _ in range(3):  # the layout settles over a couple of event rounds
         QApplication.processEvents()
-    assert not bar.is_open and not bar.panel.isVisible() and bar.toggle.text() == "«"
+    assert not bar.is_open and not bar.panel.isVisible() and bar.toggle.toolTip() == "Show the sidebar"
     assert bar.width() < wide / 4 and chart.canvas.width() > 900  # the chart takes the room
     again = make_chart(themes, Settings(tmp_path / "s.json"))  # a new session
     assert not again.sidebar.is_open
     again.sidebar.toggle.click()
-    assert again.sidebar.is_open and again.sidebar.toggle.text() == "»"
+    assert again.sidebar.is_open and again.sidebar.toggle.toolTip() == "Hide the sidebar"
 
 
 def test_sidebar_is_right_of_the_chart(themes):

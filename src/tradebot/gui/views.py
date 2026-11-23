@@ -128,6 +128,7 @@ def _signed_color(themes: ThemeManager, cols: set[str]):
             return qcolor(themes.current.up if value >= 0 else themes.current.down)
         return None
 
+    color.marked = cols  # DataFrameModel prefixes these columns' numbers with an up / down triangle (#191)
     return color
 
 

@@ -7,11 +7,14 @@ The paths are the same set as in the redesign mockups (``mockups/shell.js``), 24
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QByteArray, QRectF, Qt
+from PyQt6.QtCore import QByteArray, QObject, QRectF, QSize, Qt
 from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
 
 PATHS: dict[str, str] = {
+    "chevl": "M15 6l-6 6 6 6",
+    "rect": "M4 7h16v10H4z",
+    "hline": "M3 12h18",
     "chart": "M3 3v18h18M7 15l4-5 3 3 5-7",
     "screener": "M3 5h18l-7 8v6l-4 2v-8z",
     "scanner": "M12 3a9 9 0 1 0 9 9M12 7.5a4.5 4.5 0 1 0 4.5 4.5M12 12l7-7",
@@ -92,3 +95,34 @@ def pixmap(name: str, color: str = "#ffffff", size: int = 16, ratio: float = 2.0
 
 def icon(name: str, color: str = "#ffffff", size: int = 16) -> QIcon:
     return QIcon(pixmap(name, color, size))
+
+
+class _Binder(QObject):
+    """Keeps one button's icon in the active theme's colours; it dies with the button, which drops the connection."""
+
+    def __init__(self, button, name: str, themes, off: str, on: str | None, size: int):
+        super().__init__(button)
+        self.button, self.name, self.themes, self.off, self.on, self.size = button, name, themes, off, on, size
+        button.setIconSize(QSize(size, size))
+        themes.changed.connect(self.refresh)
+        self.refresh()
+
+    def refresh(self, theme=None):
+        t = theme or self.themes.current
+        ic = QIcon()
+        ic.addPixmap(pixmap(self.name, getattr(t, self.off), self.size), QIcon.Mode.Normal, QIcon.State.Off)
+        if self.on:
+            ic.addPixmap(pixmap(self.name, getattr(t, self.on), self.size), QIcon.Mode.Normal, QIcon.State.On)
+        self.button.setIcon(ic)
+
+
+def bind_icon(button, name: str, themes, off: str = "text", on: str | None = None, size: int = 16) -> None:
+    """Give ``button`` the drawn icon ``name``, recoloured on every theme change.
+
+    ``off`` / ``on`` are theme colour names for the idle and the checked state (``on`` None: the same colour)."""
+    old = getattr(button, "_icon_binder", None)
+    if old is not None:  # the same button changing its icon (the sidebar toggle): reuse its binder
+        old.name, old.off, old.on = name, off, on
+        old.refresh()
+        return
+    button._icon_binder = _Binder(button, name, themes, off, on, size)

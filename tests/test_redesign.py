@@ -79,3 +79,18 @@ def test_rail_groups_and_kill_banner(qapp, tmp_path, monkeypatch):
     finally:
         win.close()
         win.deleteLater()
+
+
+def test_signed_columns_get_an_up_or_down_triangle(qapp, tmp_path):
+    import pandas as pd
+    from PyQt6.QtCore import Qt
+
+    from tradebot.gui.common import DataFrameModel
+    from tradebot.gui.views import _signed_color
+
+    themes = ThemeManager(user_dir=tmp_path)
+    df = pd.DataFrame({"sym": ["A", "B", "C"], "change_1d": [0.021, -0.013, 0.0], "price": [10.0, 20.0, 30.0]})
+    model = DataFrameModel(df, {"change_1d": lambda v: f"{v:+.1%}"}, colors=_signed_color(themes, {"change_1d"}))
+    text = [model.data(model.index(r, 1), Qt.ItemDataRole.DisplayRole) for r in range(3)]
+    assert text == ["▲ +2.1%", "▼ -1.3%", "+0.0%"]  # zero is neither
+    assert model.data(model.index(0, 2), Qt.ItemDataRole.DisplayRole) == "10"  # unmarked columns stay plain

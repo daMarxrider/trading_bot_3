@@ -42,6 +42,7 @@ from tradebot.gui.common import (
     shortfall,
     toolbar_group,
 )
+from tradebot.gui.icons import bind_icon
 from tradebot.gui.drawings import FibItem, MeasureItem, NoteItem, color_of, set_color, to_spec
 from tradebot.gui.news import NewsPanel
 from tradebot.gui.params import ParamDialog
@@ -508,7 +509,8 @@ class ChartView(QWidget):
         self.style_btn = QToolButton(text="Line", checkable=True)
         self.style_btn.toggled.connect(lambda _: self.redraw())
 
-        self.ind_btn = QToolButton(text="Indicators ▾")
+        self.ind_btn = QToolButton(text="Indicators")
+        bind_icon(self.ind_btn, "layers", themes, off="muted")
         self.ind_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.ind_menu = QMenu(self)
         self.ind_menu.aboutToShow.connect(self._fill_indicator_menu)
@@ -521,22 +523,28 @@ class ChartView(QWidget):
 
         self.tools: dict[str, QToolButton] = {}
         tool_group = []
-        for key, label, tip in (("trend", "╱ Trend", "Trendline: click two points"),
-                                ("hline", "― Level", "Support/resistance: click a price"),
-                                ("rect", "▭ Zone", "Rectangle: click two corners"),
-                                ("fib", "𝔽 Fib", "Fibonacci retracement/extension: click the 0 and the 1 point"),
-                                ("vline", "│ Time", "Vertical line: click a point in time"),
-                                ("text", "𝐓 Note", "Text note: click where it goes, then type it"),
-                                ("measure", "↕ Measure", "Price range measure: click two points to read the change "
+        for key, glyph, label, tip in (("trend", "trend", "Trend", "Trendline: click two points"),
+                                ("hline", "hline", "Level", "Support/resistance: click a price"),
+                                ("rect", "rect", "Zone", "Rectangle: click two corners"),
+                                ("fib", "fib", "Fib", "Fibonacci retracement/extension: click the 0 and the 1 point"),
+                                ("vline", "vline", "Time", "Vertical line: click a point in time"),
+                                ("text", "text", "Note", "Text note: click where it goes, then type it"),
+                                ("measure", "ruler", "Measure", "Price range measure: click two points to read the change "
                                                          "in price, percent and time")):
             btn = QToolButton(text=label, checkable=True, toolTip=tip)
+            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            bind_icon(btn, glyph, themes, off="muted", on="accent_ink", size=14)
             btn.toggled.connect(lambda on, k=key: self._tool_toggled(k, on))
             self.tools[key] = btn
             tool_group.append(btn)
-        clear = QToolButton(text="✕ Clear", toolTip="Remove all drawings of this symbol (right-click a single drawing to recolour, edit or delete it)")
+        clear = QToolButton(text="Clear", toolTip="Remove all drawings of this symbol (right-click a single drawing to recolour, edit or delete it)")
+        clear.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        bind_icon(clear, "trash", themes, off="muted", size=14)
         clear.clicked.connect(self.clear_drawings)
         self.loadouts = LoadoutStore(settings)
-        self.loadout_btn = QToolButton(text="Loadouts ▾", toolTip="Saved sets of indicators and a signal")
+        self.loadout_btn = QToolButton(text="Loadouts", toolTip="Saved sets of indicators and a signal")
+        self.loadout_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        bind_icon(self.loadout_btn, "folder", themes, off="muted", size=14)
         self.loadout_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.loadout_menu = QMenu(self)
         self.loadout_menu.aboutToShow.connect(self._fill_loadout_menu)
@@ -598,13 +606,13 @@ class ChartView(QWidget):
         self.canvas.installEventFilter(self)  # keeps the button in the bottom-left corner
 
         # -- sidebar at the right (#41): news for the charted symbol, the watchlists (#67) ----------------
-        self.sidebar = ChartSidebar(settings, touch=themes.touch)
+        self.sidebar = ChartSidebar(settings, touch=themes.touch, themes=themes)
         self.news = NewsPanel(themes)
-        self.sidebar.add_category("news", "📰", "News", self.news)
+        self.sidebar.add_category("news", "news", "News", self.news)
         self.watchlists = WatchlistPanel(engine, themes, settings, symbol_search)
         self.watchlists.open_symbol.connect(self.open_symbol)
         self.watchlists.status.connect(self.status)
-        self.sidebar.add_category("watchlists", "⭐", "Watchlists", self.watchlists)
+        self.sidebar.add_category("watchlists", "star", "Watchlists", self.watchlists)
         self.sidebar.shown.connect(self._sidebar_shown)
         self.sidebar.toggle.clicked.connect(self._sidebar_toggled)
 

@@ -98,7 +98,7 @@ QFrame#Card, QGroupBox {{ background: {panel}; border: 1px solid {panel_border};
 QGroupBox {{ margin-top: 14px; padding: 10px; }}
 QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 4px; color: {muted}; }}
 QLabel#Title {{ font-size: 18px; font-weight: 600; }}
-QLabel#KpiValue {{ font-size: 22px; font-weight: 600; }}
+QLabel#KpiValue {{ font-size: 16px; font-weight: 600; }}
 QLabel#Muted, QLabel#KpiLabel {{ color: {muted}; }}
 QPushButton {{ background: {input_bg}; border: 1px solid {panel_border}; border-radius: {radius_sm}px; padding: 6px 14px; }}
 QPushButton:hover {{ border-color: {accent}; }}
@@ -142,6 +142,13 @@ QLineEdit, QComboBox, QAbstractSpinBox, QPlainTextEdit {{
     selection-background-color: {selection};
 }}
 QLineEdit:focus, QComboBox:focus, QAbstractSpinBox:focus, QPlainTextEdit:focus {{ border-color: {accent}; }}
+QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: center right; width: 22px; border: none; background: transparent; }}
+QComboBox::down-arrow {{ image: url({spin_down}); width: 10px; height: 10px; }}
+QAbstractSpinBox::up-button {{ subcontrol-origin: border; subcontrol-position: top right; width: 18px; border: none; background: transparent; }}
+QAbstractSpinBox::down-button {{ subcontrol-origin: border; subcontrol-position: bottom right; width: 18px; border: none; background: transparent; }}
+QAbstractSpinBox::up-arrow {{ image: url({spin_up}); width: 10px; height: 10px; }}
+QAbstractSpinBox::down-arrow {{ image: url({spin_down}); width: 10px; height: 10px; }}
+QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover {{ background: {selection}; }}
 QCalendarWidget QWidget {{ background: {menu_bg}; color: {text}; alternate-background-color: {menu_bg}; }}
 QCalendarWidget QWidget#qt_calendar_navigationbar {{ border-bottom: 1px solid {panel_border}; }}
 QCalendarWidget QToolButton {{ background: transparent; border: none; color: {text}; font-weight: 600; padding: 4px 8px; }}
@@ -201,6 +208,8 @@ def stylesheet(t: Theme, touch: bool = False) -> str:
         **asdict(t),
         root_bg="transparent" if t.glass else t.bg,
         radius_sm=max(4, t.radius // 2),
+        spin_up=(ICON_DIR / "spin-up.svg").as_posix(),
+        spin_down=(ICON_DIR / "spin-down.svg").as_posix(),
         rail_bg=t.rail or (t.bg if t.glass else t.panel),
         nav_hover=t.selection if t.glass else t.input_bg,
         status_bg=t.bg if t.glass else (t.rail or t.panel),  # the status bar sits outside the glass backdrop
@@ -228,6 +237,7 @@ def qcolor(css: str) -> QColor:
 
 
 FONT_DIR = Path(__file__).with_name("assets") / "fonts"
+ICON_DIR = Path(__file__).with_name("assets") / "icons"
 _fonts_loaded = False
 
 

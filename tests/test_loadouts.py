@@ -104,7 +104,7 @@ def test_button_sits_top_right_next_to_clear(gui, width):
     group = chart.loadout_btn.parentWidget()  # the tools group: … Clear, Loadouts
     lay = group.layout()
     widgets = [lay.itemAt(i).widget() for i in range(lay.count())]
-    assert widgets[-2].text() == "✕ Clear" and widgets[-1] is chart.loadout_btn
+    assert widgets[-2].text() == "Clear" and widgets[-1] is chart.loadout_btn
     right_edge = chart.loadout_btn.mapTo(chart, chart.loadout_btn.rect().topRight()).x()
     assert right_edge >= chart.width() - 30  # flush with the right margin, whether it wrapped or not
     assert group.y() < 120  # in the toolbar at the top

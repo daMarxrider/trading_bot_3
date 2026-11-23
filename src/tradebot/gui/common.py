@@ -81,6 +81,11 @@ def run_async(fn: Callable[[], object], on_done: Callable[[object], None], on_er
     QThreadPool.globalInstance().start(_Task(fn, signals))
 
 
+def up_down_mark(value: float) -> str:
+    """A triangle for a signed number: up for gains, down for losses, so colour is never the only cue (#191)."""
+    return "▲" if value > 0 else "▼"
+
+
 class DataFrameModel(QAbstractTableModel):
     """Read-only, sortable view of a DataFrame with per-column formatters.
 
@@ -114,7 +119,10 @@ class DataFrameModel(QAbstractTableModel):
             if value is None or (isinstance(value, float) and np.isnan(value)):
                 return "–"
             fmt = self.formats.get(col)
-            return fmt(value) if fmt else (f"{value:,.4g}" if isinstance(value, (float, np.floating)) else str(value))
+            text = fmt(value) if fmt else (f"{value:,.4g}" if isinstance(value, (float, np.floating)) else str(value))
+            if col in getattr(self.colors, "marked", ()) and isinstance(value, (int, float, np.number)) and value != 0:
+                text = f"{up_down_mark(value)} {text}"  # colour never carries up/down alone (#191)
+            return text
         if role == Qt.ItemDataRole.ForegroundRole and self.colors:
             return self.colors(col, value)
         if role == Qt.ItemDataRole.TextAlignmentRole and not isinstance(value, str):
