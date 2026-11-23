@@ -1256,10 +1256,18 @@ class BacktestView(QWidget):
         if not symbols:
             raise ValueError("enter a symbol")
         start, end = self.dates.range()
+        try:  # crypto market data (#166) the strategy's indicators read
+            from tradebot.data.market import wanted_by
+
+            market = wanted_by(self._algorithm().chart_indicators())
+        except Exception:  # noqa: BLE001 - nothing to attach when the strategy can't tell
+            market = []
         frames, failed = {}, []
         for symbol in symbols:
             try:
                 frames[symbol] = df = self.engine.get_ohlc(symbol, self.tf.currentText(), start=start, end=end, bars=bars)
+                if market:
+                    frames[symbol] = df = self.engine.market.attach(df, symbol, market)
             except Exception:
                 if len(symbols) == 1:
                     raise
@@ -1267,6 +1275,8 @@ class BacktestView(QWidget):
                 continue
             if note := shortfall(df, bars, start):
                 self.status.emit(f"{symbol}:{note}")
+            for column, why in df.attrs.get("market_errors", {}).items():
+                self.status.emit(f"{symbol}: no {column.replace('_', ' ')} ({why})")
         if failed:
             self.status.emit(f"could not load {', '.join(failed)}")
         if not frames:

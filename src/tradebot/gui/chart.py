@@ -34,7 +34,8 @@ from tradebot.analysis.charttypes import heikin_ashi, percent_change, renko
 from tradebot.algorithms import ALGORITHMS, algorithm_names, build_algorithm
 from tradebot import fundamentals
 from tradebot.config import Settings
-from tradebot.core.series import volume_of
+from tradebot.core.series import MARKET_COLUMNS, volume_of
+from tradebot.data.market import wanted_by
 from tradebot.core.timeframes import TIMEFRAMES
 from tradebot.gui.common import (
     DateRange,
@@ -62,6 +63,7 @@ from tradebot.gui.icons import bind_icon
 from tradebot.gui.info import LETTERS, InfoPanel, event_colour
 from tradebot.gui.news import NewsPanel
 from tradebot.gui.params import ParamDialog
+from tradebot.gui.depth import DepthPanel
 from tradebot.gui.sidebar import ChartSidebar
 from tradebot.gui.style_dialog import StyleDialog
 from tradebot.gui.theme import Theme, ThemeManager, qcolor, resolve_color
@@ -542,6 +544,8 @@ class ChartView(QWidget):
         self.engine, self.themes, self.settings = engine, themes, settings
         self.df: pd.DataFrame | None = None
         self.indicators: list = []
+        self._market_errors: dict[tuple, str] = {}  #: (symbol, timeframe, column) -> why it can't be had (#166)
+        self._market_loading: set[tuple] = set()
         self.algorithm = None
         self.drawings: list = []
         self._preview = None  # the rubber-band shape between the first click of a two-point tool and the cursor
@@ -718,6 +722,8 @@ class ChartView(QWidget):
         self.watchlists.open_symbol.connect(self.open_symbol)
         self.watchlists.status.connect(self.status)
         self.sidebar.add_category("watchlists", "star", "Watchlists", self.watchlists)
+        self.depth = DepthPanel(engine, themes)  # the order book of a crypto pair (#166)
+        self.sidebar.add_category("depth", "depth", "Order book depth", self.depth)
         self.info = InfoPanel(themes)  # last, so the pages that were there keep their place in the strip
         self.sidebar.add_category("info", "info", "Fundamentals", self.info)
         self.sidebar.shown.connect(self._sidebar_shown)
@@ -832,12 +838,56 @@ class ChartView(QWidget):
         self._hover = None
         self.news.set_symbol(symbol)
         self.watchlists.set_symbol(symbol)
+        self.depth.set_symbol(symbol)
+        self._ensure_market()
         self.info.set_symbol(symbol)
         self._info, self._info_for = (self._info if self._info_for == symbol else None), symbol
         self._fetch_info()
         run_async(lambda: symbol_name(symbol), lambda name: self._named(symbol, tf, name))
         self.status.emit(f"{symbol}: {len(df)} candles {df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d %H:%M}{note}")
         self.redraw(autorange=not refresh)
+
+    def _market_wanted(self) -> list[str]:
+        """Crypto market data columns (#166) the indicators and the algorithm on the chart read."""
+        inds = list(self.indicators)
+        try:
+            inds += self.algorithm.chart_indicators() if self.algorithm is not None else []
+        except Exception:  # noqa: BLE001 - an algorithm that can't tell its indicators needs no extra data
+            pass
+        return wanted_by(inds)
+
+    def _ensure_market(self):
+        """Fetch, in the background, the market data columns the chart's indicators need and the candles lack."""
+        df, symbol, tf = self.df, self._loaded_symbol, self.tf.currentText()
+        if df is None or not symbol:
+            return
+        cols = [c for c in self._market_wanted() if c not in df.columns and (symbol, tf, c) not in self._market_errors]
+        if not cols or (symbol, tf) in self._market_loading:
+            return
+        self._market_loading.add((symbol, tf))
+        market = self.engine.market
+
+        def done(out):
+            self._market_loading.discard((symbol, tf))
+            for c, why in out.attrs.get("market_errors", {}).items():
+                self._market_errors[(symbol, tf, c)] = why
+            if self.df is None or self._loaded_symbol != symbol or self.tf.currentText() != tf:
+                return
+            got = [c for c in out.columns if c in MARKET_COLUMNS and c not in self.df.columns]
+            if got:
+                self.df = self.df.join(out[got])  # candles that arrived meanwhile stay NaN until the next load
+            for c in cols:  # whatever didn't arrive is not asked for again
+                if c not in self.df.columns:
+                    self._market_errors.setdefault((symbol, tf, c), "not available")
+            self.redraw()
+
+        def failed(err):
+            self._market_loading.discard((symbol, tf))
+            for c in cols:
+                self._market_errors[(symbol, tf, c)] = str(err)
+            self.redraw()
+
+        run_async(lambda: market.attach(df, symbol, cols), done, failed)
 
     def _named(self, symbol, tf, name):
         """Full instrument name for the price pane's title, if the chart still shows that symbol."""
@@ -907,11 +957,13 @@ class ChartView(QWidget):
         self._fetch_info()
         self.news.set_visible(key == "news")
         self.watchlists.set_visible(key == "watchlists")
+        self.depth.set_visible(key == "depth")
 
     def _sidebar_toggled(self):
         if not self.sidebar.is_open:
             self.news.set_visible(False)  # collapsed: no fetching in the background
             self.watchlists.set_visible(False)
+            self.depth.set_visible(False)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -922,6 +974,7 @@ class ChartView(QWidget):
         super().hideEvent(event)
         self.news.set_visible(False)  # another page of the app is open
         self.watchlists.set_visible(False)
+        self.depth.set_visible(False)
 
     # -- indicators & algorithms -----------------------------------------------------------------
     def _fill_indicator_menu(self):
@@ -1136,6 +1189,7 @@ class ChartView(QWidget):
 
     def redraw(self, autorange: bool = False):
         t = self.themes.current
+        self._ensure_market()
         keep = {id(item) for item in (*self.drawings, *(line for pair in self._cross.values() for line in pair))}
         for plot in [self.price, *self.panes]:
             for item in list(plot.items):
@@ -1214,6 +1268,9 @@ class ChartView(QWidget):
             label = _spaced_label(ind.name, ind.values) + (f" · {ind.tf}" if ind.tf else "") + note
             if ind.uses_volume and not np.isfinite(volume_of(df)).any():
                 label += f" · no volume data for {self._loaded_symbol or 'this symbol'}"
+            if gone := [c for c in ind.market_data if c not in df.columns]:  # crypto market data (#166)
+                why = self._market_errors.get((self._loaded_symbol, self.tf.currentText(), gone[0]))
+                label += f" · no data: {why[:70]}" if why else " · loading market data …"
             self._rows.setdefault(target, []).append((label, values))
             slot = self._palette_slot(ind)
             curves = {}  # output -> (x, y) as drawn, for the fills

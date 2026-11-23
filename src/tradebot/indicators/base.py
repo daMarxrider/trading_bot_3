@@ -124,6 +124,11 @@ class BaseIndicator(ABC):
     #: True for indicators that need ``o.volume``: their outputs are NaN on symbols without volume data, and the
     #: chart says so instead of showing an empty pane.
     uses_volume: ClassVar[bool] = False
+    #: Columns of crypto market data the indicator reads with ``o.data(name)`` (#166, :mod:`tradebot.data.market`):
+    #: ``"funding_rate"``, ``"open_interest"``, ``"fear_greed"``, ``"mvrv"``, ``"active_addresses"``. They must be
+    #: attached to the candles (:meth:`~tradebot.data.market.MarketData.attach`); without them the outputs are NaN.
+    #: Such indicators run only on the candles' own timeframe and are not screenable.
+    market_data: ClassVar[tuple[str, ...]] = ()
     #: False for indicators the Scanner must not list (e.g. chart patterns whose labels change with new bars).
     screenable: ClassVar[bool] = True
 
@@ -136,6 +141,8 @@ class BaseIndicator(ABC):
 
     def __init__(self, tf: str | None = None, **params):
         self.values = resolve_params(self.params, params)
+        if tf and self.market_data:
+            raise ValueError(f"{self.name} uses crypto market data and runs on the candles' own timeframe only")
         #: a higher timeframe (``"1d"``) to compute on instead of the candles given, lined up without look-ahead
         #: (#161, :mod:`tradebot.core.mtf`); None: the candles as given
         self.tf = mtf.check(tf) if tf else None
@@ -177,6 +184,8 @@ def is_screenable(cls: type[BaseIndicator]) -> tuple[bool, str]:
     """
     if not cls.screenable:
         return False, "chart pattern: its values change as new bars come in"
+    if cls.market_data:
+        return False, "crypto market data is fetched per symbol, not for a whole scan"
     shown = [o for o in cls.outputs if o not in cls.hidden or o in cls.alerts]
     if not shown and not cls.alerts:
         return False, "no plot and no alert to screen on"
