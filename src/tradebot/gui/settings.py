@@ -64,11 +64,14 @@ class SettingsDialog(QDialog):
     message = pyqtSignal(str)  #: e.g. a setting that couldn't be saved, for the status bar
     cache_changed = pyqtSignal()  #: the cache was switched on/off, resized or cleared
 
-    def __init__(self, themes: ThemeManager, theme_key: str, parent=None):
+    def __init__(self, themes: ThemeManager, theme_key: str, parent=None, embedded: bool = False):
         super().__init__(parent)
         self.themes = themes
         self.setWindowTitle("Settings")
-        self.setMinimumSize(780, 520)
+        if embedded:  # a page of the main window (#191), not a window of its own: no Close button
+            self.setWindowFlags(Qt.WindowType.Widget)
+        else:
+            self.setMinimumSize(780, 520)
         self.nav = QVBoxLayout()
         self.nav.setContentsMargins(0, 0, 0, 0)
         self.nav_group = QButtonGroup(self)
@@ -99,6 +102,10 @@ class SettingsDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.addLayout(body, 1)
         lay.addWidget(buttons)
+        buttons.setVisible(not embedded)
+        if embedded:
+            lay.setContentsMargins(24, 20, 24, 16)
+            body.setSpacing(20)
         themes.changed.connect(self._refresh)  # the links take the new theme's accent colour
 
     def _add_page(self, name: str, icon: str, content: QWidget):

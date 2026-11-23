@@ -121,9 +121,12 @@ class MainWindow(QMainWindow):
         about.clicked.connect(self.show_about)
         side.addWidget(about)
         self._nav_icons.append((about, "info"))
-        self.settings_btn = QPushButton("Settings", objectName="Nav", toolTip="Theme, third-party tools")  # #59
+        self.settings_btn = QPushButton("Settings", objectName="Nav", checkable=True,
+                                        toolTip="Theme, third-party tools")  # #59
         self.settings_btn.clicked.connect(self.show_settings)
+        group.addButton(self.settings_btn)  # one page at a time: opening Settings unchecks the others
         side.addWidget(self.settings_btn)
+        self._settings_dialog = None  # built on first use
         self._nav_icons.append((self.settings_btn, "settings"))
         for btn in (about, self.settings_btn):
             btn.setIconSize(QSize(16, 16))
@@ -233,12 +236,15 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("kill switch ON: live bots stop trading" if on else "kill switch off", 8000)
 
     def show_settings(self):
-        dialog = SettingsDialog(self.themes, self.theme_key, self)
-        dialog.theme_chosen.connect(self._theme_chosen)
-        dialog.message.connect(lambda text: self.statusBar().showMessage(text, 8000))
-        dialog.cache_changed.connect(self._cache_changed)
-        self._settings_dialog = dialog  # for tests
-        dialog.exec()
+        """Settings is a page of the window (#191), built the first time it is opened."""
+        if self._settings_dialog is None:
+            dialog = self._settings_dialog = SettingsDialog(self.themes, self.theme_key, None, embedded=True)
+            dialog.theme_chosen.connect(self._theme_chosen)
+            dialog.message.connect(lambda text: self.statusBar().showMessage(text, 8000))
+            dialog.cache_changed.connect(self._cache_changed)
+            self.stack.addWidget(dialog)
+        self.stack.setCurrentWidget(self._settings_dialog)
+        self.settings_btn.setChecked(True)
 
     def _cache_changed(self):
         """Cache switched on/off, resized or cleared in the settings: use it from now on."""

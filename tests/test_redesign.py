@@ -155,3 +155,23 @@ def test_about_dialog_carries_the_disclaimers(qapp):
     assert f"v{__version__}" in texts and NOT_AFFILIATED in texts and NO_WARRANTY in texts
     assert any("github.com/daMarxrider/trading_bot_3" in t for t in texts)
     dlg.deleteLater()
+
+
+def test_settings_opens_as_a_page_of_the_window(qapp, tmp_path, monkeypatch):
+    monkeypatch.setattr(gui.ChartView, "load", lambda self: None)
+    monkeypatch.setenv("TRADEBOT_CONFIG", str(tmp_path / "config.toml"))
+    win = gui.MainWindow(ThemeManager(user_dir=tmp_path / "themes"), "graphite", Settings(tmp_path / "s.json"))
+    try:
+        win.show_settings()
+        page = win._settings_dialog
+        assert win.stack.currentWidget() is page and page.parent() is not None and win.settings_btn.isChecked()
+        assert not page.isWindow()  # embedded, not a window of its own
+        win.stack.setCurrentIndex(0)
+        first = [b for b in win.findChildren(QPushButton) if b.objectName() == "Nav" and b.text() == "Chart"][0]
+        first.click()
+        assert win.stack.currentIndex() == 0 and not win.settings_btn.isChecked()
+        win.show_settings()
+        assert win._settings_dialog is page  # built once
+    finally:
+        win.close()
+        win.deleteLater()
