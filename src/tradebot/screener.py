@@ -67,6 +67,15 @@ def yf_market_cap(symbol: str) -> float | None:
         return None
 
 
+def _wants_fundamentals(filters) -> bool:
+    import re
+
+    from tradebot.fundamentals import SCREEN_COLUMNS
+
+    text = " ".join(filters or [])
+    return any(re.search(rf"\b{c}\b", text) for c in SCREEN_COLUMNS)
+
+
 def run_screen(
     symbols: list[str],
     fetch: Callable[[str], pd.DataFrame],
@@ -74,19 +83,36 @@ def run_screen(
     extra: dict | None = None,
     market_cap: Callable[[str], float | None] = yf_market_cap,
     workers: int = 8,
+    fundamentals: Callable[[str], object] | bool | None = None,
 ) -> pd.DataFrame:
-    """Evaluate ``symbols`` concurrently; rows failing a filter (or lacking data) are dropped."""
+    """Evaluate ``symbols`` concurrently; rows failing a filter (or lacking data) are dropped.
+
+    ``fundamentals`` (#165) adds P/E, P/S, margins, growth, dividend yield and days to the next earnings (a
+    :func:`tradebot.fundamentals.load`-like function, or True for the default). Left at None they are added
+    only when a filter uses one of them; a symbol without such data (crypto) has NaN there and fails a filter on it.
+    """
+    from tradebot import fundamentals as fund
+
+    if fundamentals is None:
+        fundamentals = _wants_fundamentals(filters)
+    loader = fund.load if fundamentals is True else fundamentals or None
 
     def one(sym):
         try:
-            return screen_row(sym, fetch(sym), market_cap(sym), extra)
+            row = screen_row(sym, fetch(sym), market_cap(sym), extra)
+            if loader:
+                snap = loader(sym)
+                row.update(fund.screen_values(snap))
+                if np.isnan(row["market_cap"]) and snap.fundamentals.market_cap:
+                    row["market_cap"] = snap.fundamentals.market_cap
+            return row
         except Exception as exc:
             log.warning("screener skipped %s: %s", sym, exc)
             return None
 
     with ThreadPoolExecutor(workers) as pool:
         rows = [r for r in pool.map(one, symbols) if r]
-    table = pd.DataFrame(rows, columns=COLUMNS + list(extra or {}))
+    table = pd.DataFrame(rows, columns=COLUMNS + list(extra or {}) + (fund.SCREEN_COLUMNS if loader else []))
     for expr in filters or []:
         table = table.query(expr, engine="python")
     return table.reset_index(drop=True)

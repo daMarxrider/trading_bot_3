@@ -24,6 +24,10 @@ To run **one indicator** over a list or an index and filter on that indicator's 
 share of the close), `avg_volume`, `volume_ratio` (last candle's volume over its 20-candle average; NaN without
 volume data) and `market_cap` (from Yahoo; NaN when unknown).
 
+For stocks there are also `pe`, `forward_pe`, `ps`, `profit_margin`, `operating_margin`, `revenue_growth`,
+`earnings_growth`, `dividend_yield` and `days_to_earnings`. They are added when a filter uses one (or with
+`tradebot screen --fundamentals`); see [Fundamentals and events](fundamentals.md).
+
 Filters are evaluated with pandas' `query`, so any comparison and arithmetic on these columns works. From code,
 `run_screen(..., extra={"stoch_k": ("stoch", {"period": 14}, "k")})` adds any indicator output as a column.
 

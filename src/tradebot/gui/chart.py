@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (
 
 from tradebot.analysis.charttypes import heikin_ashi, percent_change, renko
 from tradebot.algorithms import ALGORITHMS, algorithm_names, build_algorithm
+from tradebot import fundamentals
 from tradebot.config import Settings
 from tradebot.core.series import volume_of
 from tradebot.core.timeframes import TIMEFRAMES
@@ -58,6 +59,7 @@ from tradebot.gui.drawings import (
     to_spec,
 )
 from tradebot.gui.icons import bind_icon
+from tradebot.gui.info import LETTERS, InfoPanel, event_colour
 from tradebot.gui.news import NewsPanel
 from tradebot.gui.params import ParamDialog
 from tradebot.gui.sidebar import ChartSidebar
@@ -541,6 +543,13 @@ class ChartView(QWidget):
         self.versus.setVisible(False)
         self.compare: dict[str, pd.DataFrame] = {}  # the other symbols' candles in Compare mode
 
+        self.events_btn = QToolButton(text="Events", checkable=True, toolTip="Mark earnings (E), splits (S) and ex-dividend "
+                                      "dates (D) on the candles. Stocks only; the data is free from Yahoo Finance")
+        self.events_btn.setChecked(bool(settings.get(self.EVENTS_KEY, False)) if settings else False)
+        self.events_btn.toggled.connect(self._events_toggled)
+        self._info = None  # fundamentals.Snapshot of the charted symbol, once fetched
+        self._info_for = ""
+
         self.ind_btn = QToolButton(text="Indicators")
         self.ind_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         bind_icon(self.ind_btn, "layers", themes, off="muted")
@@ -595,7 +604,7 @@ class ChartView(QWidget):
 
         # three groups that wrap onto a second row on narrow windows; the tools (… Clear, Loadouts) stay top right
         bar = FlowLayout(spacing=12, last_right=True)
-        for group in ((self.symbol, self.tf, self.bars, self.dates, load), (self.type_box, self.versus, self.style_btn, self.ind_btn, self.algo_box),
+        for group in ((self.symbol, self.tf, self.bars, self.dates, load), (self.type_box, self.versus, self.style_btn, self.events_btn, self.ind_btn, self.algo_box),
                       (*tool_group, self.magnet_btn, clear, self.loadout_btn)):
             bar.addWidget(toolbar_group(*group))
 
@@ -658,6 +667,8 @@ class ChartView(QWidget):
         self.watchlists.open_symbol.connect(self.open_symbol)
         self.watchlists.status.connect(self.status)
         self.sidebar.add_category("watchlists", "star", "Watchlists", self.watchlists)
+        self.info = InfoPanel(themes)  # last, so the pages that were there keep their place in the strip
+        self.sidebar.add_category("info", "info", "Fundamentals", self.info)
         self.sidebar.shown.connect(self._sidebar_shown)
         self.sidebar.toggle.clicked.connect(self._sidebar_toggled)
 
@@ -770,6 +781,9 @@ class ChartView(QWidget):
         self._hover = None
         self.news.set_symbol(symbol)
         self.watchlists.set_symbol(symbol)
+        self.info.set_symbol(symbol)
+        self._info, self._info_for = (self._info if self._info_for == symbol else None), symbol
+        self._fetch_info()
         run_async(lambda: symbol_name(symbol), lambda name: self._named(symbol, tf, name))
         self.status.emit(f"{symbol}: {len(df)} candles {df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d %H:%M}{note}")
         self.redraw(autorange=not refresh)
@@ -780,9 +794,66 @@ class ChartView(QWidget):
             self._title = f"{name} · {tf}"
             self._show_values()
             self.news.set_symbol(symbol, name)
+            self.info.set_symbol(symbol, name)
 
     # -- sidebar ---------------------------------------------------------------------------------
+    # -- fundamentals and events (#165) ------------------------------------------------------------
+    EVENTS_KEY = "chart.events"
+
+    def _info_wanted(self) -> bool:
+        panel = self.sidebar.is_open and self.sidebar.current == "info"
+        return bool(self._loaded_symbol) and fundamentals.supported(self._loaded_symbol) and (panel or self.events_btn.isChecked())
+
+    def _fetch_info(self):
+        """Fetch the symbol's fundamentals and events off the GUI thread (cached for a day), when the info page or
+        the event markers need them."""
+        symbol = self._loaded_symbol
+        if not self._info_wanted() or (self._info is not None and self._info.symbol == symbol):
+            if self._info is not None and self._info.symbol == symbol:
+                self.info.show_snapshot(self._info)
+            return
+        run_async(lambda: fundamentals.load(symbol), lambda snap: self._info_loaded(symbol, snap))
+
+    def _info_loaded(self, symbol, snap):
+        if symbol != self._loaded_symbol:
+            return
+        self._info = snap
+        self.info.show_snapshot(snap)
+        if self.events_btn.isChecked():
+            self.redraw()
+
+    def _events_toggled(self, on):
+        if self.settings is not None:
+            self.settings.set(self.EVENTS_KEY, bool(on))
+        if on and self._info is None:
+            self._fetch_info()
+        else:
+            self.redraw()
+        if on and self._loaded_symbol and not fundamentals.supported(self._loaded_symbol):
+            self.status.emit("no events for crypto, pairs or indices")
+
+    def _draw_events(self, x, h, l, ty, t):
+        """E / S / D marks under the candles of the earnings, split and ex-dividend dates inside the loaded range."""
+        if not self.events_btn.isChecked() or self._info is None or self._info.symbol != self._loaded_symbol or len(x) < 2:
+            return
+        step = float(np.median(np.diff(x)))
+        spots = {}
+        for e in self._info.events:
+            ts = pd.Timestamp(e.day).tz_localize("UTC").timestamp()
+            if x[0] - step <= ts <= x[-1] + step:
+                spots.setdefault(nearest_bar(x, ts), []).append(e)
+        for i, events in sorted(spots.items()):
+            e = min(events, key=lambda e: fundamentals.KINDS.index(e.kind))  # one mark per candle; the page lists all
+            colour = qcolor(event_colour(t, e.kind))
+            y = ty(l[i] * 0.985) if l[i] > 0 else ty(l[i])
+            self.price.addItem(pg.ScatterPlotItem(x=[x[i]], y=[y], symbol="o", size=15, brush=pg.mkBrush(qcolor(t.panel)),
+                                                  pen=pg.mkPen(colour, width=1.6)))
+            text = pg.TextItem(LETTERS[e.kind], color=colour, anchor=(0.5, 0.5))
+            text.setPos(x[i], y)
+            self.price.addItem(text)
+
     def _sidebar_shown(self, key: str):
+        self._fetch_info()
         self.news.set_visible(key == "news")
         self.watchlists.set_visible(key == "watchlists")
 
@@ -1144,6 +1215,8 @@ class ChartView(QWidget):
                 if mask.any():
                     self.price.addItem(pg.ScatterPlotItem(x=x[mask], y=ty(anchor[mask]), symbol=symbol, size=13,
                                                           brush=pg.mkBrush(color), pen=pg.mkPen(None)))
+        if not compare:
+            self._draw_events(x, h, l, ty, t)
         self._style(t)
         self._show_values()
         self._remember_session()
