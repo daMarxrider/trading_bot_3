@@ -8,9 +8,50 @@ x is epoch seconds and y the price pane's view y; the chart passes ``ty`` (price
 
 from __future__ import annotations
 
+import bisect
+import math
+
 import pyqtgraph as pg
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QPainterPath
+
+SNAP_RADIUS = 12.0  #: magnet reach in screen pixels (mouse)
+SNAP_RADIUS_TOUCH = 24.0  #: ... and for a finger
+
+
+def snap_point(x, y, xs, ohlc, px_x, px_y, radius=SNAP_RADIUS, enabled=True):
+    """Snap the view point ``(x, y)`` to the open/high/low/close of the candle nearest in x (#197).
+
+    ``xs`` are the sorted candle times, ``ohlc`` four arrays of view-y values (already log-transformed on the
+    log scale), ``px_x`` / ``px_y`` the screen pixels per view unit so the radius means the same at every zoom.
+    Returns ``(x, y, which)`` with ``which`` one of "open", "high", "low", "close", or None when off, no data or
+    nothing within ``radius`` pixels (the smallest pixel distance wins)."""
+    if not enabled or len(xs) == 0:
+        return None
+    i = int(bisect.bisect_left(xs, x))
+    i = min(max(i, 0), len(xs) - 1)
+    if i > 0 and abs(x - xs[i - 1]) <= abs(xs[i] - x):
+        i -= 1
+    best = None
+    for name, series in zip(("open", "high", "low", "close"), ohlc):
+        v = float(series[i])
+        if v != v or abs(v) == float("inf"):
+            continue
+        d = math.hypot((xs[i] - x) * px_x, (v - y) * px_y)
+        if d <= radius and (best is None or d < best[0]):
+            best = (d, float(xs[i]), v, name)
+    return None if best is None else best[1:]
+
+
+def snap_time(x, xs, px_x, radius=SNAP_RADIUS, enabled=True):
+    """The time of the candle nearest ``x`` if within ``radius`` pixels, else None (for vertical lines)."""
+    if not enabled or len(xs) == 0:
+        return None
+    i = min(max(int(bisect.bisect_left(xs, x)), 0), len(xs) - 1)
+    if i > 0 and abs(x - xs[i - 1]) <= abs(xs[i] - x):
+        i -= 1
+    return float(xs[i]) if abs(xs[i] - x) * px_x <= radius else None
+
 
 FIB_LEVELS = (0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.272, 1.618)
 
@@ -133,6 +174,7 @@ class NoteItem(pg.TextItem):
         super().__init__(text, color=color, anchor=(0, 1), border=pg.mkPen(color), fill=pg.mkBrush(0, 0, 0, 90))
         self.setPos(x, y)
         self.on_moved = on_moved
+        self.snap = None  #: optional (x, y) -> (x, y) magnet from the chart
         self._grab = QPointF()
         self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
 
@@ -144,7 +186,11 @@ class NoteItem(pg.TextItem):
         ev.accept()
         if ev.isStart():
             self._grab = self.pos() - vb.mapSceneToView(ev.buttonDownScenePos())
-        self.setPos(vb.mapSceneToView(ev.scenePos()) + self._grab)
+        pos = vb.mapSceneToView(ev.scenePos()) + self._grab
+        if self.snap is not None:
+            x, y = self.snap(pos.x(), pos.y())
+            pos = QPointF(x, y)
+        self.setPos(pos)
         if ev.isFinish() and self.on_moved:
             self.on_moved()
 
