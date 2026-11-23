@@ -97,6 +97,15 @@ def touch_press(widget, pos, kind=QEvent.Type.MouseButtonPress):
     QApplication.sendEvent(widget, event)
 
 
+def wait_for(condition, timeout_ms=10000):
+    """Poll until ``condition()`` holds (PyQt6's QTest has no qWaitFor); returns whether it did."""
+    waited = 0
+    while not condition() and waited < timeout_ms:
+        QTest.qWait(20)
+        waited += 20
+    return condition()
+
+
 def test_long_press_by_touch_shows_the_tooltip(lab):
     field = lab.population
     lab.findChild(QScrollArea).ensureWidgetVisible(field)  # a field clipped by the viewport would hit another widget
@@ -104,13 +113,14 @@ def test_long_press_by_touch_shows_the_tooltip(lab):
     center = field.rect().center()
     hit = QApplication.widgetAt(field.mapToGlobal(center))
     touch_press(field, center)
-    QTest.qWait(700)
+    # poll: on a loaded CI runner the 500 ms long-press timer can fire well after a fixed wait would have ended
+    wait_for(lambda: QToolTip.isVisible() and QToolTip.text() == field.toolTip())
     assert QToolTip.isVisible() and QToolTip.text() == field.toolTip(), (hit, QToolTip.text()[:60])
     QToolTip.hideText()
 
     touch_press(field, center)  # a short tap shows nothing
     touch_press(field, center, QEvent.Type.MouseButtonRelease)
-    QTest.qWait(700)
+    QTest.qWait(1000)  # well past the 500 ms long press: the release must have cancelled the timer
     assert not QToolTip.isVisible()
 
 
