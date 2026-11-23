@@ -175,3 +175,34 @@ def test_settings_opens_as_a_page_of_the_window(qapp, tmp_path, monkeypatch):
     finally:
         win.close()
         win.deleteLater()
+
+
+def test_chart_says_so_when_a_symbol_cannot_be_loaded(qapp, tmp_path):
+    import time
+
+    from PyQt6.QtCore import QThreadPool
+
+    from tradebot.gui.chart import ChartView
+
+    class Engine:
+        disk = None
+
+        def peek(self, *a, **k):
+            return None
+
+        def get_ohlc(self, *a, **k):
+            raise RuntimeError("Binance did not answer")
+
+    chart = ChartView(Engine(), ThemeManager(user_dir=tmp_path), ["BTC/USDT"])
+    chart.symbol.setText("BTC/USDT")
+    chart.load()
+    assert not chart.state.isHidden()  # "Loading BTC/USDT 1d …"
+    QThreadPool.globalInstance().waitForDone(3000)
+    for _ in range(50):
+        qapp.processEvents()
+        if chart.state.retry.isVisible() or not chart.state.retry.isHidden():
+            break
+        time.sleep(0.02)
+    assert "Couldn't load BTC/USDT" in chart.state.state.title.text()
+    assert "Binance did not answer" in chart.state.state.text.text() and not chart.state.retry.isHidden()
+    chart.deleteLater()

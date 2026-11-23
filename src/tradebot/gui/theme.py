@@ -93,6 +93,7 @@ QMainWindow, #Root {{ background: {root_bg}; }}
 QDialog {{ background: {bg}; }}
 QWidget#Sidebar {{ background: {rail_bg}; border-right: 1px solid {panel_border}; }}
 QLabel#NavGroup {{ color: {muted}; font-size: 11px; font-weight: 500; padding: 12px 8px 3px 8px; }}
+QFrame#StateOverlay {{ background: {panel}; border: none; }}
 QLabel#EmptyTitle {{ font-size: 14px; font-weight: 600; }}
 QLabel#Brand {{ font-size: 16px; font-weight: 600; }}
 QFrame#Card, QGroupBox {{ background: {panel}; border: 1px solid {panel_border}; border-radius: {radius}px; }}

@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLayout,
     QLineEdit,
+    QPushButton,
     QScrollArea,
     QSplitter,
     QSplitterHandle,
@@ -558,3 +559,43 @@ class TableWithEmpty(QStackedWidget):
 
     def sync(self):
         self.setCurrentWidget(self.table if self.model.rowCount() else self.empty)
+
+
+class StateOverlay(QFrame):
+    """A loading or error message laid over a view (the chart canvas), with an optional Retry (#191)."""
+
+    def __init__(self, themes, parent):
+        super().__init__(parent, objectName="StateOverlay")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.state = EmptyState(themes, "refresh", "", "")
+        self.retry = QPushButton("Retry", objectName="Primary")
+        row = QHBoxLayout()
+        row.addStretch()
+        row.addWidget(self.retry)
+        row.addStretch()
+        lay = QVBoxLayout(self)
+        lay.addWidget(self.state, 1)
+        lay.addLayout(row)
+        lay.addStretch(1)
+        self._action = None
+        self.retry.clicked.connect(lambda: self._action and self._action())
+        self.hide()
+
+    def show_loading(self, title: str, text: str = ""):
+        self._show("refresh", title, text, None)
+
+    def show_error(self, title: str, text: str, retry=None):
+        self._show("alert", title, text, retry)
+
+    def _show(self, glyph: str, title: str, text: str, retry):
+        self.state.glyph = glyph
+        self.state._recolour()
+        self.state.set_message(title, text)
+        self._action = retry
+        self.retry.setVisible(retry is not None)
+        self.setGeometry(self.parentWidget().rect())
+        self.show()
+        self.raise_()
+
+    def clear(self):
+        self.hide()

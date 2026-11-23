@@ -38,6 +38,7 @@ from tradebot.gui.common import (
     FlowLayout,
     SymbolCompleter,
     epoch_seconds,
+    StateOverlay,
     run_async,
     shortfall,
     toolbar_group,
@@ -604,6 +605,7 @@ class ChartView(QWidget):
                                    objectName="ChartCorner")
         self.vol_btn.setFixedSize(size, size)
         self.vol_btn.toggled.connect(self._volume_toggled)
+        self.state = StateOverlay(themes, self.canvas)  # loading / error message over the plot (#191)
         self.canvas.installEventFilter(self)  # keeps the button in the bottom-left corner
 
         # -- sidebar at the right (#41): news for the charted symbol, the watchlists (#67) ----------------
@@ -671,10 +673,18 @@ class ChartView(QWidget):
         cached = self.engine.peek(symbol, tf, start=start, end=end, bars=bars)  # from disk, no network (#63)
         if cached is not None:
             self._loaded(symbol, cached, " · from the cache, updating …")
+        elif self.df is None:
+            self.state.show_loading(f"Loading {symbol} {tf} …")  # nothing to show yet
+
+        def failed(err):
+            self.status.emit(f"{symbol}: {err}")
+            if cached is None:  # nothing on screen to fall back on: say so on the chart, with a way to try again
+                self.state.show_error(f"Couldn't load {symbol} {tf}", str(err), self.load)
+
         run_async(lambda: self.engine.get_ohlc(symbol, tf, start=start, end=end, bars=bars),
                   lambda df: self._loaded(symbol, df, shortfall(df, bars, start) + _offline_note(df),
                                           refresh=cached is not None),
-                  lambda err: self.status.emit(f"{symbol}: {err}"))
+                  failed)
 
     def _loaded(self, symbol, df, note="", refresh=False):
         """Show loaded candles; ``refresh``: newer candles for what the chart already shows from the cache,
@@ -682,6 +692,7 @@ class ChartView(QWidget):
         if refresh and (symbol != self._loaded_symbol or self.df is None):
             return  # the user moved on to another symbol meanwhile
         self.df = df
+        self.state.clear()
         if symbol != self._loaded_symbol:
             self._switch_drawings(symbol)
         self._loaded_symbol = symbol
@@ -1323,6 +1334,7 @@ class ChartView(QWidget):
             self.fit_btn.move(8, bottom)
             self.log_btn.move(8 + self.fit_btn.width() + 4, bottom)
             self.vol_btn.move(8 + self.fit_btn.width() + self.log_btn.width() + 8, bottom)
+            self.state.setGeometry(self.canvas.rect())
         elif obj is self.canvas and event.type() == QEvent.Type.Leave and self._hover is not None:
             self._hover = None  # cursor left the chart: show the latest bar again
             self._show_values()
