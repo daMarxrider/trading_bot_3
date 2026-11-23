@@ -478,6 +478,7 @@ class ChartView(QWidget):
         self.indicators: list = []
         self.algorithm = None
         self.drawings: list = []
+        self._preview = None  # the rubber-band shape between the first click of a two-point tool and the cursor
         self._pending_point = None
         self._x = np.empty(0)
         self._fit_series: dict = {}  # plot -> the arrays its y-axis auto-fit covers
@@ -592,6 +593,7 @@ class ChartView(QWidget):
         self.price.setMenuEnabled(False)
         _fast_curves(self.price)
         self.price.getAxis("right").setWidth(70)
+        self.price.getAxis("right").setStyle(maxTickLevel=0)  # minor y gridlines cost half of every pan/zoom frame
         self.price.showAxis("right")
         self.price.hideAxis("left")
         self.panes: list[pg.PlotItem] = []
@@ -1153,6 +1155,7 @@ class ChartView(QWidget):
         pane.showAxis("right")
         pane.hideAxis("left")
         pane.getAxis("right").setWidth(70)
+        pane.getAxis("right").setStyle(maxTickLevel=0)
         pane.setMenuEnabled(False)
         _fast_curves(pane)
         pane.vb.sigRangeChanged.connect(self._range_changed)
@@ -1218,6 +1221,7 @@ class ChartView(QWidget):
         if self.df is None or self.df.empty or plot is None:
             return
         pt = plot.vb.mapSceneToView(pos)
+        self._update_preview(plot, pt)
         i = nearest_bar(self._x, pt.x())
         for p, (vline, hline) in self._cross.items():
             vline.setPos(self._x[i])  # panes are x-linked: the same time everywhere, snapped to the bar
@@ -1239,6 +1243,36 @@ class ChartView(QWidget):
                 if k != key:
                     btn.setChecked(False)
         self._pending_point = None
+        self._clear_preview()
+
+    def _clear_preview(self):
+        if self._preview is not None:
+            self.price.removeItem(self._preview)
+            self._preview = None
+
+    def _make_shape(self, tool, p1, pt):
+        """The drawing for ``tool`` between two view points (also used, inert, as the preview before the 2nd click)."""
+        pen = pg.mkPen(qcolor(self.themes.current.accent), width=2)
+        if tool == "trend":
+            return pg.LineSegmentROI([[p1.x(), p1.y()], [pt.x(), pt.y()]], pen=pen)
+        if tool in ("fib", "measure"):
+            return self._two_point(tool, [p1.x(), p1.y()], [pt.x(), pt.y()], self._accent_hex())
+        return pg.RectROI([min(p1.x(), pt.x()), min(p1.y(), pt.y())], [abs(pt.x() - p1.x()), abs(pt.y() - p1.y())],
+                          pen=pen)
+
+    def _update_preview(self, plot, pt):
+        """After the first click: show what the second one would create, following the cursor."""
+        tool = self._active_tool()
+        if self._pending_point is None or tool is None or plot is not self.price:
+            return
+        self._clear_preview()
+        item = self._make_shape(tool, self._pending_point, pt)
+        item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        for h in item.getHandles():
+            h.hide()
+        item.setOpacity(0.6)
+        self.price.addItem(item, ignoreBounds=True)
+        self._preview = item
 
     def _active_tool(self):
         return next((k for k, b in self.tools.items() if b.isChecked()), None)
@@ -1280,15 +1314,8 @@ class ChartView(QWidget):
             self.status.emit("tap/click the second point")
             return
         p1, self._pending_point = self._pending_point, None
-        pen = pg.mkPen(qcolor(self.themes.current.accent), width=2)
-        if tool == "trend":
-            item = pg.LineSegmentROI([[p1.x(), p1.y()], [pt.x(), pt.y()]], pen=pen)
-        elif tool in ("fib", "measure"):
-            item = self._two_point(tool, [p1.x(), p1.y()], [pt.x(), pt.y()], self._accent_hex())
-        else:
-            item = pg.RectROI([min(p1.x(), pt.x()), min(p1.y(), pt.y())], [abs(pt.x() - p1.x()), abs(pt.y() - p1.y())],
-                              pen=pen)
-        self._add_drawing(item, tool)
+        self._clear_preview()
+        self._add_drawing(self._make_shape(tool, p1, pt), tool)
 
     def _accent_hex(self) -> str:
         return qcolor(self.themes.current.accent).name()
