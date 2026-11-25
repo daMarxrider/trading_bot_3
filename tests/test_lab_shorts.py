@@ -60,3 +60,16 @@ def test_direction_leverage_and_costs(lab):
     assert (m.leverage, m.borrow, m.funding) == (3.0, pytest.approx(0.02), pytest.approx(0.0001))
     res = backtest(make_ohlc(300), algo, margin=m)
     assert (res.positions < 0).any() and "liquidations" in res.metrics
+
+
+def test_earnings_rule_field_and_mask(lab, monkeypatch):
+    from tradebot import fundamentals
+    from tradebot.gui import views
+
+    assert lab.earnings_days.value() == 0  # off by default
+    df = make_ohlc(30)
+    assert views._blackout(df, "AAPL", 0) is None and views._blackout(df, None, 5) is None
+    monkeypatch.setattr(fundamentals, "earnings_blackout", lambda d, s, n: (s, n))
+    assert views._blackout(df, "AAPL", 5) == ("AAPL", 5)
+    monkeypatch.setattr(fundamentals, "earnings_blackout", lambda d, s, n: 1 / 0)
+    assert views._blackout(df, "AAPL", 5) is None

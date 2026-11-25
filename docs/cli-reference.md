@@ -69,6 +69,9 @@ Arguments: `SYMBOL`, `ALGO`
 | `--funding` |  | Funding of a perpetual future: a rate per 8 hours (0.0001 = 0.01%, longs pay shorts when positive) or 'history' for the exchange's historical rates (crypto) |
 | `--fee` | `0.001` | Fee per side, fraction |
 | `--slippage` |  | Slippage per side in basis points (5 = 0.05%), charged on top of the fee; 'auto' = suggested for the asset class (crypto 5, stock 2). Default: [backtest] slippage_bps in config.toml, else 0 |
+| `--no-entry-before-earnings` |  | Open no new position in the DAYS days before a company's earnings date (positions already open are kept). Default: [events] earnings_blackout_days in config.toml, else 0 = off |
+| `--flat-around-events` |  | Stay flat from HOURS before to HOURS after a high-impact economic event (CPI, rate decisions, jobs data; see `tradebot calendar`): open positions are closed, none opened. Default: [events] flat_around_hours in config.toml, else 0 = off |
+| `--event-impact` |  | Smallest impact of the events that count for --flat-around-events: low, medium or high (default: [events] flat_impact in config.toml, else high) |
 | `--capital` | `10000.0` |  |
 | `--dca-amount` |  | Amount the monthly-investing baseline invests each month (default: capital / months) |
 | `--plot`, `--no-plot` | `True` | Show chart with signals and equity |
@@ -187,6 +190,7 @@ Arguments: `SYMBOL` (optional)
 | `--state`, `--no-state` | `True` | Let exit rules use the open trade (bars in trade, stop loss, take profit, trailing stop) |
 | `--indicators` |  | Comma-separated indicators the rules may use (default: all, plugins included) |
 | `--higher-tf` |  | Comma-separated higher timeframes, e.g. 1d,1w: the rules may also use every indicator computed on those candles (only closed ones, no look-ahead) |
+| `--market-data` |  | Crypto symbols: let the rules also use funding rate, open interest, Fear & Greed and on-chain MVRV / active addresses (fetched and lined up without look-ahead; see `tradebot market`). Naming those indicators in --indicators does the same |
 | `--permutations` |  | Also run the search this many times on shuffled candles, to see whether it finds as much in noise (default 0, with --from-scratch 5) |
 | `--folds` |  | Walk-forward: also run the search on this many rolling windows, each scored on the stretch after it (default 0, with --from-scratch 3) |
 | `--fee` | `0.001` |  |
@@ -233,7 +237,7 @@ Portfolio over time (time- and money-weighted return vs a benchmark, from the jo
 
 ## `tradebot screen`
 
-Screen symbols by technicals, volume and market cap.
+Screen symbols by technicals, volume, market cap and fundamentals.
 
 Arguments: `SYMBOLS` (optional)
 
@@ -242,6 +246,7 @@ Arguments: `SYMBOLS` (optional)
 | `--filter`, `-f` |  | e.g. -f "rsi < 30" -f "close > sma200" |
 | `--sort` | `change_1d` |  |
 | `--watchlist`, `-w` |  | Without symbols: only this watchlist's (default: all watchlists) |
+| `--fundamentals` |  | Add the fundamentals columns (pe, forward_pe, ps, profit_margin, operating_margin, revenue_growth, earnings_growth, dividend_yield, days_to_earnings); also added when a filter uses one, e.g. -f "pe < 15" -f "dividend_yield > 0.03" |
 
 ## `tradebot scan`
 
@@ -273,6 +278,54 @@ Arguments: `SYMBOLS` (optional)
 | `--watchlist`, `-w` |  | Without symbols: only this watchlist's (default: all watchlists) |
 | `--source`, `-s` |  | Only these news sources (repeat the option); default: the ones enabled in the settings. See `tradebot news --list-sources` |
 | `--list-sources` |  | Show the available news sources and exit |
+
+## `tradebot sentiment`
+
+News sentiment of a symbol per day (#167): the mean score of its headlines, -1 (negative) to +1 (positive).
+
+Arguments: `SYMBOL`
+
+| Option | Default | Description |
+|---|---|---|
+| `--days` | `14` | Days to show |
+| `--limit` | `200` | Headlines to score |
+| `--source`, `-s` |  | Only these news sources |
+
+## `tradebot calendar`
+
+Economic calendar (#167): CPI, rate decisions, jobs data and other releases with their impact.
+
+| Option | Default | Description |
+|---|---|---|
+| `--days` | `14` | Days ahead to show |
+| `--back` | `0` | Days back to show |
+| `--impact` | `high` | Smallest impact to list: low, medium or high |
+| `--country` |  | Only this currency, e.g. USD or EUR |
+| `--refresh` |  | Fetch the calendar again now |
+
+## `tradebot market`
+
+Crypto market data beyond candles: funding rate, open interest, Fear & Greed, on-chain MVRV and active addresses, and with --depth the order book (#166). All from free sources that need no key; what can't be fetched (offline, rate limited, no perpetual for the symbol) is named instead. Use the same data as indicators (``funding``, ``open_interest``, ``oi_change``, ``fear_greed``, ``mvrv``, ``active_addresses``) in ``chart``, ``backtest`` rules and ``evolve --market-data``.
+
+Arguments: `SYMBOL`
+
+| Option | Default | Description |
+|---|---|---|
+| `--tf` | `1d` | Candle timeframe the open interest is bucketed for |
+| `--depth` |  | Also show the order book: how much can be traded within 0.5 / 1 / 2 / 5 % of the mid price, and the imbalance |
+| `--limit` | `500` | Order book levels per side (with --depth) |
+
+## `tradebot fundamentals`
+
+Valuation, margins, growth and dividend yield of stocks, with their earnings, split and dividend dates. Free data from Yahoo Finance, cached for a day. Crypto pairs have none. Not investment advice.
+
+Arguments: `SYMBOLS` (optional)
+
+| Option | Default | Description |
+|---|---|---|
+| `--watchlist`, `-w` |  | Without symbols: only this watchlist's (default: all watchlists) |
+| `--events`, `--no-events` | `True` | List the earnings, split and ex-dividend dates |
+| `--refresh` |  | Ignore the cache and ask again |
 
 ## `tradebot pair`
 

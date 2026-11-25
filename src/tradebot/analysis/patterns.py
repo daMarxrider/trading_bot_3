@@ -15,14 +15,19 @@ from dataclasses import dataclass
 import numpy as np
 
 CANDLE_PATTERNS = ("doji", "hammer", "shooting_star", "bull_engulfing", "bear_engulfing", "morning_star",
-                   "evening_star")
-BULLISH_CANDLES = ("hammer", "bull_engulfing", "morning_star")
-BEARISH_CANDLES = ("shooting_star", "bear_engulfing", "evening_star")
+                   "evening_star", "three_white_soldiers", "three_black_crows", "bull_harami", "bear_harami",
+                   "piercing", "dark_cloud", "tweezer_bottom", "tweezer_top")
+BULLISH_CANDLES = ("hammer", "bull_engulfing", "morning_star", "three_white_soldiers", "bull_harami", "piercing",
+                   "tweezer_bottom")
+BEARISH_CANDLES = ("shooting_star", "bear_engulfing", "evening_star", "three_black_crows", "bear_harami",
+                   "dark_cloud", "tweezer_top")
 
 CHART_PATTERNS = ("double_top", "double_bottom", "head_shoulders", "inverse_head_shoulders", "ascending_triangle",
-                  "descending_triangle", "symmetrical_triangle", "bull_flag", "bear_flag")
-BULLISH_CHART = ("double_bottom", "inverse_head_shoulders", "ascending_triangle", "bull_flag")
-BEARISH_CHART = ("double_top", "head_shoulders", "descending_triangle", "bear_flag")
+                  "descending_triangle", "symmetrical_triangle", "bull_flag", "bear_flag", "rising_wedge", "falling_wedge", "bull_pennant",
+                  "bear_pennant", "cup_handle")
+BULLISH_CHART = ("double_bottom", "inverse_head_shoulders", "ascending_triangle", "bull_flag", "falling_wedge",
+                 "bull_pennant", "cup_handle")
+BEARISH_CHART = ("double_top", "head_shoulders", "descending_triangle", "bear_flag", "rising_wedge", "bear_pennant")
 
 
 def _arrays(*a):
@@ -47,6 +52,12 @@ def candlestick(open_, high, low, close, doji_ratio: float = 0.1, trend: int = 5
     * engulfing: the body (at least half of the candle's range) covers the previous, opposite coloured body
     * morning / evening star: a long (``long_ratio`` of the range) candle, a small body, then a candle closing past
       the middle of the first one, in the opposite direction
+    * three white soldiers / three black crows: three long candles in a row, each opening inside the previous body
+      and closing beyond its close
+    * harami: a small body inside the previous long, opposite coloured body, after a fall (bullish) / rise (bearish)
+    * piercing / dark cloud: after a fall / rise, a candle opening beyond the previous long candle's extreme and
+      closing past the middle of its body, but not past its open
+    * tweezer bottom / top: two candles of opposite colour whose lows / highs almost match, after a fall / rise
     """
     o, h, lo, c = _arrays(open_, high, low, close)
     n = len(c)
@@ -71,8 +82,29 @@ def candlestick(open_, high, low, close, doji_ratio: float = 0.1, trend: int = 5
         mid2 = (o2 + c2) / 2
         morning = long2 & (c2 < o2) & small & (np.maximum(po, pc) <= c2) & (c > o) & (c > mid2)
         evening = long2 & (c2 > o2) & small & (np.minimum(po, pc) >= c2) & (c < o) & (c < mid2)
+        ph, pl, pr = _prev(h), _prev(lo), _prev(rng)
+        o3, c3, r3, b3 = _prev(o, 2), _prev(c, 2), _prev(rng, 2), _prev(body, 2)
+        pup, pdown = _prev(c) > _prev(o), _prev(c) < _prev(o)
+        pbig = (pb >= long_ratio * pr) & (pr > 0)
+        big = (body >= long_ratio * rng) & ok
+        soldiers = (c > o) & pup & (c3 > o3) & (c > pc) & (pc > c3) & (o > po) & (o < pc) & (po > o3) \
+            & (po < c3) & big & pbig & (b3 >= long_ratio * r3) & (r3 > 0) & (upper <= 0.3 * body)
+        crows = (c < o) & pdown & (c3 < o3) & (c < pc) & (pc < c3) & (o < po) & (o > pc) & (po < o3) & (po > c3) & big & pbig \
+            & (b3 >= long_ratio * r3) & (r3 > 0) & (c3 < o3) & (lower <= 0.3 * body)
+        inside = (body < pb) & (np.maximum(o, c) <= np.maximum(po, pc)) & (np.minimum(o, c) >= np.minimum(po, pc))
+        bull_har = pbig & pdown & (c > o) & inside & down
+        bear_har = pbig & pup & (c < o) & inside & up
+        pmid = (po + pc) / 2
+        piercing = pbig & pdown & (c > o) & (o < pl) & (c > pmid) & (c < po) & down
+        cloud = pbig & pup & (c < o) & (o > ph) & (c < pmid) & (c > po) & up
+        near = np.maximum(rng, pr) * 0.1
+        twz_bot = pdown & (c > o) & (np.abs(lo - pl) <= near) & down & (pr > 0) & ok & (pb >= 0.3 * pr)
+        twz_top = pup & (c < o) & (np.abs(h - ph) <= near) & up & (pr > 0) & ok & (pb >= 0.3 * pr)
     out = {"doji": doji, "hammer": hammer, "shooting_star": star, "bull_engulfing": bull_eng,
-           "bear_engulfing": bear_eng, "morning_star": morning, "evening_star": evening}
+           "bear_engulfing": bear_eng, "morning_star": morning, "evening_star": evening,
+           "three_white_soldiers": soldiers, "three_black_crows": crows, "bull_harami": bull_har,
+           "bear_harami": bear_har, "piercing": piercing, "dark_cloud": cloud, "tweezer_bottom": twz_bot,
+           "tweezer_top": twz_top}
     out = {k: np.asarray(v, dtype=bool) for k, v in out.items()}
     warm = np.zeros(n, dtype=bool)
     warm[: min(n, max(trend + 1, 2) + 1)] = True
@@ -112,13 +144,16 @@ def _rel(a: float, b: float) -> float:
 
 def chart_patterns(high, low, close, strength: int = 5, tol: float = 0.03, depth: float = 0.03,
                    triangle_bars: int = 80, pole_bars: int = 10, flag_bars: int = 8, pole_pct: float = 0.08,
-                   flag_retrace: float = 0.5) -> dict[str, np.ndarray]:
+                   flag_retrace: float = 0.5, cup_bars: int = 20, cup_depth: float = 0.1, cup_tol: float = 0.05) -> dict[str, np.ndarray]:
     """Boolean arrays per name in :data:`CHART_PATTERNS`, True on the bar the pattern is confirmed.
 
     Swing-based patterns fire on the bar their last swing point is confirmed; ``tol`` is the relative difference
     still counted as "equal" (tops, shoulders, flat triangle edges) and ``depth`` the relative dip/peak between
-    them. Flags (a ``pole_pct`` move over ``pole_bars`` candles followed by ``flag_bars`` candles moving at most
-    ``flag_retrace`` of it back) fire on the first bar the shape is complete.
+    them. Flags and pennants (a ``pole_pct`` move over ``pole_bars`` candles followed by ``flag_bars`` candles moving at most
+    ``flag_retrace`` of it back) fire on the first bar the shape is complete; a pennant is a flag whose range narrows. Wedges are triangles
+    whose edges slope the same way; the cup and handle needs two level rims at least ``cup_bars`` apart, a U-shaped
+    bottom ``cup_depth`` deep and a handle dip of at most half of it, and fires when the handle's low is confirmed.
+    A triangle, wedge or cup is marked once per formation.
     """
     h, lo, c = _arrays(high, low, close)
     n = len(c)
@@ -128,6 +163,7 @@ def chart_patterns(high, low, close, strength: int = 5, tol: float = 0.03, depth
     s = max(int(strength), 1)
     highs: list[Pivot] = []
     lows: list[Pivot] = []
+    last: dict[str, int] = {}  # bar of the latest mark per swing-based pattern
     for p in swing_points(h, lo, s):  # sorted by bar
         bar = p.index + s  # known from here
         (highs if p.high else lows).append(p)
@@ -156,11 +192,36 @@ def chart_patterns(high, low, close, strength: int = 5, tol: float = 0.03, depth
                 hflat, lflat = _rel(h1.price, h2.price) <= tol, _rel(l1.price, l2.price) <= tol
                 hfall, lrise = h2.price < h1.price and not hflat, l2.price > l1.price and not lflat
                 if hflat and lrise:
-                    out["ascending_triangle"][bar] = True
+                    name = "ascending_triangle"
                 elif lflat and hfall:
-                    out["descending_triangle"][bar] = True
+                    name = "descending_triangle"
                 elif hfall and lrise:
-                    out["symmetrical_triangle"][bar] = True
+                    name = "symmetrical_triangle"
+                elif h2.price > h1.price and l2.price > l1.price and not hflat and not lflat:
+                    name = "rising_wedge"  # both edges rise, the lower one faster
+                elif h2.price < h1.price and l2.price < l1.price and not hflat and not lflat:
+                    name = "falling_wedge"
+                else:
+                    name = None
+                # one mark per formation: not again while its swing points are still in the window
+                if name and last.get(name, -1) <= min(h1.index, l1.index):
+                    out[name][bar] = True
+                    last[name] = bar
+        if not p.high and len(highs) >= 2:  # cup and handle: the handle's low is the last swing point
+            a, rim = highs[-2], highs[-1]
+            cup = [q for q in lows if a.index < q.index < rim.index]
+            span = rim.index - a.index
+            if cup and rim.index < p.index and span >= cup_bars:
+                bottom = min(q.price for q in cup)
+                top = min(a.price, rim.price)
+                size = top - bottom
+                handle = rim.price - p.price
+                if _rel(a.price, rim.price) <= cup_tol and size >= cup_depth * top and 0 < handle <= 0.5 * size \
+                        and p.index - rim.index <= span // 2 \
+                        and np.mean(c[a.index: rim.index + 1] < bottom + 0.25 * size) >= 0.35 \
+                        and last.get("cup_handle", -1) <= a.index:
+                    out["cup_handle"][bar] = True
+                    last["cup_handle"] = bar
     # flags: a sharp pole, then a small counter-move
     span = pole_bars + flag_bars
     for t in range(span, n):
@@ -169,13 +230,19 @@ def chart_patterns(high, low, close, strength: int = 5, tol: float = 0.03, depth
         move = top - start
         if not start > 0:
             continue
+        half = flag_bars // 2
+        pennant = False
+        if half >= 2:  # a pennant's range narrows, a flag's stays about the same
+            first = h[t - flag_bars + 1: t - flag_bars + 1 + half].max() - lo[t - flag_bars + 1: t - flag_bars + 1 + half].min()
+            second = h[t - half + 1: t + 1].max() - lo[t - half + 1: t + 1].min()
+            pennant = second <= 0.6 * first
         if move / start >= pole_pct and top - fl <= flag_retrace * move \
                 and fh <= h[t - span: t - flag_bars + 1].max() * (1 + tol):
-            out["bull_flag"][t] = True
+            out["bull_pennant" if pennant else "bull_flag"][t] = True
         elif -move / start >= pole_pct and fh - top <= flag_retrace * -move \
                 and fl >= lo[t - span: t - flag_bars + 1].min() * (1 - tol):
-            out["bear_flag"][t] = True
-    for k in ("bull_flag", "bear_flag"):  # the first bar of a run only
+            out["bear_pennant" if pennant else "bear_flag"][t] = True
+    for k in ("bull_flag", "bear_flag", "bull_pennant", "bear_pennant"):  # the first bar of a run only
         out[k] = out[k] & ~np.concatenate(([False], out[k][:-1]))
     return out
 
@@ -226,3 +293,48 @@ def support_resistance(high, low, close, volume=None, strength: int = 5, zone: f
             sup[t] = below.max() if below.size else np.nan
             res[t] = above.min() if above.size else np.nan
     return sup, res
+
+
+def volume_levels(high, low, close, volume, lookback: int = 250, bins: int = 40, node_mult: float = 1.5,
+                  refresh: int = 0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Support, resistance and point of control from the volume profile of the last ``lookback`` candles.
+
+    A candle's volume goes into the price bin of its typical price; the bins split the window's low-to-high range.
+    A bin that is the busiest within its neighbours and holds at least ``node_mult`` times the average bin volume
+    is a high-volume node, a level where much was traded. Support is the highest node at or below the close,
+    resistance the lowest above it, the point of control (POC) the busiest bin. The profile is rebuilt every
+    ``refresh`` candles (default a tenth of ``lookback``) from the candles up to that bar, so levels hold still
+    between rebuilds and never use later candles. NaN without volume.
+    """
+    h, lo, c = _arrays(high, low, close)
+    n = len(c)
+    sup, res, poc = (np.full(n, np.nan) for _ in range(3))
+    if n == 0 or volume is None:
+        return sup, res, poc
+    v = np.asarray(volume, dtype=float)
+    tp = (h + lo + c) / 3
+    lookback, bins = max(int(lookback), 2), max(int(bins), 3)
+    step = int(refresh) if refresh > 0 else max(lookback // 10, 1)
+    nodes = np.empty(0)
+    centre = np.nan
+    for t in range(n):
+        if t % step == 0 and t >= 1:
+            a = max(0, t - lookback + 1)
+            w = slice(a, t + 1)
+            ok = np.isfinite(tp[w]) & np.isfinite(v[w]) & np.isfinite(h[w]) & np.isfinite(lo[w])
+            lo_p, hi_p = (np.min(lo[w][ok]), np.max(h[w][ok])) if ok.any() else (np.nan, np.nan)
+            nodes, centre = np.empty(0), np.nan
+            if ok.any() and hi_p > lo_p and v[w][ok].sum() > 0:
+                width = (hi_p - lo_p) / bins
+                idx = np.clip(((tp[w][ok] - lo_p) / width).astype(int), 0, bins - 1)
+                hist = np.bincount(idx, weights=v[w][ok], minlength=bins)
+                padded = np.r_[0.0, hist, 0.0]
+                peak = (hist > padded[:-2]) & (hist >= padded[2:]) & (hist >= node_mult * hist.mean())
+                nodes = lo_p + (np.flatnonzero(peak) + 0.5) * width
+                centre = lo_p + (hist.argmax() + 0.5) * width
+        poc[t] = centre
+        if nodes.size and np.isfinite(c[t]):
+            below, above = nodes[nodes <= c[t]], nodes[nodes > c[t]]
+            sup[t] = below.max() if below.size else np.nan
+            res[t] = above.min() if above.size else np.nan
+    return sup, res, poc

@@ -12,6 +12,11 @@ import pandas as pd
 from tradebot.core import ops
 
 
+#: Optional frame columns with crypto market data (#166, :mod:`tradebot.data.market`), lined up with the candles.
+MARKET_COLUMNS = ("funding_rate", "open_interest", "fear_greed", "mvrv", "active_addresses",
+                  "exchange_netflow", "news_sentiment")
+
+
 @dataclass(frozen=True)
 class OHLC:
     """Open/high/low/close arrays (NumPy or torch), time on the last axis, plus ``time`` and ``volume``.
@@ -34,19 +39,38 @@ class OHLC:
     close: object
     time: object = None
     volume: object = None
+    #: crypto market data lined up with the candles (#166): ``{column: array}`` for the columns of
+    #: :data:`MARKET_COLUMNS` the frame has (funding rate, open interest, ...); read it with :meth:`data`
+    extra: dict | None = None
 
     def __post_init__(self):
         if self.volume is None:  # always an array: NaN of close's shape and backend
             object.__setattr__(self, "volume", self.close * ops.NAN)
+
+    def data(self, name: str):
+        """The market data column ``name`` (e.g. ``"funding_rate"``), or all NaN when the candles come without it."""
+        got = (self.extra or {}).get(name)
+        return self.close * ops.NAN if got is None else got
+
+    def has_data(self, name: str) -> bool:
+        """Whether ``name`` has any value."""
+        return bool((~ops.isnan(self.data(name))).any())
+
+    def apply(self, fn) -> "OHLC":
+        """A new OHLC with ``fn`` applied to every array (slice them, convert them), market data included."""
+        return OHLC(*(None if a is None else fn(a) for a in self.fields()),
+                    extra={k: fn(v) for k, v in (self.extra or {}).items()} or None)
 
     @classmethod
     def from_frame(cls, df: pd.DataFrame, device: str | None = None) -> "OHLC":
         """Build from a normalized frame; ``device`` (e.g. ``"cuda"``) yields torch tensors."""
         cols = [df[c].to_numpy(dtype=np.float64) for c in ("open", "high", "low", "close")]
         cols += [unix_seconds(df.index), volume_of(df)]
+        extra = {c: df[c].to_numpy(dtype=np.float64) for c in MARKET_COLUMNS if c in df.columns}
         if device is not None:
             cols = [None if c is None else ops.torch.tensor(c, dtype=ops.torch.float64, device=device) for c in cols]
-        return cls(*cols)
+            extra = {k: ops.torch.tensor(v, dtype=ops.torch.float64, device=device) for k, v in extra.items()}
+        return cls(*cols, extra=extra or None)
 
     def fields(self) -> tuple:
         """``(open, high, low, close, time, volume)``, e.g. to slice or convert all of them: ``OHLC(*(f(x) ...))``."""

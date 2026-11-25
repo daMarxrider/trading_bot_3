@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
 )
 
 from tradebot.algorithms import ALGORITHMS
+from tradebot.indicators import INDICATORS
 from tradebot.backtest.baselines import BUY_HOLD, MONTHLY, buy_and_hold, monthly_investing
 from tradebot.backtest.engine import bps
 from tradebot.backtest.metrics import fmt
@@ -154,6 +155,7 @@ class EvolveView(QWidget):
         _explain_choices(self.aggregate, explain("aggregate"), AGGREGATES)
         self.align = QCheckBox("Common date range only")
         self.state = QCheckBox("Bars in trade, stops, targets", checked=True)
+        self.market_data = QCheckBox("Funding, open interest, Fear & Greed, on-chain")  # crypto only (#166)
         self.indicators = indicator_picker()
         #: higher timeframes whose indicators the rules may also use (#161)
         self.higher_tfs = {tf: QCheckBox(tf) for tf in HIGHER_TIMEFRAMES}
@@ -222,6 +224,7 @@ class EvolveView(QWidget):
                            ("Islands", self.islands, "islands"),
                            ("Objective", self.objective, "objective"), ("Several symbols", self.aggregate, "aggregate"),
                            ("Align dates", self.align, "align"), ("Exit rules may use", self.state, "trade_state"),
+                           ("Crypto market data", self.market_data, "market_data"),
                            ("Seed", self.seed, "seed"))),
             (honest_form, (("Validation", self.validation, "validation"), ("Test", self.test, "test_part"),
                            ("Segments", self.segments, "segments"), ("Min trades", self.min_trades, "min_trades"),
@@ -405,12 +408,11 @@ class EvolveView(QWidget):
         reports every candidate. The newest test part is kept out of it; press Evolve afterwards."""
         from tradebot.evolve import auto_configure
 
-        picked = self.indicators.selected()
         scratch = self.from_scratch.isChecked()
         fixed = dict(fee=self.fee.value(), slippage=bps(self.slippage.value()), align=self.align.isChecked(), state=self.state.isChecked(),
                      dca_amount=self.dca_amount.value() or None)
-        if not scratch and len(picked) != len(self.indicators.boxes):
-            fixed["indicators"] = picked
+        if (names := self.indicator_names()) is not None:
+            fixed["indicators"] = names
         if not scratch and self.higher_timeframes():
             fixed["timeframes"] = self.higher_timeframes()
         objective, seed = self.objective.currentText(), self.seed.value() or None
@@ -499,6 +501,8 @@ class EvolveView(QWidget):
         for symbol in symbols:
             try:
                 frames[symbol] = df = self.engine.get_ohlc(symbol, self.tf.currentText(), start=start, end=end, bars=bars)
+                if self.market_data.isChecked() and not self.from_scratch.isChecked():
+                    frames[symbol] = df = self._with_market(symbol, df)
             except Exception:
                 if len(symbols) == 1:
                     raise
@@ -512,6 +516,24 @@ class EvolveView(QWidget):
             raise ValueError("none of the symbols could be loaded")
         return frames
 
+    def _with_market(self, symbol: str, df):
+        """``df`` with the crypto market data columns (#166); what can't be had is named and left out."""
+        out = self.engine.market.attach(df, symbol)
+        for column, why in out.attrs.get("market_errors", {}).items():
+            self.status.emit(f"{symbol}: no {column.replace('_', ' ')} ({why})")
+        return out
+
+    def indicator_names(self) -> list[str] | None:
+        """The indicators the rules may use: None = all (market data ones excluded), else the ticked ones, plus
+        the crypto market data indicators when that box is ticked."""
+        picked = self.indicators.selected()
+        if self.from_scratch.isChecked():
+            return None
+        market = [c.name for c in INDICATORS if c.market_data] if self.market_data.isChecked() else []
+        if not market and len(picked) == len(self.indicators.boxes):
+            return None
+        return [*picked, *market]
+
     def higher_timeframes(self) -> tuple[str, ...]:
         """The ticked higher timeframes that are longer than the candles (#161)."""
         from tradebot.core import mtf
@@ -521,7 +543,6 @@ class EvolveView(QWidget):
 
     def settings_kwargs(self) -> dict:
         """The Evolver settings from the form."""
-        picked = self.indicators.selected()
         scratch = self.from_scratch.isChecked()
         return dict(**self._extra, from_scratch=scratch, population=self.population.value(), generations=self.generations.value(),
                     max_depth=self.max_depth.value(), max_size=self.max_size.value(), islands=self.islands.value(),
@@ -529,7 +550,7 @@ class EvolveView(QWidget):
                     align=self.align.isChecked(), validation=self.validation.value() / 100, test=self.test.value() / 100,
                     segments=self.segments.value(), min_trades=self.min_trades.value(),
                     parsimony=self.parsimony.value(), state=self.state.isChecked(),
-                    indicators=None if scratch or len(picked) == len(self.indicators.boxes) else picked,
+                    indicators=self.indicator_names(),
                     timeframes=() if scratch else self.higher_timeframes(),
                     fee=self.fee.value(), slippage=bps(self.slippage.value()),
                     dca_amount=self.dca_amount.value() or None, seed=self.seed.value() or None)

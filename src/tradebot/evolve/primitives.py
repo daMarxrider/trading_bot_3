@@ -310,7 +310,12 @@ def _sample_ohlc(n: int, seed: int = 7) -> OHLC:
     spread = np.abs(rng.normal(0, 0.01, n)) * close
     time = 1.42e9 + 86_400.0 * np.arange(n)  # daily candles from 2015, for calendar indicators
     volume = rng.lognormal(10, 0.5, n)  # so volume indicators are checked on real numbers, not NaN
-    return OHLC(open_, np.maximum(open_, close) + spread, np.minimum(open_, close) - spread, close, time, volume)
+    extra = {"funding_rate": rng.normal(1e-4, 1e-4, n), "open_interest": rng.lognormal(20, 0.1, n),
+             "fear_greed": rng.uniform(0, 100, n), "mvrv": rng.uniform(0.8, 4, n),
+             "active_addresses": rng.lognormal(13, 0.1, n),
+             "exchange_netflow": rng.normal(0, 2e8, n)}  # so market data indicators are checked on numbers
+    return OHLC(open_, np.maximum(open_, close) + spread, np.minimum(open_, close) - spread, close, time, volume,
+                extra)
 
 
 def output_unit(cls: type[BaseIndicator], output: str) -> str | None:
@@ -334,7 +339,7 @@ def causal_outputs(cls: type[BaseIndicator]) -> tuple[str, ...]:
         defaults = {k: v.default for k, v in cls.params.items()}
         with np.errstate(all="ignore"):
             a = cls.compute(full, **defaults)
-            b = cls.compute(OHLC(*(x[:part] for x in full.fields())), **defaults)
+            b = cls.compute(full.apply(lambda x: x[:part]), **defaults)
     except Exception:  # a broken plugin indicator is simply not offered
         return ()
     return tuple(k for k in cls.outputs if k in a and k in b and np.allclose(
@@ -342,8 +347,10 @@ def causal_outputs(cls: type[BaseIndicator]) -> tuple[str, ...]:
 
 
 def indicator_outputs(names: list[str] | None = None) -> list[tuple[type[BaseIndicator], str, str]]:
-    """``(indicator, output, unit)`` of every usable output (of ``names``, default: every registered one)."""
-    classes = [INDICATORS.get(n) for n in names] if names is not None else list(INDICATORS)
+    """``(indicator, output, unit)`` of every usable output (of ``names``, default: every registered one, except
+    the crypto market data indicators (#166), which are NaN on candles without that data: name them to include them)."""
+    classes = ([INDICATORS.get(n) for n in names] if names is not None
+               else [c for c in INDICATORS if not c.market_data])
     out = []
     for cls in classes:
         for output in causal_outputs(cls):

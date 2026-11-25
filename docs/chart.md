@@ -65,7 +65,7 @@ sma:period=50,tf=1d`.
 
 Built-in indicators: SMA, EMA, `ma_cross`, RSI, MACD, Bollinger bands, ATR, Stochastic, Donchian, Ichimoku, Elliott
 waves, Bitcoin halving cycle, ADX, Supertrend, Parabolic SAR, Keltner, CCI, Williams %R, ROC, momentum, pivots,
-volume profile, anchored VWAP, Volume, OBV, VWAP, MFI, volume ratio and [pattern detection](patterns.md) (`candles`, `chart_patterns`, `support_resistance`). `tradebot list indicators` prints the full
+volume profile, anchored VWAP, Volume, OBV, VWAP, MFI, volume ratio and [pattern detection](patterns.md) (`candles`, `chart_patterns`, `support_resistance`, `volume_levels`). `tradebot list indicators` prints the full
 list of your installation.
 
 ## Signals
@@ -114,6 +114,13 @@ remembers whether it was open and which category was shown.
 * **📰 News**: headlines for the symbol on the chart, for stocks and crypto pairs alike (Yahoo Finance). They follow
   the chart when you switch symbols and refresh every 5 minutes, and load only while the sidebar shows them. Click a
   headline to open it in the browser. The [News page](news.md) shows the headlines of all your watchlists.
+* **Order book depth**: the live order book of a crypto pair as a depth chart, with the spread and which side is
+  heavier; see [Crypto market data](market-data.md). Funding rate, open interest, Fear & Greed and on-chain metrics
+  are indicators (panes under the chart) described there too.
+* **ⓘ Fundamentals**: P/E, margins, growth, dividend yield and the earnings, split and ex-dividend dates of a stock.
+  The **Events** toolbar button marks those dates on the candles (E, S, D) and, above the candles, the high-impact
+  economic events (R rate decision, C CPI, J jobs data, ! other). See [Fundamentals and events](fundamentals.md) and
+  [News sentiment and the economic calendar](sentiment-calendar.md).
 * **⭐ Watchlists**: one or more named lists of symbols, each with its full name, last price and the day's change.
   Pick a list in the box at the top; **＋** creates one, **✎** renames it, **🗑** deletes it (after asking; the last
   list stays). Add symbols with the field (same suggestions as the chart's), with **Add current symbol**, or from the

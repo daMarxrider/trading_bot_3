@@ -24,10 +24,12 @@ tradebot chart AAPL -i sma:period=50 --line --no-volume
 tradebot news AAPL NVDA BTC/USDT
 tradebot news --watchlist Crypto           # without symbols: one watchlist (default: all of them)
 tradebot news BTC/USDT -s coindesk -s decrypt   # only some sources (`--list-sources` shows them)
+tradebot market BTC/USDT --depth           # funding rate, open interest, Fear & Greed, MVRV, order book (see Crypto market data)
 tradebot cache info                        # cache folder, size, number of cached series
 tradebot cache clear [--ohlc|--symbols]
 ```
 
+`tradebot market` and the market data indicators are described in [Crypto market data](market-data.md).
 `--bars N` returns exactly N candles; `--start`/`--end` select a date range. See
 [Data providers, timeframes and the cache](data.md).
 
@@ -103,9 +105,12 @@ A saved combo works like any strategy name everywhere ([Strategies](strategies.m
 tradebot screen -f "rsi < 35" -f "close > sma200"
 tradebot scan --alert cross_up --notify         # the Scanner page's engine: one indicator over many symbols
 tradebot scan -i rsi --where "value < 30" --index sp500 -t 1d
+tradebot screen -f "pe < 15" -f "dividend_yield > 0.03"      # fundamentals columns join when a filter uses them
+tradebot fundamentals AAPL MSFT                              # P/E, margins, dividend yield, earnings dates
+tradebot backtest AAPL sma_cross --no-entry-before-earnings 3
 ```
 
-See [Screener](screener.md) and [Scanner](scanner.md).
+See [Screener](screener.md), [Scanner](scanner.md) and [Fundamentals and events](fundamentals.md).
 
 ## Pairs and halving
 

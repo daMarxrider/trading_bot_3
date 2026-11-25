@@ -90,6 +90,17 @@ class BaseIndicator(ABC):
     labels: ClassVar[dict[str, dict[float, str]]] = {}
     #: Output whose value positions the labels vertically (default: the close).
     label_anchor: ClassVar[str | None] = None
+    #: Label colours by code (#164): ``True`` draws codes below 0 in the down colour, 1..9 in the up colour and
+    #: the rest muted (the texts carry a triangle, so a label is never colour alone), and thins out labels that
+    #: sit closer than a few candles on the same side of the price so the chart stays readable.
+    label_signs: ClassVar[bool] = False
+    #: What a label means, shown when hovering over it: ``{output: {code: sentence}}``.
+    label_help: ClassVar[dict[str, dict[float, str]]] = {}
+    #: Outputs drawn as horizontal bands instead of a line that steps diagonally from level to level (#164):
+    #: ``{output: (colour, letter[, "latest"])}``, the colour as for :class:`Style`, a letter that marks the
+    #: band and optionally ``"latest"`` to draw only the current band.
+    #: The band's half height is ``zone / 2`` of the price when the indicator has a ``zone`` parameter.
+    zones: ClassVar[dict[str, tuple[str, ...]]] = {}
     #: Colour of individual ``levels``: ``{level: Style(...)}``; levels without a style are dotted and muted.
     level_styles: ClassVar[dict[float, Style]] = {}
     #: Shaded areas between two outputs: ``[(output_a, output_b, Style(color=...))]``, drawn behind the lines.
@@ -114,6 +125,11 @@ class BaseIndicator(ABC):
     #: True for indicators that need ``o.volume``: their outputs are NaN on symbols without volume data, and the
     #: chart says so instead of showing an empty pane.
     uses_volume: ClassVar[bool] = False
+    #: Columns of crypto market data the indicator reads with ``o.data(name)`` (#166, :mod:`tradebot.data.market`):
+    #: ``"funding_rate"``, ``"open_interest"``, ``"fear_greed"``, ``"mvrv"``, ``"active_addresses"``, ``"exchange_netflow"``. They must be
+    #: attached to the candles (:meth:`~tradebot.data.market.MarketData.attach`); without them the outputs are NaN.
+    #: Such indicators run only on the candles' own timeframe and are not screenable.
+    market_data: ClassVar[tuple[str, ...]] = ()
     #: False for indicators the Scanner must not list (e.g. chart patterns whose labels change with new bars).
     screenable: ClassVar[bool] = True
 
@@ -126,6 +142,8 @@ class BaseIndicator(ABC):
 
     def __init__(self, tf: str | None = None, **params):
         self.values = resolve_params(self.params, params)
+        if tf and self.market_data:
+            raise ValueError(f"{self.name} uses crypto market data and runs on the candles' own timeframe only")
         #: a higher timeframe (``"1d"``) to compute on instead of the candles given, lined up without look-ahead
         #: (#161, :mod:`tradebot.core.mtf`); None: the candles as given
         self.tf = mtf.check(tf) if tf else None
@@ -147,7 +165,7 @@ class BaseIndicator(ABC):
 
     def is_line(self, column: str) -> bool:
         out = self.output_of(column)
-        return out not in self.labels and out not in self.hidden
+        return out not in self.labels and out not in self.hidden and out not in self.zones
 
     @classmethod
     def plot_outputs(cls) -> tuple[str, ...]:
@@ -167,6 +185,8 @@ def is_screenable(cls: type[BaseIndicator]) -> tuple[bool, str]:
     """
     if not cls.screenable:
         return False, "chart pattern: its values change as new bars come in"
+    if cls.market_data:
+        return False, "crypto market data is fetched per symbol, not for a whole scan"
     shown = [o for o in cls.outputs if o not in cls.hidden or o in cls.alerts]
     if not shown and not cls.alerts:
         return False, "no plot and no alert to screen on"

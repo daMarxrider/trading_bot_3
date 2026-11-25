@@ -231,3 +231,17 @@ def test_slippage_field_goes_into_the_settings(view):
     view.slippage.setValue(5)
     assert view.settings_kwargs()["slippage"] == pytest.approx(0.0005)
     assert "basis points" in view.slippage.toolTip()
+
+
+def test_market_data_box_adds_the_crypto_indicators_and_data(view):
+    from tradebot.data.market import MarketData
+    from tests.test_market_data import FakeExchange, fake_json
+
+    assert not view.market_data.isChecked() and view.settings_kwargs()["indicators"] is None
+    view.market_data.setChecked(True)
+    names = view.settings_kwargs()["indicators"]
+    assert {"funding", "open_interest", "fear_greed", "mvrv"} <= set(names) and "rsi" in names
+    view.engine.market = MarketData(cache=None, exchange=FakeExchange(), get_json=fake_json, exchange_id="fake")
+    view.symbol.setText("BTC/USDT")
+    frames = view._data()
+    assert "fear_greed" in frames["BTC/USDT"].columns

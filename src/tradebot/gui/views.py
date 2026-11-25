@@ -346,6 +346,9 @@ class ScreenerView(QWidget):
         "Large caps (> $100B)": "market_cap > 1e11",
         "High volatility (ATR > 4%)": "atr_pct > 0.04",
         "Unusual volume (> 2× average)": "volume_ratio > 2",
+        "Cheap and profitable (P/E < 15, margin > 10%)": "pe < 15; profit_margin > 0.10",
+        "Dividend payers (yield > 3%)": "dividend_yield > 0.03",
+        "Earnings within 14 days": "days_to_earnings <= 14",
     }
 
     def __init__(self, engine, themes: ThemeManager, watchlist: list[str]):
@@ -368,11 +371,16 @@ class ScreenerView(QWidget):
             "change_1d": pct, "change_1m": pct, "change_1y": pct, "atr_pct": pct,
             "market_cap": lambda v: f"{v / 1e9:,.1f}B", "avg_volume": lambda v: f"{v:,.0f}",
             "volume_ratio": lambda v: f"{v:.2f}×",
-        }, colors=_signed_color(themes, {"change_1d", "change_1m", "change_1y"}))
-        table = _table(self.model)
+            "pe": lambda v: f"{v:.1f}", "forward_pe": lambda v: f"{v:.1f}", "ps": lambda v: f"{v:.1f}",
+            "profit_margin": pct, "operating_margin": pct, "revenue_growth": pct, "earnings_growth": pct,
+            "dividend_yield": pct, "days_to_earnings": lambda v: f"{v:.0f}",
+        }, colors=_signed_color(themes, {"change_1d", "change_1m", "change_1y", "revenue_growth", "earnings_growth"}))
+        table = self.table = _table(self.model)
         table.doubleClicked.connect(lambda idx: self.open_symbol.emit(self.model.df.iat[idx.row(), 0]))
-        hint = QLabel("Columns: close, change_1d/1m/1y, rsi, sma50, sma200, atr_pct, avg_volume, volume_ratio, market_cap · "
-                      "double-click a row to chart it")
+        hint = QLabel("Columns: close, change_1d/1m/1y, rsi, sma50, sma200, atr_pct, avg_volume, volume_ratio, market_cap · stocks only, added when a filter uses "
+                      "them: pe, forward_pe, ps, profit_margin, operating_margin, revenue_growth, earnings_growth, "
+                      "dividend_yield, days_to_earnings · double-click a row to chart it")
+        hint.setWordWrap(True)
         hint.setObjectName("Muted")
 
         top = QGridLayout()
@@ -407,6 +415,9 @@ class ScreenerView(QWidget):
             self.progress.hide()
             self.results.empty.set_message("No symbol matches", "Loosen a filter, or add symbols to the universe.")
             self.model.set_frame(table)
+            wide = len(table.columns) > 14  # with the fundamentals: size to the content (the table scrolls) so no header is cut
+            self.table.horizontalHeader().setSectionResizeMode(
+                QHeaderView.ResizeMode.ResizeToContents if wide else QHeaderView.ResizeMode.Stretch)
             self.status.emit(f"screener: {len(table)} of {len(symbols)} match")
 
         def failed(err):
@@ -762,6 +773,24 @@ class PortfolioView(QWidget):
 
 
 # -- backtest lab -----------------------------------------------------------------------------------------
+def _earnings_default() -> int:
+    from tradebot import fundamentals
+
+    return min(60, fundamentals.blackout_days())
+
+
+def _blackout(df, symbol, days: int):
+    """The earnings mask (#165) of a stock's candles, None when the rule is off or the symbol has no earnings dates."""
+    if not days or not symbol:
+        return None
+    from tradebot import fundamentals
+
+    try:
+        return fundamentals.earnings_blackout(df, symbol, days)
+    except Exception:  # noqa: BLE001 - a failed fetch must not stop the backtest
+        return None
+
+
 class BacktestView(QWidget):
     status = pyqtSignal(str)
     show_on_chart = pyqtSignal(str, object)
@@ -838,6 +867,11 @@ class BacktestView(QWidget):
         self.funding.setDecimals(4)
         self.funding.setSingleStep(0.001)
         self.funding.setSuffix(" % / 8 h")
+        self.earnings_days = QSpinBox()  # no new entry in the N days before earnings, stocks only (#165)
+        self.earnings_days.setRange(0, 60)
+        self.earnings_days.setSpecialValueText("off")
+        self.earnings_days.setSuffix(" days")
+        self.earnings_days.setValue(_earnings_default())
         self.params = ParamForm({})
         self.members = MemberPicker()
         self.members.changed.connect(self._members_changed)
@@ -947,7 +981,8 @@ class BacktestView(QWidget):
                                ("Monthly amount", self.dca_amount, "dca_amount"), ("Algorithm", self.algo, "algorithm"),
                                ("Position sizing", self.sizing, "sizing"), ("Direction", self.direction, "direction"),
                                ("Leverage", self.leverage, "leverage"), ("Borrow fee", self.borrow_fee, "borrow_fee"),
-                               ("Funding", self.funding, "funding")):
+                               ("Funding", self.funding, "funding"),
+                               ("Earnings rule", self.earnings_days, "earnings_blackout")):
             _explained_row(form, label, w, term)
         opt_form = QFormLayout()
         for label, w, term in (("Method", self.method, "method"), ("Population / swarm", self.population, "population"),
@@ -1245,10 +1280,18 @@ class BacktestView(QWidget):
         if not symbols:
             raise ValueError("enter a symbol")
         start, end = self.dates.range()
+        try:  # crypto market data (#166) the strategy's indicators read
+            from tradebot.data.market import wanted_by
+
+            market = wanted_by(self._algorithm().chart_indicators())
+        except Exception:  # noqa: BLE001 - nothing to attach when the strategy can't tell
+            market = []
         frames, failed = {}, []
         for symbol in symbols:
             try:
                 frames[symbol] = df = self.engine.get_ohlc(symbol, self.tf.currentText(), start=start, end=end, bars=bars)
+                if market:
+                    frames[symbol] = df = self.engine.market.attach(df, symbol, market)
             except Exception:
                 if len(symbols) == 1:
                     raise
@@ -1256,6 +1299,8 @@ class BacktestView(QWidget):
                 continue
             if note := shortfall(df, bars, start):
                 self.status.emit(f"{symbol}:{note}")
+            for column, why in df.attrs.get("market_errors", {}).items():
+                self.status.emit(f"{symbol}: no {column.replace('_', ' ')} ({why})")
         if failed:
             self.status.emit(f"could not load {', '.join(failed)}")
         if not frames:
@@ -1284,16 +1329,18 @@ class BacktestView(QWidget):
         slip, margin = bps(self.slippage.value()), self._margin()
         self._busy(True)
 
-        def one(df):
-            res = backtest(df, algo, fee=fee, slippage=slip, margin=margin)
+        days = self.earnings_days.value()
+
+        def one(df, symbol=None):
+            res = backtest(df, algo, fee=fee, slippage=slip, margin=margin, blackout=_blackout(df, symbol, days))
             return df, {"backtest": res, "_baselines": {"backtest": baselines(df, res, fee, amount=amount, slippage=slip)},
                         "_plot_baselines": self._plot_baselines(df, fee, amount, slip)}
 
         def work():
             data = self._data()
             if isinstance(data, pd.DataFrame):
-                return one(data)
-            per = {s: one(df) for s, df in data.items()}
+                return one(data, self._symbol_list()[0])
+            per = {s: one(df, s) for s, df in data.items()}
             rows = []
             for s, (_, results) in per.items():
                 res, bl = results["backtest"], results["_baselines"]["backtest"]

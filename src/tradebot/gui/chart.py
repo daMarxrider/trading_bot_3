@@ -32,8 +32,10 @@ from PyQt6.QtWidgets import (
 
 from tradebot.analysis.charttypes import heikin_ashi, percent_change, renko
 from tradebot.algorithms import ALGORITHMS, algorithm_names, build_algorithm
+from tradebot import economic, fundamentals
 from tradebot.config import Settings
-from tradebot.core.series import volume_of
+from tradebot.core.series import MARKET_COLUMNS, volume_of
+from tradebot.data.market import wanted_by
 from tradebot.core.timeframes import TIMEFRAMES
 from tradebot.gui.common import (
     DateRange,
@@ -58,8 +60,10 @@ from tradebot.gui.drawings import (
     to_spec,
 )
 from tradebot.gui.icons import bind_icon
+from tradebot.gui.info import ECON_LETTERS, LETTERS, InfoPanel, event_colour
 from tradebot.gui.news import NewsPanel
 from tradebot.gui.params import ParamDialog
+from tradebot.gui.depth import DepthPanel
 from tradebot.gui.sidebar import ChartSidebar
 from tradebot.gui.style_dialog import StyleDialog
 from tradebot.gui.theme import Theme, ThemeManager, qcolor, resolve_color
@@ -362,6 +366,57 @@ def _rects(x, bottom, top, width) -> list[QRectF]:
     return list(map(QRectF, (x - width / 2).tolist(), bottom.tolist(), [width] * len(x), height.tolist()))
 
 
+class ZonesItem(pg.GraphicsObject):
+    """Horizontal bands (support / resistance, #164): each run of one level is a flat band from the bar it starts
+    on to the bar it ends on, with a thin line at the level, so levels read as areas instead of lines that slant
+    from one level to the next."""
+
+    def __init__(self, segments, color: QColor, text: str, text_color: QColor):
+        super().__init__()
+        #: ``(x0, x1, low, high, level)`` per run
+        self.segments = segments
+        fill = QColor(color)
+        fill.setAlpha(46)
+        self._fill, self._line, self._text, self._tcolor = fill, color, text, text_color
+        self._bounds = QRectF()
+        if segments:
+            x0, x1 = min(s[0] for s in segments), max(s[1] for s in segments)
+            lo, hi = min(s[2] for s in segments), max(s[3] for s in segments)
+            self._bounds = QRectF(x0, lo, x1 - x0, max(hi - lo, 1e-12))
+        self.setZValue(-4)
+
+    def boundingRect(self):
+        return QRectF(self._bounds)
+
+    def paint(self, p, *_):
+        p.setPen(pg.mkPen(None))
+        p.setBrush(pg.mkBrush(self._fill))
+        for x0, x1, lo, hi, _level in self.segments:
+            p.drawRect(QRectF(x0, lo, x1 - x0, max(hi - lo, 1e-12)))
+        pen = pg.mkPen(self._line, width=1)
+        pen.setCosmetic(True)
+        p.setPen(pen)
+        for x0, x1, _lo, _hi, level in self.segments:
+            p.drawLine(QPointF(x0, level), QPointF(x1, level))
+
+
+def zone_segments(x, y, half, width_x):
+    """``(x0, x1, low, high, level)`` per run of one level in ``y`` (NaN ends a run); ``half`` is the band's half
+    height in price (an array like ``y``), ``width_x`` the space one candle takes on the x-axis."""
+    y = np.asarray(y, dtype=float)
+    out = []
+    start = None
+    for i in range(len(y) + 1):
+        cur = y[i] if i < len(y) else np.nan
+        if start is not None and not (np.isfinite(cur) and cur == y[start]):
+            level = y[start]
+            out.append((x[start] - width_x / 2, x[i - 1] + width_x / 2, level - half[start], level + half[start], level))
+            start = None
+        if start is None and np.isfinite(cur):
+            start = i
+    return out
+
+
 class CandlestickItem(pg.GraphicsObject):
     """Candles: only the visible ones are drawn, and with more candles than pixels, one merged candle per
     pixel (#68), so panning stays fast with tens of thousands of bars."""
@@ -489,6 +544,8 @@ class ChartView(QWidget):
         self.engine, self.themes, self.settings = engine, themes, settings
         self.df: pd.DataFrame | None = None
         self.indicators: list = []
+        self._market_errors: dict[tuple, str] = {}  #: (symbol, timeframe, column) -> why it can't be had (#166)
+        self._market_loading: set[tuple] = set()
         self.algorithm = None
         self.drawings: list = []
         self._preview = None  # the rubber-band shape between the first click of a two-point tool and the cursor
@@ -540,6 +597,15 @@ class ChartView(QWidget):
         self.versus.returnPressed.connect(self.load)
         self.versus.setVisible(False)
         self.compare: dict[str, pd.DataFrame] = {}  # the other symbols' candles in Compare mode
+
+        self.events_btn = QToolButton(text="Events", checkable=True, toolTip="Mark earnings (E), splits (S) and ex-dividend "
+                                      "dates (D) of stocks under the candles, and high-impact economic events above them: "
+                                      "rate decisions (R), CPI (C), jobs data (J), others (!)")
+        self._econ: list = []  # economic.EconEvent of the loaded range (#167)
+        self.events_btn.setChecked(bool(settings.get(self.EVENTS_KEY, False)) if settings else False)
+        self.events_btn.toggled.connect(self._events_toggled)
+        self._info = None  # fundamentals.Snapshot of the charted symbol, once fetched
+        self._info_for = ""
 
         self.ind_btn = QToolButton(text="Indicators")
         self.ind_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
@@ -595,7 +661,7 @@ class ChartView(QWidget):
 
         # three groups that wrap onto a second row on narrow windows; the tools (… Clear, Loadouts) stay top right
         bar = FlowLayout(spacing=12, last_right=True)
-        for group in ((self.symbol, self.tf, self.bars, self.dates, load), (self.type_box, self.versus, self.style_btn, self.ind_btn, self.algo_box),
+        for group in ((self.symbol, self.tf, self.bars, self.dates, load), (self.type_box, self.versus, self.style_btn, self.events_btn, self.ind_btn, self.algo_box),
                       (*tool_group, self.magnet_btn, clear, self.loadout_btn)):
             bar.addWidget(toolbar_group(*group))
 
@@ -658,6 +724,10 @@ class ChartView(QWidget):
         self.watchlists.open_symbol.connect(self.open_symbol)
         self.watchlists.status.connect(self.status)
         self.sidebar.add_category("watchlists", "star", "Watchlists", self.watchlists)
+        self.depth = DepthPanel(engine, themes)  # the order book of a crypto pair (#166)
+        self.sidebar.add_category("depth", "depth", "Order book depth", self.depth)
+        self.info = InfoPanel(themes)  # last, so the pages that were there keep their place in the strip
+        self.sidebar.add_category("info", "info", "Fundamentals", self.info)
         self.sidebar.shown.connect(self._sidebar_shown)
         self.sidebar.toggle.clicked.connect(self._sidebar_toggled)
 
@@ -770,9 +840,57 @@ class ChartView(QWidget):
         self._hover = None
         self.news.set_symbol(symbol)
         self.watchlists.set_symbol(symbol)
+        self.depth.set_symbol(symbol)
+        self._ensure_market()
+        self.info.set_symbol(symbol)
+        self._info, self._info_for = (self._info if self._info_for == symbol else None), symbol
+        self._fetch_info()
+        self._fetch_econ()
         run_async(lambda: symbol_name(symbol), lambda name: self._named(symbol, tf, name))
         self.status.emit(f"{symbol}: {len(df)} candles {df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d %H:%M}{note}")
         self.redraw(autorange=not refresh)
+
+    def _market_wanted(self) -> list[str]:
+        """Crypto market data columns (#166) the indicators and the algorithm on the chart read."""
+        inds = list(self.indicators)
+        try:
+            inds += self.algorithm.chart_indicators() if self.algorithm is not None else []
+        except Exception:  # noqa: BLE001 - an algorithm that can't tell its indicators needs no extra data
+            pass
+        return wanted_by(inds)
+
+    def _ensure_market(self):
+        """Fetch, in the background, the market data columns the chart's indicators need and the candles lack."""
+        df, symbol, tf = self.df, self._loaded_symbol, self.tf.currentText()
+        if df is None or not symbol:
+            return
+        cols = [c for c in self._market_wanted() if c not in df.columns and (symbol, tf, c) not in self._market_errors]
+        if not cols or (symbol, tf) in self._market_loading:
+            return
+        self._market_loading.add((symbol, tf))
+        market = self.engine.market
+
+        def done(out):
+            self._market_loading.discard((symbol, tf))
+            for c, why in out.attrs.get("market_errors", {}).items():
+                self._market_errors[(symbol, tf, c)] = why
+            if self.df is None or self._loaded_symbol != symbol or self.tf.currentText() != tf:
+                return
+            got = [c for c in out.columns if c in MARKET_COLUMNS and c not in self.df.columns]
+            if got:
+                self.df = self.df.join(out[got])  # candles that arrived meanwhile stay NaN until the next load
+            for c in cols:  # whatever didn't arrive is not asked for again
+                if c not in self.df.columns:
+                    self._market_errors.setdefault((symbol, tf, c), "not available")
+            self.redraw()
+
+        def failed(err):
+            self._market_loading.discard((symbol, tf))
+            for c in cols:
+                self._market_errors[(symbol, tf, c)] = str(err)
+            self.redraw()
+
+        run_async(lambda: market.attach(df, symbol, cols), done, failed)
 
     def _named(self, symbol, tf, name):
         """Full instrument name for the price pane's title, if the chart still shows that symbol."""
@@ -780,16 +898,118 @@ class ChartView(QWidget):
             self._title = f"{name} · {tf}"
             self._show_values()
             self.news.set_symbol(symbol, name)
+            self.info.set_symbol(symbol, name)
 
     # -- sidebar ---------------------------------------------------------------------------------
+    # -- fundamentals and events (#165) ------------------------------------------------------------
+    EVENTS_KEY = "chart.events"
+
+    def _info_wanted(self) -> bool:
+        panel = self.sidebar.is_open and self.sidebar.current == "info"
+        return bool(self._loaded_symbol) and fundamentals.supported(self._loaded_symbol) and (panel or self.events_btn.isChecked())
+
+    def _fetch_info(self):
+        """Fetch the symbol's fundamentals and events off the GUI thread (cached for a day), when the info page or
+        the event markers need them."""
+        symbol = self._loaded_symbol
+        if not self._info_wanted() or (self._info is not None and self._info.symbol == symbol):
+            if self._info is not None and self._info.symbol == symbol:
+                self.info.show_snapshot(self._info)
+            return
+        run_async(lambda: fundamentals.load(symbol), lambda snap: self._info_loaded(symbol, snap))
+
+    def _info_loaded(self, symbol, snap):
+        if symbol != self._loaded_symbol:
+            return
+        self._info = snap
+        self.info.show_snapshot(snap)
+        if self.events_btn.isChecked():
+            self.redraw()
+
+    def _events_toggled(self, on):
+        if self.settings is not None:
+            self.settings.set(self.EVENTS_KEY, bool(on))
+        if on and self._info is None:
+            self._fetch_info()
+        else:
+            self.redraw()
+        if on:
+            self._fetch_econ()
+        if on and self._loaded_symbol and not fundamentals.supported(self._loaded_symbol):
+            self.status.emit("no events for crypto, pairs or indices")
+
+    def _fetch_econ(self):
+        """The economic calendar of the loaded range, in the background (the feed is asked at most once an hour)."""
+        df = self.df
+        if not self.events_btn.isChecked() or df is None or len(df) < 2:
+            return
+        lo, hi = df.index[0], df.index[-1] + pd.Timedelta(days=1)
+        symbol = self._loaded_symbol
+
+        def done(events):
+            if symbol == self._loaded_symbol:
+                self._econ = events
+                self.redraw()
+
+        run_async(lambda: economic.load(lo, hi, min_impact="high"), done)
+
+    def _draw_econ(self, x, h, ty, t):
+        """R / C / J / ! marks above the candles of the high-impact economic events; one per candle."""
+        if not self._econ or len(x) < 2:
+            return
+        step = float(np.median(np.diff(x)))
+        spots: dict[int, list] = {}
+        for e in self._econ:
+            ts = e.time.timestamp()
+            if x[0] - step <= ts <= x[-1] + step:
+                spots.setdefault(nearest_bar(x, ts), []).append(e)
+        for i, events in sorted(spots.items()):
+            e = min(events, key=lambda e: economic.KINDS.index(e.kind))
+            colour = qcolor(t.down if e.kind == "rates" else t.accent)
+            y = ty(h[i] * 1.015) if h[i] > 0 else ty(h[i])
+            item = pg.ScatterPlotItem(x=[x[i]], y=[y], symbol="s", size=15, brush=pg.mkBrush(qcolor(t.panel)),
+                                      pen=pg.mkPen(colour, width=1.6))
+            item.setToolTip(" · ".join(economic.format_event(ev) for ev in events))
+            self.price.addItem(item)
+            text = pg.TextItem(ECON_LETTERS[e.kind], color=colour, anchor=(0.5, 0.5))
+            text.setPos(x[i], y)
+            self.price.addItem(text)
+
+    def _draw_events(self, x, h, l, ty, t):
+        """E / S / D marks under the candles of the earnings, split and ex-dividend dates inside the loaded range,
+        and the economic events above them (#167)."""
+        if not self.events_btn.isChecked():
+            return
+        self._draw_econ(x, h, ty, t)
+        if self._info is None or self._info.symbol != self._loaded_symbol or len(x) < 2:
+            return
+        step = float(np.median(np.diff(x)))
+        spots = {}
+        for e in self._info.events:
+            ts = pd.Timestamp(e.day).tz_localize("UTC").timestamp()
+            if x[0] - step <= ts <= x[-1] + step:
+                spots.setdefault(nearest_bar(x, ts), []).append(e)
+        for i, events in sorted(spots.items()):
+            e = min(events, key=lambda e: fundamentals.KINDS.index(e.kind))  # one mark per candle; the page lists all
+            colour = qcolor(event_colour(t, e.kind))
+            y = ty(l[i] * 0.985) if l[i] > 0 else ty(l[i])
+            self.price.addItem(pg.ScatterPlotItem(x=[x[i]], y=[y], symbol="o", size=15, brush=pg.mkBrush(qcolor(t.panel)),
+                                                  pen=pg.mkPen(colour, width=1.6)))
+            text = pg.TextItem(LETTERS[e.kind], color=colour, anchor=(0.5, 0.5))
+            text.setPos(x[i], y)
+            self.price.addItem(text)
+
     def _sidebar_shown(self, key: str):
+        self._fetch_info()
         self.news.set_visible(key == "news")
         self.watchlists.set_visible(key == "watchlists")
+        self.depth.set_visible(key == "depth")
 
     def _sidebar_toggled(self):
         if not self.sidebar.is_open:
             self.news.set_visible(False)  # collapsed: no fetching in the background
             self.watchlists.set_visible(False)
+            self.depth.set_visible(False)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -800,6 +1020,7 @@ class ChartView(QWidget):
         super().hideEvent(event)
         self.news.set_visible(False)  # another page of the app is open
         self.watchlists.set_visible(False)
+        self.depth.set_visible(False)
 
     # -- indicators & algorithms -----------------------------------------------------------------
     def _fill_indicator_menu(self):
@@ -1014,6 +1235,7 @@ class ChartView(QWidget):
 
     def redraw(self, autorange: bool = False):
         t = self.themes.current
+        self._ensure_market()
         keep = {id(item) for item in (*self.drawings, *(line for pair in self._cross.values() for line in pair))}
         for plot in [self.price, *self.panes]:
             for item in list(plot.items):
@@ -1069,6 +1291,7 @@ class ChartView(QWidget):
         if self.volume_overlay and np.isfinite(volume_of(df)).any():
             self._draw_volume_overlay(x, volume_of(df), o, c, width, t)
 
+        self._label_last = {True: -10**9, False: -10**9}  # pattern labels of all indicators share their spacing
         for ind in self.indicators:
             if compare and ind.overlay:
                 continue
@@ -1092,10 +1315,16 @@ class ChartView(QWidget):
             label = _spaced_label(ind.name, ind.values) + (f" · {ind.tf}" if ind.tf else "") + note
             if ind.uses_volume and not np.isfinite(volume_of(df)).any():
                 label += f" · no volume data for {self._loaded_symbol or 'this symbol'}"
+            if gone := [c for c in ind.market_data if c not in df.columns]:  # crypto market data (#166)
+                why = self._market_errors.get((self._loaded_symbol, self.tf.currentText(), gone[0]))
+                label += f" · no data: {why[:70]}" if why else " · loading market data …"
             self._rows.setdefault(target, []).append((label, values))
             slot = self._palette_slot(ind)
             curves = {}  # output -> (x, y) as drawn, for the fills
             for k, col in enumerate(frame.columns):
+                if ind.output_of(col) in ind.zones:
+                    self._draw_zone(target, ind, frame, col, x, width, t, values)
+                    continue
                 if not ind.is_line(col):
                     self._draw_labels(target, ind, frame, col, x, c, t)
                     continue
@@ -1144,6 +1373,8 @@ class ChartView(QWidget):
                 if mask.any():
                     self.price.addItem(pg.ScatterPlotItem(x=x[mask], y=ty(anchor[mask]), symbol=symbol, size=13,
                                                           brush=pg.mkBrush(color), pen=pg.mkPen(None)))
+        if not compare:
+            self._draw_events(x, h, l, ty, t)
         self._style(t)
         self._show_values()
         self._remember_session()
@@ -1218,23 +1449,78 @@ class ChartView(QWidget):
                     band.setZValue(-10)
                     self.price.addItem(band, ignoreBounds=True)
 
+    def _draw_zone(self, target, ind, frame, col, x, width, t, values):
+        """An output drawn as horizontal bands, one per run of a level, plus its letter at the latest one."""
+        colour, letter = ind.zones[ind.output_of(col)][:2]
+        raw = frame[col].to_numpy(dtype=float)
+        slot = width / 0.7  # one candle's space on the x-axis
+        half = raw * float(ind.values.get("zone", 0.006)) / 2
+        ty = self._ty if target is self.price else (lambda v: v)
+        segs = zone_segments(x, raw, half, slot)
+        # a level that held for a couple of candles is noise, not a zone; the current one is always kept
+        segs = [g for k, g in enumerate(segs) if k == len(segs) - 1 or g[1] - g[0] >= 4 * slot]
+        if len(ind.zones[ind.output_of(col)]) > 2:  # e.g. the point of control: only where it is now
+            segs = segs[-1:]
+        # the log scale bends prices, so the bands are placed by their transformed edges
+        segs = [(x0, x1, float(ty(lo)), float(ty(hi)), float(ty(level))) for x0, x1, lo, hi, level in segs]
+        color = qcolor(resolve_color(t, colour))
+        item = ZonesItem(segs, color, letter, qcolor(t.text))
+        target.addItem(item, ignoreBounds=True)
+        if segs:  # the letter pairs the colour with a name; it sits at the right end of the latest band
+            last = segs[-1]
+            tag = pg.TextItem(letter, color=color, anchor=(0, 0.5))
+            font = tag.textItem.font()
+            font.setBold(True)
+            tag.setFont(font)
+            tag.setPos(last[1], last[4])
+            tag.setZValue(5)
+            target.addItem(tag, ignoreBounds=True)
+        y = ty(raw)
+        self._fit_series.setdefault(target, []).append(y)
+        values.append((raw, color.name(), fmt_value))
+
+    #: labels of one side closer than this many candles are thinned out (``label_signs`` indicators)
+    LABEL_GAP = 8
+
     def _draw_labels(self, target, ind, frame, col, x, close, t):
         """Text labels of an indicator output (e.g. Elliott wave numbers) at its anchor values."""
-        texts = ind.labels.get(ind.output_of(col))
+        output = ind.output_of(col)
+        texts = ind.labels.get(output)
         if not texts:
             return  # hidden output
+        helps = ind.label_help.get(output, {})
         anchor_col = f"{ind.name}_{ind.label_anchor}" if ind.label_anchor else None
         anchor = frame[anchor_col].to_numpy() if anchor_col in frame else close
         codes = frame[col].to_numpy()
+        last_on = self._label_last
         for i in np.flatnonzero(~np.isnan(codes)):
             # label above swing highs (local maximum of the anchor line), below swing lows
             neighbours = anchor[max(i - 1, 0): i + 2]
             is_high = anchor[i] >= np.nanmax(neighbours)
-            item = pg.TextItem(texts.get(float(codes[i]), "?"), color=t.text, anchor=(0.5, 1.15 if is_high else -0.15))
+            code = float(codes[i])
+            colour = t.text
+            chip = {}
+            if ind.label_signs:
+                # bullish patterns sit under the candle, bearish ones over it, whatever the neighbours say
+                is_high = code < 0 or (code >= 10 and is_high)
+                if i - last_on[is_high] < self.LABEL_GAP:
+                    continue  # too close to the previous label on this side: the alert still fires
+                last_on[is_high] = i
+                colour = t.down if code < 0 else t.up if code < 10 else t.muted
+                # a chip in the panel colour keeps the text readable on top of same-coloured candles
+                fill = qcolor(t.panel)
+                fill.setAlpha(235)
+                chip = {"fill": pg.mkBrush(fill), "border": pg.mkPen(qcolor(colour))}
+            item = pg.TextItem(texts.get(code, "?"), color=colour,
+                               anchor=(0.5, 1.45 if is_high else -0.45) if ind.label_signs
+                               else (0.5, 1.15 if is_high else -0.15), **chip)
             font = item.textItem.font()
             font.setBold(True)
             item.setFont(font)
+            if code in helps:
+                item.setToolTip(helps[code])
             item.setPos(x[i], self._ty(anchor[i]) if target is self.price else anchor[i])
+            item.setZValue(10)
             target.addItem(item)
 
     # -- crosshair & drawing tools ---------------------------------------------------------------
