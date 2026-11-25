@@ -156,10 +156,23 @@ tradebot journal show               # trade journal: realised P&L per year, fees
 tradebot journal note 12 --note "news-driven" --tags swing,eth
 tradebot journal export lots_2026.csv --lots --year 2026   # FIFO tax lots
 tradebot notify test                # send a test message to every notification channel
+tradebot sentiment AAPL --days 14   # news sentiment per day
+tradebot calendar --impact high     # economic calendar: CPI, rate decisions, jobs data
 ```
 
 The first `bot run ... --live` shows the risk notice and asks you to accept it. Bots record every order in the [journal](journal.md) (`--no-journal` switches it off). Everything about brokers, the risk
 guards and notifications: [Brokers and live trading](live-trading.md); several bots at once: [Bots](bots.md).
+
+## App launcher (Linux, Windows, macOS)
+
+```sh
+tradebot desktop install            # list tradebot in the launcher (per user); --system for all users
+tradebot desktop uninstall          # remove exactly what install wrote
+tradebot desktop install --dev      # a separate "Tradebot (dev)" entry for a source checkout
+tradebot desktop install --dry-run  # only list what it would write
+```
+
+See [Getting started](getting-started.md#the-binary) and [Development](development.md).
 
 ## Tab completion
 

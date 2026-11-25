@@ -211,6 +211,7 @@ def test_auto_configure_fills_the_form_and_reports(app, monkeypatch):
                                               folds=2, **kw))
     view = page.EvolveView(Engine(), ThemeManager(), ["AAA"])
     view.bars.setValue(900)
+    view.seed.setValue(1)  # the field's default is a random search, which can keep every candidate out (#215)
     view.auto_btn.click()
     assert view.auto_btn.isEnabled() and view.run_btn.isEnabled() and not view.stop_btn.isEnabled()
     assert "kept out" in view.info.text() and view.population.value() == 20

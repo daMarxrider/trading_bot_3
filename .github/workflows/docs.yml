@@ -25,7 +25,7 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install (core only: the CLI needs no extras)
+      - name: "Install (core only: the CLI needs no extras)"
         run: uv sync --python 3.14
 
       - name: Check the documentation

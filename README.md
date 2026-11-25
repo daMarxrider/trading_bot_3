@@ -32,7 +32,7 @@ uv run tradebot gui
 
 Or download a standalone binary for Linux, Windows or macOS (no Python needed, CPU-only, unsigned) from the
 [Releases page](https://github.com/daMarxrider/trading_bot_3/releases). Details, the GPU setup, third-party tools and the
-first run: [Getting started](docs/getting-started.md).
+first run: [Getting started](docs/getting-started.md). The archives include an installer (`install.sh`, `install.ps1`) that adds tradebot to your app launcher or Start Menu.
 
 ## A taste
 

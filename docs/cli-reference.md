@@ -529,6 +529,32 @@ Notification channels ([notify.*] in config.toml): Telegram, Discord, webhook, e
 
 Send a test message to every enabled channel and report which worked.
 
+## `tradebot desktop`
+
+App-launcher entry (Linux .desktop, Windows Start Menu shortcut, macOS app) for the binary, a pip/uv install or a source checkout.
+
+## `tradebot desktop install`
+
+Add tradebot to the app launcher / Start Menu / Applications. Run it again after moving the binary or the checkout.
+
+| Option | Default | Description |
+|---|---|---|
+| `--dev` |  | A separate "Tradebot (dev)" entry (tradebot-dev.desktop), e.g. for a source checkout |
+| `--system` |  | Install for all users: /usr/local/share, /Applications or %PROGRAMDATA% (needs root / administrator) |
+| `--prefix` |  | Write under PREFIX (share/ on Linux, Applications/ on macOS, the folder itself on Windows) instead of the user or system location (tests, packaging) |
+| `--dry-run` |  | Only list the files, write nothing |
+
+## `tradebot desktop uninstall`
+
+Remove exactly the files `desktop install` wrote.
+
+| Option | Default | Description |
+|---|---|---|
+| `--dev` |  | A separate "Tradebot (dev)" entry (tradebot-dev.desktop), e.g. for a source checkout |
+| `--system` |  | Install for all users: /usr/local/share, /Applications or %PROGRAMDATA% (needs root / administrator) |
+| `--prefix` |  | Write under PREFIX (share/ on Linux, Applications/ on macOS, the folder itself on Windows) instead of the user or system location (tests, packaging) |
+| `--dry-run` |  | Only list the files, write nothing |
+
 ## `tradebot bots`
 
 Several bots at once (bots.toml next to config.toml): define, run, watch, stop (#157).

@@ -36,6 +36,9 @@ app.add_typer(combo_app, name="combo")
 notify_app = typer.Typer(help="Notification channels ([notify.*] in config.toml): Telegram, Discord, webhook, "
                               "email, desktop.", no_args_is_help=True)
 app.add_typer(notify_app, name="notify")
+desktop_app = typer.Typer(help="App-launcher entry (Linux .desktop, Windows Start Menu shortcut, macOS app) for the binary, a "
+                             "pip/uv install or a source checkout.", no_args_is_help=True)
+app.add_typer(desktop_app, name="desktop")
 console = Console()
 
 Params = Annotated[list[str], typer.Option("--param", "-p", help="Algorithm parameter, e.g. -p lower=30",
@@ -2556,6 +2559,39 @@ def gui():
     except ImportError as exc:
         raise typer.BadParameter(f"GUI dependencies missing ({exc}); install with: pip install 'tradebot[gui]'")
     gui_main()
+
+
+Dev = Annotated[bool, typer.Option("--dev", help='A separate "Tradebot (dev)" entry (tradebot-dev.desktop), e.g. for a source checkout')]
+System = Annotated[bool, typer.Option("--system", help="Install for all users: /usr/local/share, /Applications or %PROGRAMDATA% (needs root / administrator)")]
+Prefix = Annotated[Optional[Path], typer.Option(help="Write under PREFIX (share/ on Linux, Applications/ on macOS, the folder itself on Windows) instead of the user or system location (tests, packaging)")]
+DryRun = Annotated[bool, typer.Option("--dry-run", help="Only list the files, write nothing")]
+
+
+def _desktop(action: str, **kw) -> None:
+    from tradebot import desktop
+
+    try:
+        files = getattr(desktop, action)(**kw)
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    verb = {"install": "Would write" if kw["dry_run"] else "Installed", "uninstall": "Would remove" if kw["dry_run"] else "Removed"}[action]
+    for f in files:
+        console.print(f"{verb} {f}", markup=False, highlight=False, soft_wrap=True)
+    if not files:
+        console.print("Nothing to remove.")
+
+
+@desktop_app.command("install")
+def desktop_install(dev: Dev = False, system: System = False, prefix: Prefix = None, dry_run: DryRun = False):
+    """Add tradebot to the app launcher / Start Menu / Applications. Run it again after moving the binary or the checkout."""
+    _desktop("install", dev=dev, system=system, prefix=prefix, dry_run=dry_run)
+
+
+@desktop_app.command("uninstall")
+def desktop_uninstall(dev: Dev = False, system: System = False, prefix: Prefix = None, dry_run: DryRun = False):
+    """Remove exactly the files `desktop install` wrote."""
+    _desktop("uninstall", dev=dev, system=system, prefix=prefix, dry_run=dry_run)
 
 
 if __name__ == "__main__":
