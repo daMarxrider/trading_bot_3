@@ -620,7 +620,8 @@ class Evolver:
         return a
 
     def mutate(self, program: Program) -> Program:
-        """One random change: new subtree, swapped primitive, nudged constant or hoisted subtree."""
+        """One random change: new subtree, swapped primitive, nudged constant or hoisted subtree (with ``normalise``,
+        sometimes a newly built normalised ratio, tuned at once: see :meth:`_tuned`)."""
         for _ in range(5):
             rule = "entry" if self.rng.random() < 0.5 else "exit"
             tree = getattr(program, rule)

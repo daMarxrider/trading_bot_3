@@ -348,25 +348,30 @@ def hidden_rsi(n: int = 3000, seed: int = 0) -> pd.DataFrame:
 
 @pytest.mark.slow
 def test_from_scratch_rediscovers_a_hidden_rsi_rule():
-    """From scratch, evolve finds a rule that trades like a hidden ``RSI(14) < 30`` (held 5 candles) (#105).
+    """From scratch, evolve finds a hidden ``RSI(14) < 30`` rule (held 5 candles) itself (#105).
 
-    Newly built normalised ratios (``smooth(x) / smooth(abs(x))``) get their constants tuned jointly, so the
-    right shape is judged at its ridge, not at a random window and level. The found rules are RSI in another
-    form (``ema(diff, 26) / ema(abs(diff), 27) < -0.41`` is RSI 30 up to the smoothing) and are as fit as the
-    hidden one. Measured overlaps (Jaccard of the positions) over seeds 1-6: 0.77 0.58 0.80 0.78 0.78 0.85, against
-    0.45 0.37 0.32 0.41 0.33 0.39 before; single seeds can still miss, so most seeds must overlap by 0.7+
-    (a rule that is always in a trade overlaps ~0.1; floating-point differences between CPUs change the runs)."""
+    Newly built normalised ratios (``smooth(x) / smooth(abs(x))``) get their constants tuned jointly, so the right
+    shape is judged at its ridge, not at a random window and level, and :meth:`Evolver.refine` polishes the result
+    (``RSI(13) < 29`` to ``RSI(14) < 30``). The evolved entry rule is RSI in another form (``ema(x, 27)`` is Wilder's
+    14): over seeds 1-6 its signals overlap the hidden rule's by 0.97 0.98 1.0 0.92 0.22 1.0 (Jaccard); seed 6 finds
+    the whole rule, positions and all. Before, no seed found RSI (positions overlapped 0.45 0.37 0.32 0.41). Where the
+    entry is found, the positions overlap by 0.78-0.83, not more, because the evolved exits beat ``held 5`` on
+    training *and* validation (the hidden boost lasts 5 candles after the *last* signal), so the fittest rule rightly
+    isn't the hidden one candle for candle. Single seeds can still miss (seed 5), so 3 of 4 must find the entry rule
+    (floating-point differences between CPUs change the runs)."""
     df = hidden_rsi()
     truth = Program(node("below:osc", rsi_tree(14), const(LEVELS[OSC], 30.0)), node("held", const(HOLD, 5)))
-    held = Evaluator(OHLC.from_frame(df)).positions(truth) > 0
+    ev0 = Evaluator(OHLC.from_frame(df))
+    held, signal = ev0.positions(truth) > 0, np.nan_to_num(np.asarray(ev0.value(truth.entry), dtype=float)) > 0
     runs = []
     for seed in (1, 2, 3, 4):
         ev = Evolver(df, from_scratch=True, population=500, generations=60, min_trades=0, seed=seed)
         res = ev.run()
-        found = Evaluator(OHLC.from_frame(df)).positions(res.program) > 0
-        runs.append(((held & found).sum() / (held | found).sum(), (held & found).sum() / held.sum(),
+        found = ev0.positions(res.program) > 0
+        fires = np.nan_to_num(np.asarray(ev0.value(res.program.entry), dtype=float)) > 0
+        runs.append(((signal & fires).sum() / (signal | fires).sum(), (held & found).sum() / (held | found).sum(),
                      res.fitness / ev.fitness(truth)))
     runs = np.array(runs)
-    hits = runs[:, 0] >= 0.7
-    assert hits.sum() >= 3, np.round(runs, 2).tolist()  # most seeds find the rule
-    assert (runs[hits, 1] >= 0.85).all() and (runs[hits, 2] >= 0.9).all(), np.round(runs, 2).tolist()
+    found_rsi = runs[:, 0] >= 0.9
+    assert found_rsi.sum() >= 3, np.round(runs, 2).tolist()  # most seeds find RSI(14) < 30 as the entry
+    assert (runs[found_rsi, 1] >= 0.7).all() and (runs[found_rsi, 2] >= 1.0).all(), np.round(runs, 2).tolist()
