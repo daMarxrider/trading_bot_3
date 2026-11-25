@@ -37,6 +37,7 @@ Edited by hand or by [Settings](settings.md) (which only changes its own lines a
 ```toml
 theme = "graphite"              # graphite, paper, glass, dark, light, or the file name (without .json) of your own theme
 touch_mode = "auto"             # auto (on when a touchscreen is present), on, off
+glass_blur = false              # Glass theme: blur the desktop behind the window, needs a restart
 gpu_rendering = false           # chart through OpenGL, needs a restart
 live_risk_accepted = "2026-11-01"   # written when you accept the live-trading notice
 
@@ -82,6 +83,7 @@ events = ["trade", "error"]
 |---|---|
 | `theme` | the theme at startup; the Settings dialog writes it |
 | `touch_mode` | finger-sized controls: `auto`, `on`, `off` |
+| `glass_blur` | real compositor blur behind the Glass theme (see [Settings](settings.md)); falls back to the painted gradient where unsupported |
 | `gpu_rendering` | draw the chart through OpenGL (experimental) |
 | `live_risk_accepted` | the date you accepted the live-trading notice; delete it to see the notice again |
 | `[watchlists]` | named lists of symbols. An older top-level `watchlist = [...]` is read as the list "Main" and moved here the first time you change a watchlist |

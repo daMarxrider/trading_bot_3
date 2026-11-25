@@ -44,6 +44,7 @@ from tradebot.gui.portfolio_backtest import PortfolioBacktestView
 from tradebot.gui.scripts_page import ScriptsView
 from tradebot.gui.settings import SettingsDialog
 from tradebot.live.risk import kill_active, set_kill
+from tradebot.gui import blur
 from tradebot.gui.theme import GlassBackdrop, ThemeManager
 from tradebot.gui.touch import has_touchscreen
 from tradebot.gui.scanner import ScannerView
@@ -55,7 +56,7 @@ log = logging.getLogger(__name__)
 
 class MainWindow(QMainWindow):
     def __init__(self, themes: ThemeManager, theme_key: str = "graphite", settings: Settings | None = None,
-                 opengl: bool = False):
+                 opengl: bool = False, glass_blur: bool = False):
         super().__init__()
         self.setWindowTitle("tradebot")
         self.resize(1440, 900)
@@ -180,7 +181,7 @@ class MainWindow(QMainWindow):
 
         self.evolve.saved.connect(strategy_saved)
 
-        root = GlassBackdrop(themes)
+        root = self.backdrop = GlassBackdrop(themes)
         lay = QHBoxLayout(root)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -208,6 +209,10 @@ class MainWindow(QMainWindow):
             page[2].status.connect(self.statusBar().showMessage)
 
         self.theme_key = theme_key if theme_key in themes.themes else "graphite"  # e.g. a deleted user theme
+        # real compositor blur behind the Glass theme (#7): opt-in, only where a backend exists
+        self.blur_backend = blur.current_backend() if glass_blur else "none"
+        blur.prepare(self, self.blur_backend)
+        themes.changed.connect(lambda _: self._sync_blur())
         themes.apply(self.theme_key)  # starting with the configured theme isn't a choice to save
         self.chart.load()
         if self.chart.opengl_note:  # GPU rendering is on but OpenGL isn't available (#71)
@@ -272,6 +277,18 @@ class MainWindow(QMainWindow):
         self.engine.disk = DiskCache.from_config()
         self.engine.clear_memory()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._sync_blur()  # the native window only exists once shown
+
+    def _sync_blur(self):
+        """Blur behind the window while the Glass theme is on; other themes stay opaque. Falls back to the
+        painted gradient when the compositor can't (``blur_active`` stays False)."""
+        if self.blur_backend == "none" or not self.isVisible():
+            return
+        self.backdrop.blur_active = blur.set_blur(self, self.blur_backend, self.themes.current.glass)
+        self.backdrop.update()
+
     def _theme_chosen(self, key: str):
         """Apply a theme picked in the settings and remember it as ``theme`` in the config file (#49)."""
         self.theme_key = key
@@ -304,7 +321,8 @@ def main(argv: list[str] | None = None) -> int:
     # touch_mode: "auto" (default, on when a touchscreen is present), "on" or "off"
     mode = str(config.get("touch_mode", "auto")).lower()
     themes = ThemeManager(touch=mode == "on" or (mode == "auto" and has_touchscreen()))
-    window = MainWindow(themes, config.get("theme", "graphite"), Settings(), opengl=bool(config.get("gpu_rendering", False)))
+    window = MainWindow(themes, config.get("theme", "graphite"), Settings(), opengl=bool(config.get("gpu_rendering", False)),
+                        glass_blur=blur.wants_blur(config))
     window.show()
     window.alert_watcher.start()  # price/indicator alerts and scheduled scans while the app is open (#156)
     return app.exec()
