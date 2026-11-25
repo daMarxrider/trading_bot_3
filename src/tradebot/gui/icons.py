@@ -44,6 +44,7 @@ PATHS: dict[str, str] = {
     "layers": "M12 3l9 5-9 5-9-5zM3 13l9 5 9-5",
     "code": "M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16",
     "play": "M7 4l13 8-13 8z",
+    "bot": "M5 9h14v10H5zM12 5v4M12 5h.01M9 13.5h.01M15 13.5h.01M9.5 16.5h5M3 13v2M21 13v2",
     "stop": "M6 6h12v12H6z",
     "download": "M12 4v11M7 11l5 5 5-5M5 20h14",
     "chev": "M6 9l6 6 6-6",

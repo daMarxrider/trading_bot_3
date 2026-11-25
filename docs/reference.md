@@ -6,8 +6,9 @@
 |---|---|---|---|
 | `config.toml` | `~/.config/tradebot/` | `~/.config/tradebot/` | `%USERPROFILE%\.config\tradebot\` |
 | `combos.toml` (saved combos) | next to `config.toml` | same | same |
+| `bots.toml` (the [bot set](bots.md)) | next to `config.toml` | same | same |
 | `plugins/`, `themes/` | `~/.config/tradebot/plugins/`, `.../themes/` | same | same |
-| `settings.json`, `paper_account.json`, `journal.sqlite`, `alerts.json`, `pair_bots/`, `KILL` (kill switch) | `$XDG_CONFIG_HOME/tradebot/` (usually `~/.config/tradebot/`) | `~/Library/Application Support/tradebot/` | `%APPDATA%\tradebot\` |
+| `settings.json`, `paper_account.json`, `journal.sqlite`, `alerts.json`, `pair_bots/`, `bots/` (bot state), `KILL` (kill switch) | `$XDG_CONFIG_HOME/tradebot/` (usually `~/.config/tradebot/`) | `~/Library/Application Support/tradebot/` | `%APPDATA%\tradebot\` |
 | Cache (candles, symbol lists) | `$XDG_CACHE_HOME/tradebot/` (usually `~/.cache/tradebot/`) | `~/Library/Caches/tradebot/` | `%LOCALAPPDATA%\tradebot\Cache\` |
 | Shell completion lookups | in the cache folder | same | same |
 
@@ -19,6 +20,7 @@ delete. Saved evolver results (`--save`) go to the first plugin folder.
 | Variable | Effect |
 |---|---|
 | `TRADEBOT_CONFIG` | path of `config.toml` (its folder also holds `combos.toml`) |
+| `TRADEBOT_BOTS` | path of the bot set (default `bots.toml` next to `config.toml`) |
 | `TRADEBOT_PLUGIN_DIR` | plugin folder(s), separated like `PATH`; replaces `~/.config/tradebot/plugins` |
 | `TRADEBOT_PAIR_STATE_DIR` | folder of the live pair bot's state files (default: `pair_bots/` in the config folder) |
 | `TRADEBOT_JOURNAL` | path of the trade journal database (default `journal.sqlite` in the config folder) |
@@ -37,6 +39,7 @@ Edited by hand or by [Settings](settings.md) (which only changes its own lines a
 ```toml
 theme = "graphite"              # graphite, paper, glass, dark, light, or the file name (without .json) of your own theme
 touch_mode = "auto"             # auto (on when a touchscreen is present), on, off
+glass_blur = false              # Glass theme: blur the desktop behind the window, needs a restart
 gpu_rendering = false           # chart through OpenGL, needs a restart
 live_risk_accepted = "2026-11-01"   # written when you accept the live-trading notice
 
@@ -82,6 +85,7 @@ events = ["trade", "error"]
 |---|---|
 | `theme` | the theme at startup; the Settings dialog writes it |
 | `touch_mode` | finger-sized controls: `auto`, `on`, `off` |
+| `glass_blur` | real compositor blur behind the Glass theme (see [Settings](settings.md)); falls back to the painted gradient where unsupported |
 | `gpu_rendering` | draw the chart through OpenGL (experimental) |
 | `live_risk_accepted` | the date you accepted the live-trading notice; delete it to see the notice again |
 | `[watchlists]` | named lists of symbols. An older top-level `watchlist = [...]` is read as the list "Main" and moved here the first time you change a watchlist |

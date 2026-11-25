@@ -137,6 +137,17 @@ def brokers(incomplete: str) -> Completion:
                                   for cls in BROKERS])
 
 
+def bot_names(incomplete: str) -> Completion:
+    """The bots of bots.toml (#157)."""
+    from tradebot.live.manager import load_bots
+
+    try:
+        bots = load_bots().bots
+    except ValueError:
+        return []
+    return _starting(incomplete, [(b.name, f"{b.symbol} {b.algorithm} {b.timeframe} · {b.mode}") for b in bots])
+
+
 def timeframes(incomplete: str) -> Completion:
     from tradebot.core.timeframes import TIMEFRAMES
 

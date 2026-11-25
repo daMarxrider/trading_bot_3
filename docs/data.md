@@ -10,7 +10,7 @@ volume can differ between data providers.
 ## Timeframes
 
 `1m 5m 15m 30m 1h 2h 4h 1d 1w 1mo`. The Chart, the Backtest lab and Evolve offer all of them; the
-[Pairs](pairs.md) page hides most intraday ones (currency conversion works on daily and longer candles). Each CLI
+[Pairs](pairs.md) page too. Each CLI
 command lists the timeframes it takes in `--help`.
 
 `--bars N` returns exactly N candles, also for stocks, whose markets close on weekends and overnight.
@@ -34,7 +34,7 @@ one. Because prices are assumed identical across venues, the pieces are stitched
 before a coin was listed on Binance, for example.
 
 Prices of different currencies are converted into one currency where it matters (the pair symbols `A:B`, the
-portfolio), for daily and longer candles. Stablecoins count as the dollar.
+portfolio), (intraday: only with a fresh exchange rate, see [Pairs](pairs.md)). Stablecoins count as the dollar.
 
 Market data comes from third-party services under their own terms; Yahoo Finance data, for example, is meant for
 personal use. See [Disclaimer and licence](legal.md).
