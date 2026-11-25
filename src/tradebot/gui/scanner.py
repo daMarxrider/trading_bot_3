@@ -54,7 +54,7 @@ from tradebot.gui.common import DataFrameModel, Panes, pct, run_async, tooltip
 from tradebot.gui.params import ParamDialog
 from tradebot.gui.script_editor import ScriptEditor
 from tradebot.gui.icons import bind_icon
-from tradebot.gui.theme import ThemeManager
+from tradebot.gui.theme import ThemeManager, qcolor
 from tradebot.gui.touch import enable_kinetic_scroll
 from tradebot.indicators import INDICATORS
 from tradebot.indicators.base import BaseIndicator, is_screenable
@@ -92,6 +92,20 @@ def fund_formatter(col: str) -> Callable:
     if col == "days_to_earnings":
         return lambda v: "–" if v is None or pd.isna(v) else f"{v:.0f}"
     return lambda v: fundamentals.format_value(col, None if v is None or pd.isna(v) else float(v))
+
+
+SIGNED_FUND = {"revenue_growth", "earnings_growth"}
+
+
+def fund_colors(themes: ThemeManager):
+    """Growth in the up / down colour; the model adds the triangle so colour is never the only cue (#191)."""
+    def color(col, value):
+        if col in SIGNED_FUND and isinstance(value, (int, float, np.number)) and not np.isnan(value):
+            return qcolor(themes.current.up if value >= 0 else themes.current.down)
+        return None
+
+    color.marked = SIGNED_FUND
+    return color
 
 
 def pretty(name: str) -> str:
@@ -417,7 +431,7 @@ class ScannerView(QWidget):
         self._fund_token = 0
         self._cancel = threading.Event()
         self._load_token = 0
-        self.model = DataFrameModel()
+        self.model = DataFrameModel(colors=fund_colors(themes))
 
         self._build()
         self._restore()

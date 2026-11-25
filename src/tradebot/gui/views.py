@@ -982,7 +982,7 @@ class BacktestView(QWidget):
                                ("Position sizing", self.sizing, "sizing"), ("Direction", self.direction, "direction"),
                                ("Leverage", self.leverage, "leverage"), ("Borrow fee", self.borrow_fee, "borrow_fee"),
                                ("Funding", self.funding, "funding"),
-                               ("No entry before earnings", self.earnings_days, "earnings_blackout")):
+                               ("Earnings rule", self.earnings_days, "earnings_blackout")):
             _explained_row(form, label, w, term)
         opt_form = QFormLayout()
         for label, w, term in (("Method", self.method, "method"), ("Population / swarm", self.population, "population"),

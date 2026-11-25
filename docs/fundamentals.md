@@ -47,7 +47,7 @@ tradebot screen --fundamentals           # show the columns without filtering on
 
 ## No new position before earnings
 
-In the app, the Backtest lab has a **No entry before earnings** field (days, off by default) that applies to Run.
+In the app, the Backtest lab has an **Earnings rule** field (days, off by default) that applies to Run.
 The Scanner's column menu (☰) has a **Fundamentals (stocks)** submenu that adds the same figures as columns to the
 scan results; they are fetched in the background after a scan.
 
