@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=@NAME@
+GenericName=Trading Platform
+Comment=Charts, backtests, optimization and trading bots
+Exec=@EXEC@
+Icon=@ICON@
+Terminal=false
+Categories=Office;Finance;
+Keywords=trading;backtest;stocks;crypto;chart;algorithm;
+StartupNotify=true
+StartupWMClass=@WMCLASS@

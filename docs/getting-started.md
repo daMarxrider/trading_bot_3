@@ -37,6 +37,19 @@ tar -xzf tradebot-v1.0.0-linux-x86_64.tar.gz
 ./tradebot/tradebot gui
 ```
 
+To list tradebot in your app launcher (GNOME, KDE, ...), run the installer from the extracted folder. It writes a
+`.desktop` file, the icon and AppStream metadata under `~/.local/share`, pointing at this folder, so run it again after
+moving the folder:
+
+```sh
+./tradebot/install.sh              # current user
+sudo ./tradebot/install.sh --system   # all users, under /usr/local/share
+./tradebot/install.sh --uninstall  # remove it again (add --system for a system-wide entry)
+```
+
+`install.sh` is a thin wrapper around `tradebot desktop install` / `tradebot desktop uninstall`, which also work for a
+`pip`/`uv` install. `--dry-run` lists the files without writing anything.
+
 The GUI needs a few system libraries that desktop installs usually already have. On Debian/Ubuntu:
 
 ```sh
@@ -51,6 +64,17 @@ console window) or `tradebot.exe` in a terminal for the CLI:
 .\tradebot\tradebot.exe --help
 ```
 
+To add a Start Menu entry, run the installer from the extracted folder in PowerShell. The shortcut points at
+`tradebot-gui.exe` in that folder, so run it again after moving the folder:
+
+```powershell
+.\tradebot\install.ps1              # current user (%APPDATA%\Microsoft\Windows\Start Menu\Programs)
+.\tradebot\install.ps1 -System      # all users, from an administrator PowerShell
+.\tradebot\install.ps1 -Uninstall   # remove it (add -System for the all-users one)
+```
+
+`install.ps1` wraps `tradebot desktop install` / `tradebot desktop uninstall`.
+
 Because the binaries are unsigned, SmartScreen warns on first start ("Windows protected your PC"). Click
 **More info, then Run anyway**. Config, plugins and themes live in `%USERPROFILE%\.config\tradebot\`, the same
 layout as on Linux.
@@ -63,6 +87,11 @@ shasum -a 256 -c tradebot-v1.0.0-macos-arm64.zip.sha256
 /Applications/tradebot.app/Contents/MacOS/tradebot --help
 sudo ln -s /Applications/tradebot.app/Contents/MacOS/tradebot /usr/local/bin/tradebot   # optional
 ```
+
+The drag to Applications is all it takes to see it in Launchpad. From a terminal, the same copy is
+`/Applications/tradebot.app/Contents/MacOS/tradebot desktop install` (into `~/Applications`, as "Tradebot"; add
+`--system` for `/Applications`), and `desktop uninstall` removes it again. For a `pip`/`uv` install the command creates a
+small launcher app that starts `tradebot gui`.
 
 The app is not signed or notarized, so Gatekeeper blocks the first start ("Apple could not verify ..."). Try to
 open it once, then go to **System Settings, Privacy & Security** and click **Open Anyway**. Alternatively remove the
