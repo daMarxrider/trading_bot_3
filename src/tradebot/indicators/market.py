@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 daMarxrider
-"""Crypto market data as indicators (#166): funding rate, open interest, Fear & Greed, MVRV and active addresses.
+"""Market data as indicators (#166, #167): funding rate, open interest, Fear & Greed, MVRV, active addresses, news
+sentiment (any symbol; the others are crypto only).
 
 They read the market data columns of the candles (:mod:`tradebot.data.market` fetches and lines them up with the
 candles without look-ahead: a bar sees only what was known at its open). Without that data, say for a stock or
@@ -105,6 +106,21 @@ class ActiveAddresses(BaseIndicator):
     @classmethod
     def compute(cls, o, smooth):
         return {"value": _smooth(o.data("active_addresses"), smooth)}
+
+
+class NewsSentiment(BaseIndicator):
+    name = "news_sentiment"
+    description = "Tone of the symbol's news headlines per hour, -1 (negative) to +1 (positive); any symbol"
+    params = {"smooth": IntParam(1, 1, 200, "candles averaged (1 = the hourly value)")}
+    overlay = False
+    levels = (-0.15, 0.0, 0.15)
+    level_styles = {-0.15: Style(color="down", dash="dash"), 0.15: Style(color="up", dash="dash")}
+    market_data = ("news_sentiment",)
+    styles = {"value": Style(color="accent", width=1.6)}
+
+    @classmethod
+    def compute(cls, o, smooth):
+        return {"value": _smooth(o.data("news_sentiment"), smooth)}
 
 
 class ExchangeNetFlow(BaseIndicator):
