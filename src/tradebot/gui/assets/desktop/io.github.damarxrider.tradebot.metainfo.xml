@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<component type="desktop-application">
+  <id>io.github.damarxrider.tradebot</id>
+  <name>Tradebot</name>
+  <summary>Charts, backtests, optimization and trading bots</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <description>
+    <p>Algorithmic trading platform: price charts with indicators, backtests, parameter optimization, strategy evolution, a market scanner and automated bots for paper and live trading.</p>
+    <p>Not affiliated with or endorsed by any broker. No warranty; use at your own risk.</p>
+  </description>
+  <developer id="io.github.damarxrider">
+    <name>daMarxrider</name>
+  </developer>
+  <launchable type="desktop-id">tradebot.desktop</launchable>
+  <url type="homepage">https://github.com/daMarxrider/trading_bot_3</url>
+  <url type="bugtracker">https://github.com/daMarxrider/trading_bot_3/issues</url>
+  <categories>
+    <category>Office</category>
+    <category>Finance</category>
+  </categories>
+  <provides>
+    <binary>tradebot</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+</component>

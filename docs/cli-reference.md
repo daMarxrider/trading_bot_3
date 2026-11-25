@@ -281,7 +281,7 @@ Arguments: `SYMBOLS` (optional)
 
 ## `tradebot sentiment`
 
-News sentiment of a symbol per day (#167): the mean score of its headlines, -1 (negative) to +1 (positive).
+News sentiment of a symbol per day (#167): the mean score of its headlines, -1 (negative) to +1 (positive). The score comes from a word list for financial headlines, a rough guide to the tone of the news. Feeds only serve their latest headlines; the chart indicator ``news_sentiment`` accumulates the hours it has seen.
 
 Arguments: `SYMBOL`
 
@@ -293,15 +293,15 @@ Arguments: `SYMBOL`
 
 ## `tradebot calendar`
 
-Economic calendar (#167): CPI, rate decisions, jobs data and other releases with their impact.
+Economic calendar (#167): CPI, rate decisions, jobs data and other releases with their impact. From the free weekly feed of Forex Factory (this week; every fetch is kept, so the calendar grows) plus the Fed's 2026 decision days and the US jobs report rule (marked ~). Stay flat around them in a backtest with ``tradebot backtest ... --flat-around-events 2``.
 
 | Option | Default | Description |
 |---|---|---|
 | `--days` | `14` | Days ahead to show |
-| `--back` | `0` | Days back to show |
+| `--back` |  | Days back to show |
 | `--impact` | `high` | Smallest impact to list: low, medium or high |
 | `--country` |  | Only this currency, e.g. USD or EUR |
-| `--refresh` |  | Fetch the calendar again now |
+| `--refresh`, `--no-refresh` |  | Fetch the calendar again now |
 
 ## `tradebot market`
 
@@ -527,6 +527,32 @@ Notification channels ([notify.*] in config.toml): Telegram, Discord, webhook, e
 ## `tradebot notify test`
 
 Send a test message to every enabled channel and report which worked.
+
+## `tradebot desktop`
+
+App-launcher entry (Linux .desktop, Windows Start Menu shortcut, macOS app) for the binary, a pip/uv install or a source checkout.
+
+## `tradebot desktop install`
+
+Add tradebot to the app launcher / Start Menu / Applications. Run it again after moving the binary or the checkout.
+
+| Option | Default | Description |
+|---|---|---|
+| `--dev` |  | A separate "Tradebot (dev)" entry (tradebot-dev.desktop), e.g. for a source checkout |
+| `--system` |  | Install for all users: /usr/local/share, /Applications or %PROGRAMDATA% (needs root / administrator) |
+| `--prefix` |  | Write under PREFIX (share/ on Linux, Applications/ on macOS, the folder itself on Windows) instead of the user or system location (tests, packaging) |
+| `--dry-run` |  | Only list the files, write nothing |
+
+## `tradebot desktop uninstall`
+
+Remove exactly the files `desktop install` wrote.
+
+| Option | Default | Description |
+|---|---|---|
+| `--dev` |  | A separate "Tradebot (dev)" entry (tradebot-dev.desktop), e.g. for a source checkout |
+| `--system` |  | Install for all users: /usr/local/share, /Applications or %PROGRAMDATA% (needs root / administrator) |
+| `--prefix` |  | Write under PREFIX (share/ on Linux, Applications/ on macOS, the folder itself on Windows) instead of the user or system location (tests, packaging) |
+| `--dry-run` |  | Only list the files, write nothing |
 
 ## `tradebot paper`
 

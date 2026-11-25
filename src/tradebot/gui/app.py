@@ -5,11 +5,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from functools import partial
 
 from PyQt6.QtCore import QSize, Qt
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QGuiApplication, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -294,12 +295,25 @@ def warm_up(engine: MarketDataEngine, symbols: list[str]) -> None:
             log.debug("warm-up of %s failed: %s", symbol, exc)
 
 
+def app_icon() -> QIcon:
+    from tradebot.desktop import ASSETS, ICON_SIZES
+
+    icon = QIcon()
+    for size in ICON_SIZES:
+        icon.addFile(str(ASSETS / f"tradebot-{size}.png"), QSize(size, size))
+    return icon
+
+
 def main(argv: list[str] | None = None) -> int:
     quiet_yfinance()
     load_plugins()
     load_combos()
     app = QApplication(argv if argv is not None else sys.argv)
     app.setApplicationName("tradebot")
+    # matches the launcher entry (#213): Wayland shows the entry's icon and name via this id; the dev entry
+    # (`tradebot desktop install --dev`) sets TRADEBOT_DESKTOP_ID=tradebot-dev
+    QGuiApplication.setDesktopFileName(os.environ.get("TRADEBOT_DESKTOP_ID") or "tradebot")
+    app.setWindowIcon(app_icon())
     config = load_config()
     # touch_mode: "auto" (default, on when a touchscreen is present), "on" or "off"
     mode = str(config.get("touch_mode", "auto")).lower()
