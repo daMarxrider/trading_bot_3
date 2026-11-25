@@ -47,6 +47,10 @@ tradebot screen --fundamentals           # show the columns without filtering on
 
 ## No new position before earnings
 
+In the app, the Backtest lab has a **No entry before earnings** field (days, off by default) that applies to Run.
+The Scanner's column menu (☰) has a **Fundamentals (stocks)** submenu that adds the same figures as columns to the
+scan results; they are fetched in the background after a scan.
+
 An optional rule for backtests: **open no new position in the N days before a company's earnings date** (the earnings
 day included). It only blocks entries: a position opened earlier is kept through the announcement, and the first
 candle after the earnings day may open again. A strategy that flips from long to short counts as a new entry.
