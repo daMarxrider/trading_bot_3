@@ -113,7 +113,16 @@ yet. Runtime doesn't matter in this mode; it trades speed for expressiveness and
   still means the same on every symbol.
 * RSI(14) is `100 * wilder(pos(diff(close, 1)), 14) / (wilder(pos(diff(close, 1)), 14) + wilder(neg(diff(close, 1)), 14))`.
   The tests build all five indicators like this and check that they equal the built-in ones. A slow test hides an
-  `RSI(14) < 30` rule in synthetic prices: evolve gets close but doesn't find RSI itself yet.
+  `RSI(14) < 30` rule in synthetic prices, and evolve finds it itself: in 5 of 6 seeds the evolved entry rule is RSI
+  in another form, such as `wilder(diff(close, 1), 14) / wilder(abs(diff(close, 1)), 14) < -0.4` (exactly
+  RSI(14) < 30) or `ema` over 27 candles (Wilder's 14). The exits it finds often beat the hidden "hold 5 candles".
+* **Normalised ratios**: a share of the mutations (10 %) builds a generic normalised form, `smooth(x) / smooth(abs(x))`
+  (the shape of RSI) or `(x - lowest(x)) / (highest(x) - lowest(x))` (the shape of the stochastic), of a random
+  difference or price. Such a shape is worthless until its window *and* level are about right, so its constants are
+  first tuned **jointly** (random draws, then a compass search that moves several at once) before it competes.
+* **Refining the result**: at the end, the 3 fittest results get a last polish. Constants of one kind in one rule
+  that are nearly equal (`ema(x, 26) / ema(abs(x), 27)`) are tried as one, then a finer and finer search moves pairs
+  of constants together along the ridge (`RSI(13) < 29` to `RSI(14) < 30`).
 * **Evolved building blocks**: every 5 generations, parts that keep showing up in the best programs become named modules
   (`m1`, `m2`, ...), used as a single building block from then on. The rules print with a `where` section defining them.
 * Limits are raised to depth 12 and 100 building blocks; windows and lags are searched on a log scale.
