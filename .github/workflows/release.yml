@@ -56,7 +56,7 @@ jobs:
 
       - name: Qt runtime libraries (PyInstaller inspects them; also needed for the smoke test)
         if: runner.os == 'Linux'
-        run: sudo apt-get update -q && sudo apt-get install -y -q libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
+        run: sudo apt-get update -q && sudo apt-get install -y -q libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 desktop-file-utils appstream
 
       - name: Install
         run: uv sync --extra gui --group build --python 3.14
@@ -77,9 +77,42 @@ jobs:
           find "$GITHUB_WORKSPACE/dist" -name LICENSE | grep -E '/(_internal|Resources)/LICENSE$'  # tradebot's own GPL text
           ! find "$GITHUB_WORKSPACE/dist" -iname 'pytr*' | grep .  # integrated third-party tools are never bundled
           ./tradebot --version | grep -q "not affiliated"
+          if [[ "$RUNNER_OS" == Linux ]]; then  # the launcher entry (#213), into a temporary data dir
+            ./tradebot desktop install --dry-run
+            xdg=$(mktemp -d)
+            XDG_DATA_HOME=$xdg ./tradebot desktop install
+            desktop-file-validate "$xdg/applications/tradebot.desktop"
+            appstreamcli validate --no-net "$xdg/metainfo/io.github.damarxrider.tradebot.metainfo.xml"
+            test -f "$xdg/icons/hicolor/256x256/apps/tradebot.png"
+            XDG_DATA_HOME=$xdg ./tradebot desktop install --dev
+            desktop-file-validate "$xdg/applications/tradebot-dev.desktop"
+            XDG_DATA_HOME=$xdg ./tradebot desktop uninstall
+            XDG_DATA_HOME=$xdg ./tradebot desktop uninstall --dev
+            test -z "$(find "$xdg" -type f)"  # uninstall removes exactly what install wrote
+          fi
+          if [[ "$RUNNER_OS" == Windows ]]; then  # the Start Menu shortcut (#213), into a temporary folder
+            ./tradebot desktop install --dry-run
+            tmp=$(cygpath -w "$(mktemp -d)")
+            ./tradebot desktop install --prefix "$tmp"
+            test -f "$(cygpath -u "$tmp")/Tradebot.lnk"
+            ./tradebot desktop install --dev --prefix "$tmp"
+            test -f "$(cygpath -u "$tmp")/Tradebot (dev).lnk"
+            ./tradebot desktop uninstall --prefix "$tmp"
+            ./tradebot desktop uninstall --dev --prefix "$tmp"
+            test -z "$(ls -A "$(cygpath -u "$tmp")")"
+          fi
           if [[ "$RUNNER_OS" == macOS ]]; then  # opening the .app must start the GUI, not the CLI
             /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' ../Info.plist | grep -x tradebot-gui
             codesign --verify --deep --strict ../..  # the ad-hoc signature Apple Silicon requires
+            test -f ../Resources/tradebot.icns  # the bundle icon (#213)
+            tmp=$(mktemp -d)  # the launcher entry (#213): the copy keeps the signature
+            ./tradebot desktop install --prefix "$tmp"
+            codesign --verify --deep --strict "$tmp/Applications/Tradebot.app"
+            ./tradebot desktop install --dev --prefix "$tmp"
+            test -x "$tmp/Applications/Tradebot (dev).app/Contents/MacOS/launch"
+            ./tradebot desktop uninstall --prefix "$tmp"
+            ./tradebot desktop uninstall --dev --prefix "$tmp"
+            test -z "$(ls -A "$tmp/Applications")"
           fi
           ${{ matrix.gui }} & pid=$!
           sleep 20
@@ -91,6 +124,11 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then version=$GITHUB_REF_NAME; else version=dev-${GITHUB_SHA::7}; fi
           if [[ "$RUNNER_OS" != macOS ]]; then  # also next to the binary, not only in _internal/ (the .app has them in Resources/)
             cp LICENSE build/tradebot/THIRD_PARTY_NOTICES.txt dist/tradebot/
+          fi
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            cp packaging/linux/install.sh dist/tradebot/  # app-launcher install/uninstall (#213)
+          elif [[ "$RUNNER_OS" == Windows ]]; then
+            cp packaging/windows/install.ps1 dist/tradebot/  # Start Menu shortcut (#213)
           fi
           if [[ "$RUNNER_OS" == Windows ]]; then
             asset=tradebot-$version-${{ matrix.platform }}.zip

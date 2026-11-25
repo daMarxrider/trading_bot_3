@@ -24,6 +24,9 @@ with open(notices, "w", encoding="utf-8") as fh:
 datas += [(os.path.join(SPECPATH, "..", "LICENSE"), "."), (notices, ".")]
 # the UI fonts and drawn icons (#191)
 datas += [(os.path.join(SPECPATH, "..", "src", "tradebot", "gui", "assets"), os.path.join("tradebot", "gui", "assets"))]
+# the launcher entry's icons (#213): the .ico is also the exe's icon on Windows, the .icns the .app's on macOS
+ICONS = os.path.join(SPECPATH, "..", "src", "tradebot", "gui", "assets", "desktop")
+exe_icon = {"icon": os.path.join(ICONS, "tradebot.ico")} if sys.platform == "win32" else {}
 binaries = collect_dynamic_libs("plotext", search_patterns=["*.so", "*.dll", "*.pyd"])
 
 options = dict(
@@ -35,12 +38,12 @@ options = dict(
     excludes=["torch", "tkinter", "pytr"],
 )
 a = Analysis(["entry.py"], **options)
-exe = EXE(PYZ(a.pure), a.scripts, [], exclude_binaries=True, name="tradebot", console=True)
+exe = EXE(PYZ(a.pure), a.scripts, [], exclude_binaries=True, name="tradebot", console=True, **exe_icon)
 parts = [exe, a.binaries, a.datas]
 
 if sys.platform in ("win32", "darwin"):
     g = Analysis(["gui_entry.py"], **options)
-    gui_exe = EXE(PYZ(g.pure), g.scripts, [], exclude_binaries=True, name="tradebot-gui", console=False)
+    gui_exe = EXE(PYZ(g.pure), g.scripts, [], exclude_binaries=True, name="tradebot-gui", console=False, **exe_icon)
     parts += [gui_exe, g.binaries, g.datas]  # COLLECT drops the files both builds share
 
 coll = COLLECT(*parts, name="tradebot")
@@ -50,5 +53,12 @@ if sys.platform == "darwin":
         coll,
         name="tradebot.app",
         bundle_identifier="io.github.damarxrider.tradebot",
-        info_plist={"CFBundleExecutable": "tradebot-gui", "NSHighResolutionCapable": True},  # opening the app starts the GUI
+        icon=os.path.join(ICONS, "tradebot.icns"),
+        info_plist={
+            "CFBundleExecutable": "tradebot-gui",  # opening the app starts the GUI
+            "CFBundleName": "Tradebot",
+            "CFBundleDisplayName": "Tradebot",
+            "LSApplicationCategoryType": "public.app-category.finance",
+            "NSHighResolutionCapable": True,
+        },
     )

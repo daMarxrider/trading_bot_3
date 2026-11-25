@@ -32,7 +32,7 @@ uv run tradebot gui
 
 Or download a standalone binary for Linux, Windows or macOS (no Python needed, CPU-only, unsigned) from the
 [Releases page](https://github.com/daMarxrider/trading_bot_3/releases). Details, the GPU setup, third-party tools and the
-first run: [Getting started](docs/getting-started.md).
+first run: [Getting started](docs/getting-started.md). The archives include an installer (`install.sh`, `install.ps1`) that adds tradebot to your app launcher or Start Menu.
 
 ## A taste
 
@@ -57,7 +57,7 @@ chart reads the same with red-green colour blindness.
 * **Getting started**: [install, binary, GPU, first run, cache](docs/getting-started.md)
 * **Desktop app**: [Chart](docs/chart.md), [Screener](docs/screener.md), [Scanner](docs/scanner.md),
   [Backtest lab](docs/backtest-lab.md), [Evolve](docs/evolve.md), [Pairs](docs/pairs.md),
-  [Basket](docs/portfolio-backtest.md), [Portfolio](docs/portfolio.md), [Journal](docs/journal.md), [News](docs/news.md), [Fundamentals](docs/fundamentals.md), [Settings](docs/settings.md)
+  [Basket](docs/portfolio-backtest.md), [Bots](docs/bots.md), [Portfolio](docs/portfolio.md), [Journal](docs/journal.md), [News](docs/news.md), [Fundamentals](docs/fundamentals.md), [Settings](docs/settings.md)
 * **Command line**: [every command with examples](docs/cli.md), [CLI reference](docs/cli-reference.md), tab completion
 * **Extending**: [plugins, indicators, brokers](docs/extending.md),
   [turning an indicator into an algorithm](docs/indicators-as-algorithms.md), `examples/plugins/`

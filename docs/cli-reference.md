@@ -281,7 +281,7 @@ Arguments: `SYMBOLS` (optional)
 
 ## `tradebot sentiment`
 
-News sentiment of a symbol per day (#167): the mean score of its headlines, -1 (negative) to +1 (positive).
+News sentiment of a symbol per day (#167): the mean score of its headlines, -1 (negative) to +1 (positive). The score comes from a word list for financial headlines, a rough guide to the tone of the news. Feeds only serve their latest headlines; the chart indicator ``news_sentiment`` accumulates the hours it has seen.
 
 Arguments: `SYMBOL`
 
@@ -293,15 +293,15 @@ Arguments: `SYMBOL`
 
 ## `tradebot calendar`
 
-Economic calendar (#167): CPI, rate decisions, jobs data and other releases with their impact.
+Economic calendar (#167): CPI, rate decisions, jobs data and other releases with their impact. From the free weekly feed of Forex Factory (this week; every fetch is kept, so the calendar grows) plus the Fed's 2026 decision days and the US jobs report rule (marked ~). Stay flat around them in a backtest with ``tradebot backtest ... --flat-around-events 2``.
 
 | Option | Default | Description |
 |---|---|---|
 | `--days` | `14` | Days ahead to show |
-| `--back` | `0` | Days back to show |
+| `--back` |  | Days back to show |
 | `--impact` | `high` | Smallest impact to list: low, medium or high |
 | `--country` |  | Only this currency, e.g. USD or EUR |
-| `--refresh` |  | Fetch the calendar again now |
+| `--refresh`, `--no-refresh` |  | Fetch the calendar again now |
 
 ## `tradebot market`
 
@@ -527,6 +527,117 @@ Notification channels ([notify.*] in config.toml): Telegram, Discord, webhook, e
 ## `tradebot notify test`
 
 Send a test message to every enabled channel and report which worked.
+
+## `tradebot desktop`
+
+App-launcher entry (Linux .desktop, Windows Start Menu shortcut, macOS app) for the binary, a pip/uv install or a source checkout.
+
+## `tradebot desktop install`
+
+Add tradebot to the app launcher / Start Menu / Applications. Run it again after moving the binary or the checkout.
+
+| Option | Default | Description |
+|---|---|---|
+| `--dev` |  | A separate "Tradebot (dev)" entry (tradebot-dev.desktop), e.g. for a source checkout |
+| `--system` |  | Install for all users: /usr/local/share, /Applications or %PROGRAMDATA% (needs root / administrator) |
+| `--prefix` |  | Write under PREFIX (share/ on Linux, Applications/ on macOS, the folder itself on Windows) instead of the user or system location (tests, packaging) |
+| `--dry-run` |  | Only list the files, write nothing |
+
+## `tradebot desktop uninstall`
+
+Remove exactly the files `desktop install` wrote.
+
+| Option | Default | Description |
+|---|---|---|
+| `--dev` |  | A separate "Tradebot (dev)" entry (tradebot-dev.desktop), e.g. for a source checkout |
+| `--system` |  | Install for all users: /usr/local/share, /Applications or %PROGRAMDATA% (needs root / administrator) |
+| `--prefix` |  | Write under PREFIX (share/ on Linux, Applications/ on macOS, the folder itself on Windows) instead of the user or system location (tests, packaging) |
+| `--dry-run` |  | Only list the files, write nothing |
+
+## `tradebot bots`
+
+Several bots at once (bots.toml next to config.toml): define, run, watch, stop (#157).
+
+## `tradebot bots list`
+
+The bots of bots.toml with their state, position and P&L (also those another process runs).
+
+## `tradebot bots add`
+
+Add a bot to bots.toml (dry run unless --mode paper/live). Parameters and rules work as in `bot run`.
+
+Arguments: `NAME`, `SYMBOL`, `ALGO`
+
+| Option | Default | Description |
+|---|---|---|
+| `--broker` | `binance` | Registered broker name |
+| `--tf` | `1h` | Timeframe: 1m 5m 15m 30m 1h 4h 1d 1w |
+| `--stake` | `100.0` | Max quote-currency value per entry |
+| `--param`, `-p` |  | Algorithm parameter, e.g. -p lower=30 |
+| `--members` |  | Comma-separated members for the 'vote' ensemble, or for the 'pool' (strategies and indicators) |
+| `--entry` |  | Combo entry rule (with the 'combo' strategy), e.g. "elliott_wave & close>sma(200)" or "weighted(rsi_threshold:0.5, macd_cross:0.5) >= 0.6" |
+| `--exit` |  | Combo exit rule, e.g. "macd_cross \| stop_atr(2)" (default: when the entry rule stops holding) |
+| `--fills` |  | Combo fills: close (stops, take-profits and limit entries checked on the close) or intrabar (filled inside the candle against its high/low, at the open on a gap; stop first when both are hit) |
+| `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15 |
+| `--mode` | `dry` | dry (nothing is sent), paper (the simulated account) or live (real orders, only with `bots run --live`) |
+| `--sandbox`, `--no-sandbox` |  | Use the exchange testnet (ccxt brokers) |
+| `--disabled`, `--no-disabled` |  | Don't start it with `bots run` (only by name) |
+| `--max-daily-loss` |  | Per-bot limit, as in `bot run` (0 = off) |
+| `--max-drawdown` |  | Per-bot limit, as in `bot run` (0 = off) |
+| `--max-exposure` |  | Per-bot limit, as in `bot run` (0 = off) |
+| `--max-order` |  | Per-bot limit, as in `bot run` (0 = off) |
+| `--replace`, `--no-replace` |  | Overwrite a bot of that name |
+
+## `tradebot bots remove`
+
+Delete a bot from bots.toml (its saved state stays in the config folder's bots/ directory).
+
+Arguments: `NAME`
+
+## `tradebot bots enable`
+
+Start this bot with `bots run` again.
+
+Arguments: `NAME`
+
+## `tradebot bots disable`
+
+Leave this bot out of `bots run` (it still starts by name).
+
+Arguments: `NAME`
+
+## `tradebot bots limits`
+
+Show or set the account limits all bots share. Without options it only shows them.
+
+| Option | Default | Description |
+|---|---|---|
+| `--max-total-exposure` |  | Reject entries that push all bots' open positions together above this value (0 = off) |
+| `--max-open-positions` |  | Reject entries while this many bots hold a position (0 = off) |
+| `--max-daily-loss` |  | Halt every bot for the rest of the UTC day when all of them together lost this much (0 = off) |
+| `--close-on-halt`, `--no-close-on-halt` |  | Sell the open positions when that daily limit halts the bots |
+
+## `tradebot bots run`
+
+Run the bot set until Ctrl+C: every bot right away, then just after each of its candles closes. Live bots are skipped unless --live. `bots stop NAME`, the app's Bots page or `bot kill` stop them.
+
+Arguments: `NAMES` (optional)
+
+| Option | Default | Description |
+|---|---|---|
+| `--live`, `--no-live` |  | Let the bots with mode = live place real orders |
+| `--once`, `--no-once` |  | Evaluate one candle per bot and exit |
+| `--journal`, `--no-journal` | `True` | Store every order in the trade journal |
+
+## `tradebot bots stop`
+
+Ask the process that runs a bot (`bots run` or the app) to stop it, within about a second.
+
+Arguments: `NAMES` (optional)
+
+| Option | Default | Description |
+|---|---|---|
+| `--all` |  | Stop every bot |
 
 ## `tradebot paper`
 

@@ -39,6 +39,23 @@ the worked example), the live bot and its risk guards, portfolio and dividend me
 offscreen rendering of every GUI theme. Torch-only tests skip themselves without torch. Tests never touch your config,
 cache or the network: they use private temporary folders.
 
+## App-launcher entry for a checkout
+
+`scripts/install-dev-launcher.sh` (Linux, macOS) or `scripts\install-dev-launcher.ps1` (Windows) adds a separate
+"Tradebot (dev)" entry that starts this checkout's `tradebot gui` from `uv run`'s virtualenv; `--uninstall`
+(`-Uninstall` in PowerShell) removes it. It is `uv run tradebot desktop install --dev`:
+
+* Linux: `tradebot-dev.desktop` and icons under `~/.local/share` (or `$XDG_DATA_HOME`). The entry sets
+  `TRADEBOT_DESKTOP_ID=tradebot-dev`, so on Wayland it gets its own icon and name next to the release entry; on X11 the
+  window class is still `tradebot`, so both entries can group together in the taskbar.
+* Windows: a `Tradebot (dev).lnk` Start Menu shortcut running the virtualenv's `pythonw.exe` (no console window).
+* macOS: a small `Tradebot (dev).app` in `~/Applications` whose launcher script runs the virtualenv's `tradebot gui`.
+
+Run it again if you move the checkout or recreate `.venv`. The tests use `--prefix`-style temporary folders and fake the
+platform, so they never touch your real menu. The icons come from one source image: put it at
+`packaging/linux/icon-source.png` and run `QT_QPA_PLATFORM=offscreen uv run --extra gui python packaging/linux/make_icons.py`
+(PNGs, SVG, `.ico`, `.icns`; no Pillow or `iconutil` needed).
+
 ## Continuous integration
 
 * `tests.yml`: runs on every pull request and on pushes to `main`. The Linux job (`pytest`, Python 3.14, offscreen Qt) is a
@@ -47,7 +64,9 @@ cache or the network: they use private temporary folders.
 * `docs.yml`: checks the documentation, see below.
 * `tag.yml`: tags every merge into `main` with the next version.
 * `release.yml`: after the tests pass, builds the standalone binaries with PyInstaller (`packaging/tradebot.spec`) and
-  publishes them on the GitHub Release of a `v*` tag.
+  publishes them on the GitHub Release of a `v*` tag. The Linux tarball also holds `install.sh` and the Windows zip `install.ps1`; the smoke tests
+  install and remove the launcher entry on each OS (Linux: also `desktop-file-validate` and `appstreamcli`; macOS: the
+  copied bundle must still pass `codesign --verify`).
 
 ## Branches, pull requests and releases
 
