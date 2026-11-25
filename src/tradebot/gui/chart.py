@@ -61,6 +61,7 @@ from tradebot.gui.drawings import (
 )
 from tradebot.gui.icons import bind_icon
 from tradebot.gui.info import ECON_LETTERS, LETTERS, InfoPanel, event_colour
+from tradebot.gui.live import LiveCandles
 from tradebot.gui.news import NewsPanel
 from tradebot.gui.params import ParamDialog
 from tradebot.gui.depth import DepthPanel
@@ -582,6 +583,7 @@ class ChartView(QWidget):
         load = QPushButton("Load")
         load.setObjectName("Primary")
         load.clicked.connect(self.load)
+        self.live = LiveCandles(self, themes)  # the Live button: the forming candle follows the market (#158)
         self.style_btn = QToolButton(text="Line", checkable=True)
         self.style_btn.toggled.connect(lambda _: self.redraw())
         # how the price is drawn (#163): Heikin-Ashi and Renko are display transforms, Compare overlays other symbols as
@@ -661,7 +663,7 @@ class ChartView(QWidget):
 
         # three groups that wrap onto a second row on narrow windows; the tools (… Clear, Loadouts) stay top right
         bar = FlowLayout(spacing=12, last_right=True)
-        for group in ((self.symbol, self.tf, self.bars, self.dates, load), (self.type_box, self.versus, self.style_btn, self.events_btn, self.ind_btn, self.algo_box),
+        for group in ((self.symbol, self.tf, self.bars, self.dates, load, self.live.button), (self.type_box, self.versus, self.style_btn, self.events_btn, self.ind_btn, self.algo_box),
                       (*tool_group, self.magnet_btn, clear, self.loadout_btn)):
             bar.addWidget(toolbar_group(*group))
 
@@ -849,6 +851,7 @@ class ChartView(QWidget):
         run_async(lambda: symbol_name(symbol), lambda name: self._named(symbol, tf, name))
         self.status.emit(f"{symbol}: {len(df)} candles {df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d %H:%M}{note}")
         self.redraw(autorange=not refresh)
+        self.live.follow()
 
     def _market_wanted(self) -> list[str]:
         """Crypto market data columns (#166) the indicators and the algorithm on the chart read."""
@@ -1015,6 +1018,10 @@ class ChartView(QWidget):
         super().showEvent(event)
         if self.sidebar.is_open and self.sidebar.current:
             self._sidebar_shown(self.sidebar.current)
+
+    def closeEvent(self, event):
+        self.live.stop()
+        super().closeEvent(event)
 
     def hideEvent(self, event):
         super().hideEvent(event)

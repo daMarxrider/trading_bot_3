@@ -63,6 +63,12 @@ The first `--live` run shows the risk notice and asks you to accept it; your ans
 before starting again. To run several bots at once, with shared limits and a set that starts again after a reboot, see
 [Bots: several at once](bots.md).
 
+Between two closes the bot watches the price over a websocket (polling when there is none; `--no-stream` turns it
+off). With a combo that fills intrabar (`--fills intrabar`) it sells as soon as the candle reaches a stop or a
+take-profit, as the backtest does, instead of at the close; risk limits are checked on every price too, so
+`--close-on-halt` sells right away. Decisions to enter still happen at the close. See
+[Streaming prices](streaming.md).
+
 ## Paper trading
 
 `--paper` (or `--broker paper`) trades a simulated account: orders fill at the last price of the real data source minus

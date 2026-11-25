@@ -55,6 +55,7 @@ bots, a desktop app (PyQt6) and a terminal CLI. It is licensed under the GNU GPL
 * [How the optimizers work](optimizers.md): GA, PSO, walk-forward, meta-search, pool, slippage, baselines
 * [Data providers, timeframes and the cache](data.md)
 * [Brokers and live trading](live-trading.md): brokers, bots, paper trading, risk guards, notifications
+* [Streaming prices](streaming.md): websockets, reconnects and the polling fallback; the bot acting inside a candle
 * [Bots: several at once](bots.md): the bot set in `bots.toml`, shared limits, `tradebot bots`, starting after a reboot
 * [Pairs trading](pairs-trading.md)
 * [Market regimes and position sizing](regimes-and-sizing.md)
