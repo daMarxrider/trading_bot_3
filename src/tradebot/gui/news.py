@@ -51,12 +51,13 @@ def score_chip(score: float, t) -> str:
 
 
 def summary_html(items, t) -> str:
-    """One line for the whole list: the mean score and how the headlines split."""
+    """The whole list in two short lines: the mean score, then how the headlines split."""
     if not items:
         return ""
     total = sentiment.summarize(sentiment.score_item(n) for n in items)
-    return (f"Sentiment {score_chip(total.mean, t)}<span style='color:{t.muted}'> · {total.positive} positive, "
-            f"{total.neutral} neutral, {total.negative} negative</span>")
+    return (f"<span style='color:{t.muted}'>Sentiment</span> {score_chip(total.mean, t)}"
+            f"<br><span style='color:{t.muted}'>{total.positive} positive · {total.neutral} neutral · "
+            f"{total.negative} negative</span>")
 
 
 def fill_news_list(widget: QListWidget, items, themes: ThemeManager, show_symbol: bool = True,
@@ -106,6 +107,7 @@ class NewsPanel(QWidget):
         self.header = QLabel(objectName="Muted", wordWrap=True)
         self.summary = QLabel(wordWrap=True, textFormat=Qt.TextFormat.RichText,
                               toolTip="Tone of the headlines from a word list for financial news: -1 negative to +1 positive")
+        self.summary.setContentsMargins(10, 4, 10, 2)  # lines up with the headline rows below
         self.refresh_btn = QToolButton(text="⟳", toolTip="Refresh the news")
         self.refresh_btn.clicked.connect(self.refresh)
         self.list = QListWidget(objectName="SidebarNews")

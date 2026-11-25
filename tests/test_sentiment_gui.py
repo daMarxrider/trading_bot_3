@@ -53,7 +53,7 @@ def test_every_headline_shows_its_score_with_a_triangle(app, themes):
 
 def test_summary_line_counts_the_split(app, themes):
     text = summary_html(ITEMS, themes.current)
-    assert "1 positive, 1 neutral, 1 negative" in text and summary_html([], themes.current) == ""
+    assert "1 positive · 1 neutral · 1 negative" in text and summary_html([], themes.current) == ""
 
 
 def test_economic_events_are_marked_above_the_candles(app, themes, tmp_path, monkeypatch):
