@@ -82,8 +82,6 @@ def test_pair_across_currencies_is_converted():
     end = a.index[-1] + pd.Timedelta(days=1)
     out = eng.get_ohlc("KO:SAP", start=a.index[0], end=end)
     assert out["close"].iloc[-1] == pytest.approx(a["close"].iloc[-1] / (b["close"].iloc[-1] * 1.25))
-    with pytest.raises(DataUnavailable, match="intraday"):
-        eng.get_ohlc("KO:SAP", "1h", start=a.index[0], end=end)
 
 
 def test_pair_without_known_currency_or_rate_is_refused():
@@ -434,3 +432,22 @@ def test_find_pairs_same_result_on_every_backend():
         assert [c.symbol for c in scan.found] == [c.symbol for c in base.found]
         for x, y in zip(scan.found, base.found):
             assert x.train.stat == pytest.approx(y.train.stat, rel=1e-9) and x.zscore == pytest.approx(y.zscore, rel=1e-9)
+
+
+def test_pair_across_currencies_intraday_drops_bars_with_stale_rates():
+    idx = pd.date_range("2024-03-04 14:00", periods=8, freq="h", tz="UTC")
+    a, b = make_ohlc(8, seed=1), make_ohlc(8, seed=2)
+    a.index = b.index = idx
+    fx = (a * 0 + 1.25).drop(idx[[3, 4]])  # the FX feed has a gap at idx 3 and 4
+    eng = engine(KO=a, SAP=b, **{"EURUSD=X": fx})
+    eng.currency_lookup = {"KO": "USD", "SAP": "EUR"}.get
+    end = idx[-1] + pd.Timedelta(hours=1)
+    out = eng.get_ohlc("KO:SAP", "1h", start=idx[0], end=end)  # default: up to 2 candles old
+    assert list(out.index) == list(idx)
+    assert out["close"].iloc[4] == pytest.approx(a["close"].iloc[4] / (b["close"].iloc[4] * 1.25))
+    eng.max_fx_age = pd.Timedelta(minutes=90)
+    out = eng.get_ohlc("KO:SAP", "1h", start=idx[0], end=end)
+    assert idx[4] not in out.index and idx[3] in out.index and len(out) == 7
+    eng.max_fx_age = pd.Timedelta(minutes=30)
+    out = eng.get_ohlc("KO:SAP", "1h", start=idx[0], end=end)
+    assert list(out.index) == list(idx[[0, 1, 2, 5, 6, 7]])

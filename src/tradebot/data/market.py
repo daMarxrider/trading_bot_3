@@ -11,7 +11,11 @@ frame column              source                                                
 ``fear_greed``            alternative.me Fear & Greed index (0-100, daily)       its day's 00:00 UTC
 ``mvrv``                  Coin Metrics community API, ``CapMVRVCur`` (daily)     the end of its day
 ``active_addresses``      Coin Metrics community API, ``AdrActCnt`` (daily)      the end of its day
+``news_sentiment``        mean headline score per hour of the news feeds (#167)  the end of its hour
 ========================  =====================================================  ===========================
+
+``news_sentiment`` (:mod:`tradebot.sentiment`) works for every symbol, not only crypto, and is not attached unless
+asked for by name: the feeds only serve the latest headlines, so its history is what the cache has collected.
 
 Exchange flows and most other on-chain metrics have no free keyless source and are not offered.
 
@@ -73,6 +77,8 @@ class Source:
     lag: pd.Timedelta  #: a value stamped ``t`` is known from ``t + lag``
     daily: bool = False
     needs_perpetual: bool = False
+    crypto_only: bool = True
+    default: bool = True  #: attached when no columns are named
 
 
 SOURCES: dict[str, Source] = {s.column: s for s in (
@@ -81,6 +87,7 @@ SOURCES: dict[str, Source] = {s.column: s for s in (
     Source("fear_greed", "Fear & Greed index", 3 * DAY, pd.Timedelta(0), daily=True),
     Source("mvrv", "MVRV", 4 * DAY, DAY, daily=True),
     Source("active_addresses", "Active addresses", 4 * DAY, DAY, daily=True),
+    Source("news_sentiment", "News sentiment", 3 * DAY, HOUR, crypto_only=False, default=False),
     Source("exchange_netflow", "Exchange net flow", 4 * DAY, DAY, daily=True),
 )}
 #: column -> Coin Metrics metrics; the value is the first minus the others (net flow = inflow - outflow)
@@ -320,7 +327,7 @@ class MarketData:
     HTTP sources). ``cache``: True = the candle cache's folder, a path, or None for no disk cache."""
 
     def __init__(self, cache: bool | Path | None = True, exchange=None, exchange_id: str = DEFAULT_EXCHANGE,
-                 get_json=http_json, spot=None):
+                 get_json=http_json, spot=None, news=None):
         folder = cache if isinstance(cache, Path) else None
         if cache is True:
             from tradebot.data.cache import DiskCache
@@ -329,6 +336,7 @@ class MarketData:
             folder = disk.folder if disk is not None else None
         self.cache = SeriesCache(folder)
         self.exchange, self.exchange_id, self.get_json, self.spot = exchange, exchange_id, get_json, spot
+        self.news = news  #: replaces ``tradebot.news.fetch_news`` for the news sentiment (tests)
 
     def _perp(self):
         if self.exchange is None:
@@ -345,6 +353,13 @@ class MarketData:
                 tf = oi_timeframe(step)
                 return fetch_open_interest(symbol, tf, start, end, exchange=self._perp(),
                                            exchange_id=self.exchange_id), tf
+            if column == "news_sentiment":
+                from tradebot import sentiment
+
+                s = sentiment.history(symbol, self.news)
+                if s.empty:
+                    raise MarketDataError(f"no recent headlines for {symbol}")
+                return s, ""
             if column == "fear_greed":
                 return fetch_fear_greed(self.get_json), ""
             return fetch_onchain(column, symbol, start, end, self.get_json), ""
@@ -387,10 +402,13 @@ class MarketData:
         out = df.copy()
         errors: dict[str, str] = {}
         offline = bool(df.attrs.get("offline"))
+        cols = list(columns) if columns is not None else [c for c, s in SOURCES.items() if s.default]
         if not is_crypto(symbol):
-            out.attrs["market_errors"] = {c: f"{symbol} is not a crypto pair" for c in (columns or SOURCES)}
-            return out
-        cols = list(columns) if columns is not None else list(SOURCES)
+            cols, rest = [c for c in cols if not SOURCES[c].crypto_only], [c for c in cols if SOURCES[c].crypto_only]
+            errors = {c: f"{symbol} is not a crypto pair" for c in rest}
+            if not cols:
+                out.attrs["market_errors"] = errors
+                return out
         if len(df) == 0:
             return out
         step = _median_step(df.index)
