@@ -27,6 +27,8 @@ divider resets them.
   [Market regimes and position sizing](regimes-and-sizing.md#position-sizing).
 * **Direction**, **Leverage**, **Borrow fee**, **Funding**: trade the strategy short or long and short, with leverage
   (liquidation is modelled) and the costs of holding the position; see [Shorts and leverage](shorts-and-leverage.md).
+* **Earnings rule**: for stocks, open no new position in the given number of days before a company's
+  earnings date (off = 0; applies to Run); see [Fundamentals](fundamentals.md).
 * **Parameters**: a form generated from the strategy, with the range the optimizer searches.
 
 ## 2. Run

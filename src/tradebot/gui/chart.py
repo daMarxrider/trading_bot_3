@@ -32,7 +32,7 @@ from PyQt6.QtWidgets import (
 
 from tradebot.analysis.charttypes import heikin_ashi, percent_change, renko
 from tradebot.algorithms import ALGORITHMS, algorithm_names, build_algorithm
-from tradebot import fundamentals
+from tradebot import economic, fundamentals
 from tradebot.config import Settings
 from tradebot.core.series import MARKET_COLUMNS, volume_of
 from tradebot.data.market import wanted_by
@@ -60,7 +60,7 @@ from tradebot.gui.drawings import (
     to_spec,
 )
 from tradebot.gui.icons import bind_icon
-from tradebot.gui.info import LETTERS, InfoPanel, event_colour
+from tradebot.gui.info import ECON_LETTERS, LETTERS, InfoPanel, event_colour
 from tradebot.gui.live import LiveCandles
 from tradebot.gui.news import NewsPanel
 from tradebot.gui.params import ParamDialog
@@ -601,7 +601,9 @@ class ChartView(QWidget):
         self.compare: dict[str, pd.DataFrame] = {}  # the other symbols' candles in Compare mode
 
         self.events_btn = QToolButton(text="Events", checkable=True, toolTip="Mark earnings (E), splits (S) and ex-dividend "
-                                      "dates (D) on the candles. Stocks only; the data is free from Yahoo Finance")
+                                      "dates (D) of stocks under the candles, and high-impact economic events above them: "
+                                      "rate decisions (R), CPI (C), jobs data (J), others (!)")
+        self._econ: list = []  # economic.EconEvent of the loaded range (#167)
         self.events_btn.setChecked(bool(settings.get(self.EVENTS_KEY, False)) if settings else False)
         self.events_btn.toggled.connect(self._events_toggled)
         self._info = None  # fundamentals.Snapshot of the charted symbol, once fetched
@@ -845,6 +847,7 @@ class ChartView(QWidget):
         self.info.set_symbol(symbol)
         self._info, self._info_for = (self._info if self._info_for == symbol else None), symbol
         self._fetch_info()
+        self._fetch_econ()
         run_async(lambda: symbol_name(symbol), lambda name: self._named(symbol, tf, name))
         self.status.emit(f"{symbol}: {len(df)} candles {df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d %H:%M}{note}")
         self.redraw(autorange=not refresh)
@@ -933,12 +936,55 @@ class ChartView(QWidget):
             self._fetch_info()
         else:
             self.redraw()
+        if on:
+            self._fetch_econ()
         if on and self._loaded_symbol and not fundamentals.supported(self._loaded_symbol):
             self.status.emit("no events for crypto, pairs or indices")
 
+    def _fetch_econ(self):
+        """The economic calendar of the loaded range, in the background (the feed is asked at most once an hour)."""
+        df = self.df
+        if not self.events_btn.isChecked() or df is None or len(df) < 2:
+            return
+        lo, hi = df.index[0], df.index[-1] + pd.Timedelta(days=1)
+        symbol = self._loaded_symbol
+
+        def done(events):
+            if symbol == self._loaded_symbol:
+                self._econ = events
+                self.redraw()
+
+        run_async(lambda: economic.load(lo, hi, min_impact="high"), done)
+
+    def _draw_econ(self, x, h, ty, t):
+        """R / C / J / ! marks above the candles of the high-impact economic events; one per candle."""
+        if not self._econ or len(x) < 2:
+            return
+        step = float(np.median(np.diff(x)))
+        spots: dict[int, list] = {}
+        for e in self._econ:
+            ts = e.time.timestamp()
+            if x[0] - step <= ts <= x[-1] + step:
+                spots.setdefault(nearest_bar(x, ts), []).append(e)
+        for i, events in sorted(spots.items()):
+            e = min(events, key=lambda e: economic.KINDS.index(e.kind))
+            colour = qcolor(t.down if e.kind == "rates" else t.accent)
+            y = ty(h[i] * 1.015) if h[i] > 0 else ty(h[i])
+            item = pg.ScatterPlotItem(x=[x[i]], y=[y], symbol="s", size=15, brush=pg.mkBrush(qcolor(t.panel)),
+                                      pen=pg.mkPen(colour, width=1.6))
+            item.setToolTip(" · ".join(economic.format_event(ev) for ev in events))
+            self.price.addItem(item)
+            text = pg.TextItem(ECON_LETTERS[e.kind], color=colour, anchor=(0.5, 0.5))
+            text.setPos(x[i], y)
+            self.price.addItem(text)
+
     def _draw_events(self, x, h, l, ty, t):
-        """E / S / D marks under the candles of the earnings, split and ex-dividend dates inside the loaded range."""
-        if not self.events_btn.isChecked() or self._info is None or self._info.symbol != self._loaded_symbol or len(x) < 2:
+        """E / S / D marks under the candles of the earnings, split and ex-dividend dates inside the loaded range,
+        and the economic events above them (#167)."""
+        if not self.events_btn.isChecked():
+            return
+        self._draw_econ(x, h, ty, t)
+        if self._info is None or self._info.symbol != self._loaded_symbol or len(x) < 2:
             return
         step = float(np.median(np.diff(x)))
         spots = {}

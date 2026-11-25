@@ -773,6 +773,24 @@ class PortfolioView(QWidget):
 
 
 # -- backtest lab -----------------------------------------------------------------------------------------
+def _earnings_default() -> int:
+    from tradebot import fundamentals
+
+    return min(60, fundamentals.blackout_days())
+
+
+def _blackout(df, symbol, days: int):
+    """The earnings mask (#165) of a stock's candles, None when the rule is off or the symbol has no earnings dates."""
+    if not days or not symbol:
+        return None
+    from tradebot import fundamentals
+
+    try:
+        return fundamentals.earnings_blackout(df, symbol, days)
+    except Exception:  # noqa: BLE001 - a failed fetch must not stop the backtest
+        return None
+
+
 class BacktestView(QWidget):
     status = pyqtSignal(str)
     show_on_chart = pyqtSignal(str, object)
@@ -849,6 +867,11 @@ class BacktestView(QWidget):
         self.funding.setDecimals(4)
         self.funding.setSingleStep(0.001)
         self.funding.setSuffix(" % / 8 h")
+        self.earnings_days = QSpinBox()  # no new entry in the N days before earnings, stocks only (#165)
+        self.earnings_days.setRange(0, 60)
+        self.earnings_days.setSpecialValueText("off")
+        self.earnings_days.setSuffix(" days")
+        self.earnings_days.setValue(_earnings_default())
         self.params = ParamForm({})
         self.members = MemberPicker()
         self.members.changed.connect(self._members_changed)
@@ -958,7 +981,8 @@ class BacktestView(QWidget):
                                ("Monthly amount", self.dca_amount, "dca_amount"), ("Algorithm", self.algo, "algorithm"),
                                ("Position sizing", self.sizing, "sizing"), ("Direction", self.direction, "direction"),
                                ("Leverage", self.leverage, "leverage"), ("Borrow fee", self.borrow_fee, "borrow_fee"),
-                               ("Funding", self.funding, "funding")):
+                               ("Funding", self.funding, "funding"),
+                               ("Earnings rule", self.earnings_days, "earnings_blackout")):
             _explained_row(form, label, w, term)
         opt_form = QFormLayout()
         for label, w, term in (("Method", self.method, "method"), ("Population / swarm", self.population, "population"),
@@ -1305,16 +1329,18 @@ class BacktestView(QWidget):
         slip, margin = bps(self.slippage.value()), self._margin()
         self._busy(True)
 
-        def one(df):
-            res = backtest(df, algo, fee=fee, slippage=slip, margin=margin)
+        days = self.earnings_days.value()
+
+        def one(df, symbol=None):
+            res = backtest(df, algo, fee=fee, slippage=slip, margin=margin, blackout=_blackout(df, symbol, days))
             return df, {"backtest": res, "_baselines": {"backtest": baselines(df, res, fee, amount=amount, slippage=slip)},
                         "_plot_baselines": self._plot_baselines(df, fee, amount, slip)}
 
         def work():
             data = self._data()
             if isinstance(data, pd.DataFrame):
-                return one(data)
-            per = {s: one(df) for s, df in data.items()}
+                return one(data, self._symbol_list()[0])
+            per = {s: one(df, s) for s, df in data.items()}
             rows = []
             for s, (_, results) in per.items():
                 res, bl = results["backtest"], results["_baselines"]["backtest"]

@@ -25,6 +25,8 @@ tradebot news AAPL NVDA BTC/USDT
 tradebot news --watchlist Crypto           # without symbols: one watchlist (default: all of them)
 tradebot news BTC/USDT -s coindesk -s decrypt   # only some sources (`--list-sources` shows them)
 tradebot market BTC/USDT --depth           # funding rate, open interest, Fear & Greed, MVRV, order book (see Crypto market data)
+tradebot sentiment BTC/USDT --days 7       # news sentiment, the mean score per day (see Sentiment and calendar)
+tradebot calendar --days 30 --impact medium   # economic calendar
 tradebot cache info                        # cache folder, size, number of cached series
 tradebot cache clear [--ohlc|--symbols]
 ```

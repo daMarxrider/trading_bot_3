@@ -85,6 +85,15 @@ EarningsBlackout = Annotated[Optional[int], typer.Option(
     "--no-entry-before-earnings", min=0, metavar="DAYS",
     help="Open no new position in the DAYS days before a company's earnings date (positions already open are kept). "
          "Default: [events] earnings_blackout_days in config.toml, else 0 = off")]
+FlatAroundEvents = Annotated[Optional[float], typer.Option(
+    "--flat-around-events", min=0, metavar="HOURS",
+    help="Stay flat from HOURS before to HOURS after a high-impact economic event (CPI, rate decisions, jobs data; "
+         "see `tradebot calendar`): open positions are closed, none opened. Default: [events] flat_around_hours in "
+         "config.toml, else 0 = off")]
+EventImpact = Annotated[Optional[str], typer.Option(
+    "--event-impact", help="Smallest impact of the events that count for --flat-around-events: low, medium or high "
+                           "(default: [events] flat_impact in config.toml, else high)",
+    autocompletion=complete.choices(("low", "all events"), ("medium", "medium and high"), ("high", "high only")))]
 Slippage = Annotated[Optional[str], typer.Option(
     help="Slippage per side in basis points (5 = 0.05%), charged on top of the fee; 'auto' = suggested for the "
     "asset class (crypto 5, stock 2). Default: [backtest] slippage_bps in config.toml, else 0")]
@@ -367,6 +376,8 @@ def backtest(
     fee: Annotated[float, typer.Option(help="Fee per side, fraction")] = 0.001,
     slippage: Slippage = None,
     no_entry_before_earnings: EarningsBlackout = None,
+    flat_around_events: FlatAroundEvents = None,
+    event_impact: EventImpact = None,
     capital: float = 10_000.0,
     dca_amount: DcaAmount = None,
     plot: Annotated[bool, typer.Option(help="Show chart with signals and equity")] = True,
@@ -416,14 +427,15 @@ def backtest(
     symbols = _symbols(symbol, [])
     if len(symbols) > 1:
         _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount, slippage, margin, funding,
-                       no_entry_before_earnings)
+                       no_entry_before_earnings, (flat_around_events, event_impact))
         return
     df = load_data(symbol, tf, start, end, bars, _market_columns(algorithm))
     slip = _slippage(slippage, symbol)
     try:
         res = run_backtest(df, algorithm, fee=fee, initial_capital=capital, slippage=slip, margin=margin,
                            funding=_funding_history(funding, symbol, df),
-                           blackout=_blackout(df, symbol, no_entry_before_earnings))
+                           blackout=_blackout(df, symbol, no_entry_before_earnings),
+                           flat=_flat(df, flat_around_events, event_impact))
     except ValueError as e:
         raise typer.BadParameter(str(e)) from None
     if res.liquidations is not None and res.liquidations.any():
@@ -536,8 +548,23 @@ def _blackout(df, symbol: str, days: int | None):
     return mask
 
 
+def _flat(df, hours: float | None, impact: str | None):
+    """The "stay flat around economic events" mask (#167) of ``--flat-around-events``, None when off."""
+    from tradebot import economic
+
+    cfg_hours, cfg_impact = economic.settings()
+    hours = cfg_hours if hours is None else hours
+    impact = impact or cfg_impact
+    if impact not in economic.IMPACTS:
+        raise typer.BadParameter("use low, medium or high", param_hint="--event-impact")
+    mask = economic.event_flat(df, hours, impact)
+    if hours and mask is None:
+        console.print("[yellow]no economic events known in this period, the event rule is not applied[/]")
+    return mask
+
+
 def _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_amount, slippage=None, margin=None,
-                   funding=None, earnings_days=None) -> None:
+                   funding=None, earnings_days=None, flat=(None, None)) -> None:
     """One row per symbol: the strategy's return, Sharpe, XIRR and lead over each baseline."""
     from tradebot.backtest import backtest as run_backtest, baselines
     from tradebot.backtest.metrics import fmt
@@ -549,7 +576,7 @@ def _backtest_many(symbols, algorithm, tf, start, end, bars, fee, capital, dca_a
     for s, df in _load_many(symbols, tf, start, end, bars, _market_columns(algorithm)).items():
         slip = _slippage(slippage, s)
         res = run_backtest(df, algorithm, fee=fee, initial_capital=capital, slippage=slip, margin=margin,
-                           funding=_funding_history(funding, s, df), blackout=_blackout(df, s, earnings_days))
+                           funding=_funding_history(funding, s, df), blackout=_blackout(df, s, earnings_days), flat=_flat(df, *flat))
         bl = baselines(df, res, fee=fee, initial_capital=capital, amount=dca_amount, slippage=slip)
         lead = [f"[{'green' if v > 0 else 'red'}]{fmt('vs buy & hold', v)}[/]" for v in bl.excess.values()]
         for name in bl.excess:
@@ -1960,9 +1987,84 @@ def news(symbols: Annotated[Optional[list[str]], typer.Argument(autocompletion=c
         items, errors = fetch_news_report(symbols, limit, source or None)
     for sid, err in errors.items():
         console.print(f"[yellow]{SOURCES[sid].name}: {err}[/]")
+    from tradebot import sentiment
+
     for n in items:
-        console.print(f"[dim]{n.published:%Y-%m-%d %H:%M}[/] [cyan]{n.symbol:>9}[/] [bold]{n.title}[/] "
-                      f"[dim]({n.publisher})[/]\n           [link={n.url}]{n.url}[/link]")
+        score = sentiment.score_item(n)
+        colour = "green" if score > sentiment.NEUTRAL else "red" if score < -sentiment.NEUTRAL else "dim"
+        console.print(f"[dim]{n.published:%Y-%m-%d %H:%M}[/] [cyan]{n.symbol:>9}[/] [{colour}]{sentiment.arrow(score)} "
+                      f"{score:+.2f}[/] [bold]{n.title}[/] [dim]({n.publisher})[/]\n"
+                      f"           [link={n.url}]{n.url}[/link]")
+    for sym in dict.fromkeys(n.symbol for n in items):
+        total = sentiment.summarize(sentiment.score_item(n) for n in items if n.symbol == sym)
+        console.print(f"[cyan]{sym}[/] sentiment {total.mean:+.2f} {sentiment.arrow(total.mean)} "
+                      f"({total.positive} positive, {total.neutral} neutral, {total.negative} negative)")
+
+
+@app.command()
+def sentiment(symbol: Symbol, days: Annotated[int, typer.Option(help="Days to show")] = 14,
+              limit: Annotated[int, typer.Option(help="Headlines to score")] = 200,
+              source: Annotated[Optional[list[str]], typer.Option("--source", "-s", help="Only these news sources")] = None):
+    """News sentiment of a symbol per day (#167): the mean score of its headlines, -1 (negative) to +1 (positive).
+
+    The score comes from a word list for financial headlines, a rough guide to the tone of the news. Feeds only
+    serve their latest headlines; the chart indicator ``news_sentiment`` accumulates the hours it has seen."""
+    from tradebot import sentiment as sent
+    from tradebot.news import fetch_news
+
+    with console.status(f"fetching news of {symbol} ..."):
+        items = fetch_news([symbol], limit, source or None)
+    per_day = sent.daily(items).tail(days)
+    if per_day.empty:
+        console.print(f"[yellow]no headlines for {symbol}[/]")
+        return
+    t = Table(title=f"{symbol} news sentiment")
+    for col in ("day", "score", "", "headlines"):
+        t.add_column(col, justify="left" if col == "day" else "right")
+    for day, row in per_day.iterrows():
+        colour = "green" if row["mean"] > sent.NEUTRAL else "red" if row["mean"] < -sent.NEUTRAL else "dim"
+        t.add_row(f"{day:%Y-%m-%d}", f"[{colour}]{row['mean']:+.2f}[/]", f"[{colour}]{sent.arrow(row['mean'])}[/]",
+                  str(int(row["count"])))
+    console.print(t)
+    total = sent.summarize(sent.score_item(n) for n in items)
+    console.print(f"all {total.count} headlines: {total.mean:+.2f} ({total.positive} positive, {total.neutral} "
+                  f"neutral, {total.negative} negative)")
+
+
+@app.command()
+def calendar(days: Annotated[int, typer.Option(help="Days ahead to show")] = 14,
+             back: Annotated[int, typer.Option(help="Days back to show")] = 0,
+             impact: Annotated[str, typer.Option(help="Smallest impact to list: low, medium or high",
+                                                 autocompletion=complete.choices(("low", "all"), ("medium", "medium+"),
+                                                                                 ("high", "high only")))] = "high",
+             country: Annotated[Optional[str], typer.Option(help="Only this currency, e.g. USD or EUR")] = None,
+             refresh: Annotated[bool, typer.Option(help="Fetch the calendar again now")] = False):
+    """Economic calendar (#167): CPI, rate decisions, jobs data and other releases with their impact.
+
+    From the free weekly feed of Forex Factory (this week; every fetch is kept, so the calendar grows) plus the
+    Fed's 2026 decision days and the US jobs report rule (marked ~). Stay flat around them in a backtest with
+    ``tradebot backtest ... --flat-around-events 2``."""
+    from tradebot import economic
+
+    if impact not in economic.IMPACTS:
+        raise typer.BadParameter("use low, medium or high", param_hint="--impact")
+    now = pd.Timestamp.now(tz="UTC")
+    with console.status("fetching the calendar ..."):
+        events = economic.load(now - pd.Timedelta(days=back), now + pd.Timedelta(days=days), refresh=refresh,
+                               min_impact=impact)
+    if country:
+        events = [e for e in events if e.country.upper() == country.upper()]
+    if not events:
+        console.print("[yellow]no events in this period[/]")
+        return
+    t = Table(title="economic calendar (UTC)")
+    for col in ("time", "country", "impact", "event", "forecast", "previous"):
+        t.add_column(col, justify="right" if col in ("forecast", "previous") else "left")
+    for e in events:
+        colour = {"high": "red", "medium": "yellow", "low": "dim"}[e.impact]
+        t.add_row(f"{e.time:%Y-%m-%d %H:%M}" + ("~" if e.approx else ""), e.country, f"[{colour}]{e.impact}[/]",
+                  e.title, e.forecast, e.previous)
+    console.print(t)
 
 
 @app.command()
@@ -1987,7 +2089,7 @@ def market(symbol: Annotated[str, typer.Argument(help="A crypto pair, e.g. BTC/U
     for col in ("metric", "latest", "as of", "note"):
         t.add_column(col, justify="left" if col in ("metric", "note") else "right")
     with console.status(f"fetching market data of {symbol} ..."):
-        for column, src in SOURCES.items():
+        for column, src in ((c, x) for c, x in SOURCES.items() if x.crypto_only):
             try:
                 series, _, offline = data.series(column, symbol, now - 30 * pd.Timedelta(days=1), now, step)
             except MarketDataError as e:
@@ -1997,7 +2099,7 @@ def market(symbol: Annotated[str, typer.Argument(help="A crypto pair, e.g. BTC/U
             value = last.iloc[-1]
             shown = {"funding_rate": f"{value * 100:+.4f} %", "open_interest": f"{value:,.0f}",
                      "fear_greed": f"{value:.0f}", "mvrv": f"{value:.2f}",
-                     "active_addresses": f"{value:,.0f}"}[column]
+                     "active_addresses": f"{value:,.0f}", "exchange_netflow": f"{value / 1e6:+,.0f} M USD"}[column]
             t.add_row(src.title, shown, f"{last.index[-1]:%Y-%m-%d %H:%M}", "[yellow]cached, offline[/]" if offline else "")
     console.print(t)
     if depth:

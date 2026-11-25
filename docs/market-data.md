@@ -11,11 +11,12 @@ on the chart (a pane under the candles), in combo rules, in [evolve](evolve.md) 
 | `fear_greed` | Crypto Fear & Greed index, 0 extreme fear to 100 extreme greed, daily | alternative.me | 0-100 |
 | `mvrv` | market value to realized value of the coin, daily | Coin Metrics community API | ratio |
 | `active_addresses` | addresses active on the coin's chain per day | Coin Metrics community API | count |
+| `news_sentiment` | tone of the symbol's news headlines per hour, -1 to +1; **any symbol**, not only crypto | the news feeds, see [News sentiment](sentiment-calendar.md) | score |
+| `exchange_netflow` | USD moved onto exchanges minus moved off them per day (above 0 = selling pressure) | Coin Metrics community API | USD |
 
 Every one has a `smooth` parameter (candles averaged, 1 = raw), except `oi_change`.
 
-On-chain metrics beyond `mvrv` and `active_addresses` (exchange flows, realized cap and so on) have no free source
-that needs no key, so they are not offered. The on-chain data covers the major coins only (Coin Metrics' community
+Other on-chain metrics (realized cap and so on) can be added the same way; none is offered yet. The on-chain data covers the major coins only (Coin Metrics' community
 coverage); another coin simply reports "no data".
 
 ## Look-ahead
@@ -60,7 +61,7 @@ the reason and everything else keeps working.
 
 For a plugin author: a `BaseIndicator` declares `market_data = ("funding_rate",)` and reads it with
 `o.data("funding_rate")` (all NaN when the candles come without it). The columns are `funding_rate`,
-`open_interest`, `fear_greed`, `mvrv` and `active_addresses`; `tradebot.data.market.MarketData().attach(df, symbol)`
+`open_interest`, `fear_greed`, `mvrv`, `active_addresses` and `exchange_netflow`; `tradebot.data.market.MarketData().attach(df, symbol)`
 adds them to a candle frame.
 
 None of this is investment advice: a sentiment or leverage reading is a heuristic, check any rule in a backtest.

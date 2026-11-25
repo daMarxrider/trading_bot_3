@@ -35,6 +35,9 @@ custom = ["SEC filings | https://example.com/feed.xml"]
 
 Without a `[news]` table the default-on sources are used. The News page can show the headlines of one publisher.
 
+Each headline carries a sentiment score (a triangle, the score and the word); see
+[News sentiment and the economic calendar](sentiment-calendar.md).
+
 The Chart's sidebar has the same headlines for the one symbol on the chart (see [Chart](chart.md#sidebar-watchlists-and-news)).
 
 ```sh

@@ -126,7 +126,7 @@ class BaseIndicator(ABC):
     #: chart says so instead of showing an empty pane.
     uses_volume: ClassVar[bool] = False
     #: Columns of crypto market data the indicator reads with ``o.data(name)`` (#166, :mod:`tradebot.data.market`):
-    #: ``"funding_rate"``, ``"open_interest"``, ``"fear_greed"``, ``"mvrv"``, ``"active_addresses"``. They must be
+    #: ``"funding_rate"``, ``"open_interest"``, ``"fear_greed"``, ``"mvrv"``, ``"active_addresses"``, ``"exchange_netflow"``. They must be
     #: attached to the candles (:meth:`~tradebot.data.market.MarketData.attach`); without them the outputs are NaN.
     #: Such indicators run only on the candles' own timeframe and are not screenable.
     market_data: ClassVar[tuple[str, ...]] = ()
