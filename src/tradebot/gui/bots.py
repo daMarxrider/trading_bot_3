@@ -140,7 +140,7 @@ class BotsView(QWidget):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setWordWrap(False)
-        self.table.doubleClicked.connect(lambda _: self.toggle_selected())
+        self.table.doubleClicked.connect(self.toggle_selected)
         self.bots_box = TableWithEmpty(self.table, self.model, themes, "bot", "No bots yet",
                                        "Press New bot to define one: a symbol, a strategy and a stake. Bots are saved "
                                        "in bots.toml and run as dry runs until you choose paper.")
@@ -183,15 +183,15 @@ class BotsView(QWidget):
         lay.addWidget(strip)
         lay.addWidget(split, 1)
 
-        self.table.selectionModel().selectionChanged.connect(lambda *_: self._selected())
-        themes.changed.connect(lambda _: self.refresh(force=True))
+        # bound methods, not lambdas: Qt then holds no strong reference, so a closed window can be freed
+        self.table.selectionModel().selectionChanged.connect(self._selected)
+        themes.changed.connect(self._theme_changed)
         self.timer = QTimer(self, interval=interval)
-        self.timer.timeout.connect(self.refresh)
-        self.timer.start()
+        self.timer.timeout.connect(self.refresh)  # runs while the page is shown, see showEvent
         self.new_bot()
         self.refresh(force=True)
         if settings and settings.get(AUTOSTART_KEY, False):
-            QTimer.singleShot(0, lambda: self.start_all(quiet=True))
+            QTimer.singleShot(0, self._autostart)
 
     # -- forms -------------------------------------------------------------------------------------------
     def _bot_form(self, symbol_search) -> QWidget:
@@ -268,7 +268,7 @@ class BotsView(QWidget):
         self.l_close = QCheckBox("Sell the open positions when the daily limit halts the bots")
         self.l_autostart = QCheckBox("Start the enabled bots when the app opens",
                                      checked=bool(self.settings.get(AUTOSTART_KEY, False)) if self.settings else False)
-        self.l_autostart.toggled.connect(lambda on: self.settings and self.settings.set(AUTOSTART_KEY, on))
+        self.l_autostart.toggled.connect(self._autostart_toggled)
         save = QPushButton("Save limits", objectName="Primary")
         save.clicked.connect(self.save_limits)
         form = QFormLayout()
@@ -457,7 +457,17 @@ class BotsView(QWidget):
             self.status.emit(f"bots: asked the process that runs {name} to stop it")
         self.refresh(force=True)
 
-    def toggle_selected(self):
+    def _theme_changed(self, _theme=None):
+        self.refresh(force=True)
+
+    def _autostart(self):
+        self.start_all(quiet=True)
+
+    def _autostart_toggled(self, on: bool):
+        if self.settings:
+            self.settings.set(AUTOSTART_KEY, on)
+
+    def toggle_selected(self, *_):
         name = self.selected()
         if name and (self.manager.is_running(name) or self.manager.elsewhere(name)):
             self.stop_selected()
@@ -483,6 +493,20 @@ class BotsView(QWidget):
         self.manager.stop_all()
         self.status.emit("bots: all stopped")
         self.refresh(force=True)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.refresh()
+        self.timer.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.timer.stop()  # a hidden page costs nothing; start/stop still refresh it (and the chip) directly
+
+    @staticmethod
+    def _set(kpi, text: str):
+        if kpi.value.text() != text:  # an unchanged label must not relayout the window every second
+            kpi.set(text)
 
     def shutdown(self):
         """The app closes: stop the loop and the bots (they resume from their state files next time)."""
@@ -549,25 +573,27 @@ class BotsView(QWidget):
     def _summary(self, rows):
         s = self.manager.summary(rows)
         t = self.themes.current
-        self.kpis["running"].set(f"{s['running']} of {s['bots']}")
-        self.kpis["positions"].set(str(s["positions"]))
-        self.kpis["exposure"].set(_money(s["exposure"]))
+        self._set(self.kpis["running"], f"{s['running']} of {s['bots']}")
+        self._set(self.kpis["positions"], str(s["positions"]))
+        self._set(self.kpis["exposure"], _money(s["exposure"]))
         v = s["pnl"]
         if abs(v) < 0.005:
-            self.kpis["pnl"].set("0.00")
+            self._set(self.kpis["pnl"], "0.00")
         else:
             colour = t.up if v > 0 else t.down
-            self.kpis["pnl"].set(f'<span style="color:{colour}">{up_down_mark(v)} {_money(abs(v))}</span>')
+            self._set(self.kpis["pnl"], f'<span style="color:{colour}">{up_down_mark(v)} {_money(abs(v))}</span>')
         limits = s["limits"]
         if s["halted"]:
             limits = f'<span style="color:{t.warn}">halted: {html.escape(s["halted"])}</span>'
-        self.kpis["limits"].set(limits)
+        self._set(self.kpis["limits"], limits)
         self.kpis["limits"].value.setToolTip(s["halted"] or "Limits all bots share; set them under Shared limits")
 
     def _show_events(self):
         name = self.selected()
         rows = [self._rows[name]] if name in self._rows else list(self._rows.values())
-        self.events_title.setText(f"Events · {name}" if name in self._rows else "Events · all bots")
+        title = f"Events · {name}" if name in self._rows else "Events · all bots"
+        if self.events_title.text() != title:
+            self.events_title.setText(title)
         events = [(e.get("time", ""), r.name, e.get("action", ""), e.get("amount", 0.0), e.get("price", 0.0),
                    e.get("note", "")) for r in rows for e in r.events]
         events.sort(key=lambda e: e[0], reverse=True)
@@ -590,7 +616,7 @@ class BotsView(QWidget):
         self.stop_all_btn.setEnabled(bool(self.manager.running()))
         self.start_all_btn.setEnabled(any(b.enabled and b.mode != "live" for b in self.bots.bots))
 
-    def _selected(self):
+    def _selected(self, *_):
         name = self.selected()
         if name and not getattr(self, "_restoring", False):
             try:

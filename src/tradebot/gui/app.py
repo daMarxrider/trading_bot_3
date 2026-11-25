@@ -84,7 +84,7 @@ class MainWindow(QMainWindow):
         from tradebot.journal import Journal
 
         self.bots = BotsView(themes, settings, symbol_search=search, journal_factory=Journal)  # #157
-        self.bots.running_changed.connect(lambda _: self._kill_ui(self.kill_btn.isChecked()))
+        self.bots.running_changed.connect(self._bots_running)
         self.scripts_page = ScriptsView(themes)
         self.scripts_page.reloaded.connect(self.scanner._script_reloaded)  # the scanner and the charts follow a reload
         groups = [("Markets", [("Chart", "chart", self.chart), ("Screener", "screener", self.screener),
@@ -218,6 +218,9 @@ class MainWindow(QMainWindow):
         if self.chart.opengl_note:  # GPU rendering is on but OpenGL isn't available (#71)
             self.statusBar().showMessage(self.chart.opengl_note, 15000)
         run_async(partial(warm_up, engine, symbols), lambda _: None, lambda err: None)
+
+    def _bots_running(self, _modes=None):
+        self._kill_ui(self.kill_btn.isChecked())
 
     def closeEvent(self, event):
         self.bots.shutdown()  # the bots' state is saved, they resume when started again
