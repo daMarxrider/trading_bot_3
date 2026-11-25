@@ -121,3 +121,19 @@ class NewsSentiment(BaseIndicator):
     @classmethod
     def compute(cls, o, smooth):
         return {"value": _smooth(o.data("news_sentiment"), smooth)}
+
+
+class ExchangeNetFlow(BaseIndicator):
+    name = "exchange_netflow"
+    description = ("Coins moved onto exchanges minus moved off them per day, in USD (Coin Metrics): above 0 is "
+                   "selling pressure, below 0 coins leaving for cold storage")
+    params = {"smooth": IntParam(1, 1, 60, "candles averaged (1 = the daily value)")}
+    overlay = False
+    levels = (0.0,)
+    market_data = ("exchange_netflow",)
+    units = {"value": "USD"}
+    styles = {"value": Style(color="series[3]", width=1.6)}
+
+    @classmethod
+    def compute(cls, o, smooth):
+        return {"value": _smooth(o.data("exchange_netflow"), smooth)}

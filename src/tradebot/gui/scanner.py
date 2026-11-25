@@ -43,6 +43,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from tradebot import fundamentals
 from tradebot import scanner as engine_scan
 from tradebot import scripts, universes
 from tradebot.config import Settings
@@ -53,7 +54,7 @@ from tradebot.gui.common import DataFrameModel, Panes, pct, run_async, tooltip
 from tradebot.gui.params import ParamDialog
 from tradebot.gui.script_editor import ScriptEditor
 from tradebot.gui.icons import bind_icon
-from tradebot.gui.theme import ThemeManager
+from tradebot.gui.theme import ThemeManager, qcolor
 from tradebot.gui.touch import enable_kinetic_scroll
 from tradebot.indicators import INDICATORS
 from tradebot.indicators.base import BaseIndicator, is_screenable
@@ -81,6 +82,30 @@ def highlight(text: str, query: str) -> str:
         out += [escape(text[i:j]), f"<b>{escape(text[j:j + len(query)])}</b>"]
         i = j + len(query)
     return "".join(out) + escape(text[i:])
+
+
+def fund_label(col: str) -> str:
+    return "Days to earnings" if col == "days_to_earnings" else fundamentals.FIELDS[col][0]
+
+
+def fund_formatter(col: str) -> Callable:
+    if col == "days_to_earnings":
+        return lambda v: "–" if v is None or pd.isna(v) else f"{v:.0f}"
+    return lambda v: fundamentals.format_value(col, None if v is None or pd.isna(v) else float(v))
+
+
+SIGNED_FUND = {"revenue_growth", "earnings_growth"}
+
+
+def fund_colors(themes: ThemeManager):
+    """Growth in the up / down colour; the model adds the triangle so colour is never the only cue (#191)."""
+    def color(col, value):
+        if col in SIGNED_FUND and isinstance(value, (int, float, np.number)) and not np.isnan(value):
+            return qcolor(themes.current.up if value >= 0 else themes.current.down)
+        return None
+
+    color.marked = SIGNED_FUND
+    return color
 
 
 def pretty(name: str) -> str:
@@ -401,9 +426,12 @@ class ScannerView(QWidget):
         self.last_sig = None
         self.scanning = False
         self.notice = ""
+        self.fund_columns: list[str] = []
+        self.fund_values: dict[str, dict] = {}
+        self._fund_token = 0
         self._cancel = threading.Event()
         self._load_token = 0
-        self.model = DataFrameModel()
+        self.model = DataFrameModel(colors=fund_colors(themes))
 
         self._build()
         self._restore()
@@ -549,6 +577,7 @@ class ScannerView(QWidget):
         self.ind_tf.blockSignals(True)
         self.ind_tf.setCurrentIndex(max(0, self.ind_tf.findData(self._get("indicator_tf"))))
         self.ind_tf.blockSignals(False)
+        self.fund_columns = [c for c in (self._get("fund_columns") or []) if c in fundamentals.SCREEN_COLUMNS]
         self._load_indicator_state()
         source = self._get("source") or {}
         self._set_source(source.get("kind", "watchlist"), source.get("key", ""), restoring=True)
@@ -823,7 +852,41 @@ class ScannerView(QWidget):
             act.setCheckable(True)
             act.setChecked(output in self.columns)
             act.toggled.connect(lambda on, o=output: self.set_column(o, on))
+        sub = menu.addMenu("Fundamentals (stocks)")  # #165
+        for col in fundamentals.SCREEN_COLUMNS:
+            act = sub.addAction(fund_label(col))
+            act.setCheckable(True)
+            act.setChecked(col in self.fund_columns)
+            act.toggled.connect(lambda on, c=col: self.set_fund_column(c, on))
         return menu
+
+    def set_fund_column(self, col: str, on: bool):
+        cols = set(self.fund_columns) | {col} if on else set(self.fund_columns) - {col}
+        self.fund_columns = [c for c in fundamentals.SCREEN_COLUMNS if c in cols]
+        self._save("fund_columns", self.fund_columns)
+        self._load_fundamentals()
+        self._refresh_table()
+
+    def _table_symbols(self) -> list[str]:
+        return list(self.result.table["symbol"]) if self.result is not None else []
+
+    def _load_fundamentals(self):
+        """Fetch (cached on disk) the fundamentals of the listed stocks in the background, then redraw."""
+        if not self.fund_columns:
+            return
+        todo = [s for s in self._table_symbols() if s not in self.fund_values and fundamentals.supported(s)]
+        if not todo:
+            return
+        self._fund_token += 1
+        token = self._fund_token
+
+        def done(snaps):
+            if token != self._fund_token:
+                return
+            self.fund_values.update({s: fundamentals.screen_values(snap) for s, snap in snaps.items()})
+            self._refresh_table()
+
+        run_async(lambda: fundamentals.load_many(todo), done, lambda err: self.status.emit(f"Fundamentals: {err}"))
 
     def set_column(self, output: str, on: bool):
         cols = set(self.columns) | {output} if on else set(self.columns) - {output}
@@ -841,7 +904,10 @@ class ScannerView(QWidget):
             frame = pd.DataFrame({"symbol": self.symbols})
             for c in cols:
                 frame[c] = np.nan
-        self.model.formats = {c: formatter(self.cls, c) for c in cols}
+        fcols = list(self.fund_columns)
+        for c in fcols:
+            frame[c] = [self.fund_values.get(sym, {}).get(c, np.nan) for sym in frame["symbol"]]
+        self.model.formats = {**{c: formatter(self.cls, c) for c in cols}, **{c: fund_formatter(c) for c in fcols}}
         self.model.set_frame(frame)
         self._style_stale()
 
@@ -934,6 +1000,7 @@ class ScannerView(QWidget):
             self._check_stale()  # the source or indicator changed while scanning: the rows don't fit
             return
         self.result, self.last_sig = result, sig
+        self._load_fundamentals()
         self._refresh_table()
         total = len(symbols)
         tf = TF_LABELS[self.timeframe]
