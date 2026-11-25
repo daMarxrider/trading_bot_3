@@ -331,9 +331,14 @@ class GlassBackdrop(QWidget):
     BLOBS = ((0.12, 0.18, 0.55, "#5b5bf7"), (0.85, 0.12, 0.45, "#c13cff"),
              (0.70, 0.90, 0.60, "#00b3c7"), (0.20, 0.95, 0.40, "#ff4f8b"))
 
+    # with real compositor blur behind the window (#7) the gradient is only a tint on top of it
+    BLUR_BASE_ALPHA = 150
+    BLUR_BLOB_ALPHA = 70
+
     def __init__(self, manager: ThemeManager, parent=None):
         super().__init__(parent)
         self.manager = manager
+        self.blur_active = False
         self.setObjectName("Root")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         manager.changed.connect(lambda _: self.update())
@@ -342,13 +347,19 @@ class GlassBackdrop(QWidget):
         t = self.manager.current
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.fillRect(self.rect(), QColor(t.bg))
+        base = QColor(t.bg)
+        blurred = self.blur_active and t.glass
+        if blurred:
+            base.setAlpha(self.BLUR_BASE_ALPHA)
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+        p.fillRect(self.rect(), base)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         if t.glass:
             w, h = self.width(), self.height()
             for fx, fy, fr, color in self.BLOBS:
                 grad = QRadialGradient(QPointF(fx * w, fy * h), fr * max(w, h))
                 c = QColor(color)
-                c.setAlpha(110)
+                c.setAlpha(self.BLUR_BLOB_ALPHA if blurred else 110)
                 grad.setColorAt(0.0, c)
                 c.setAlpha(0)
                 grad.setColorAt(1.0, c)

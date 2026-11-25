@@ -9,7 +9,11 @@ file is created, and an empty field removes its line.
 * **Theme**: **Graphite** (the default: solid warm-graphite panels, one violet accent) and **Paper** (its light twin),
   plus the older **Glass** (translucent frosted panels over a soft gradient backdrop), **Modern Dark** and **Light**,
   and your own. In every theme, up is blue-teal and down is vermilion rather than green and red, and a triangle
-  always goes with the colour. The UI font is IBM Plex Sans (SIL Open Font License, bundled). It applies right away
+  always goes with the colour. Glass can blur the desktop behind the window for real: set `glass_blur = true` in
+  `config.toml` and restart. It works on KWin and other X11 compositors that honour the blur-behind hint (use
+  `QT_QPA_PLATFORM=xcb` on a Wayland session; KWin blurs XWayland windows), Windows 11 22H2 or newer (acrylic) and
+  macOS (needs `pyobjc`). On native Wayland (including Hyprland and other wlroots compositors, where blur is a
+  compositor rule) and wherever the call fails, the painted gradient stays. The UI font is IBM Plex Sans (SIL Open Font License, bundled). It applies right away
   (`theme = "graphite"` in the config).
 * **GPU rendering (experimental)**: draws the chart through OpenGL for smoother panning (`gpu_rendering = true`). Off
   by default, applies after a restart. Without OpenGL (no driver, a VM, a remote desktop) the chart uses the normal

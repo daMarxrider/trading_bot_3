@@ -60,6 +60,7 @@ bots, a desktop app (PyQt6) and a terminal CLI. It is licensed under the GNU GPL
 * [Market regimes and position sizing](regimes-and-sizing.md)
 * [Pattern detection](patterns.md): candlestick and chart patterns, support and resistance
 * [Crypto market data](market-data.md): funding rate, open interest, Fear & Greed, on-chain metrics, order book depth
+* [News sentiment and the economic calendar](sentiment-calendar.md): headline scores, the `news_sentiment` indicator, CPI / rate / jobs markers, staying flat around events
 * [Multi-timeframe indicators and strategies](multi-timeframe.md): `tf=` in rules, on the chart, in the Scanner and in evolve
 * [Shorts and leverage](shorts-and-leverage.md): long/short strategies, leverage, liquidation, borrow fees, funding
 * [Alerts](alerts.md): price, indicator and scheduled-scan alerts

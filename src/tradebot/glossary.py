@@ -306,6 +306,9 @@ TERMS = {
     "funding": "Perpetual futures settle funding every 8 hours: at a positive rate longs pay shorts that share of "
                "their position, at a negative one shorts pay longs. 0.01% per 8 hours is about 11% a year. The "
                "command line can also use the exchange's historical rates (--funding history).",
+    "earnings_blackout": "Stocks only: open no new position in the given number of days before a company reports "
+                         "earnings, when prices often jump. A position already open is kept. Off by default; "
+                         "[events] earnings_blackout_days in config.toml sets the default.",
     "limit_entry": "limit_pct(1) or limit_atr(0.5) in the entry rule, joined with &: when the rest holds, place "
                    "a buy order 1% (0.5 ATRs) below the close for the next candle. Not filled if the price "
                    "doesn't come down to it.",

@@ -70,6 +70,8 @@ Arguments: `SYMBOL`, `ALGO`
 | `--fee` | `0.001` | Fee per side, fraction |
 | `--slippage` |  | Slippage per side in basis points (5 = 0.05%), charged on top of the fee; 'auto' = suggested for the asset class (crypto 5, stock 2). Default: [backtest] slippage_bps in config.toml, else 0 |
 | `--no-entry-before-earnings` |  | Open no new position in the DAYS days before a company's earnings date (positions already open are kept). Default: [events] earnings_blackout_days in config.toml, else 0 = off |
+| `--flat-around-events` |  | Stay flat from HOURS before to HOURS after a high-impact economic event (CPI, rate decisions, jobs data; see `tradebot calendar`): open positions are closed, none opened. Default: [events] flat_around_hours in config.toml, else 0 = off |
+| `--event-impact` |  | Smallest impact of the events that count for --flat-around-events: low, medium or high (default: [events] flat_impact in config.toml, else high) |
 | `--capital` | `10000.0` |  |
 | `--dca-amount` |  | Amount the monthly-investing baseline invests each month (default: capital / months) |
 | `--plot`, `--no-plot` | `True` | Show chart with signals and equity |
@@ -276,6 +278,30 @@ Arguments: `SYMBOLS` (optional)
 | `--watchlist`, `-w` |  | Without symbols: only this watchlist's (default: all watchlists) |
 | `--source`, `-s` |  | Only these news sources (repeat the option); default: the ones enabled in the settings. See `tradebot news --list-sources` |
 | `--list-sources` |  | Show the available news sources and exit |
+
+## `tradebot sentiment`
+
+News sentiment of a symbol per day (#167): the mean score of its headlines, -1 (negative) to +1 (positive).
+
+Arguments: `SYMBOL`
+
+| Option | Default | Description |
+|---|---|---|
+| `--days` | `14` | Days to show |
+| `--limit` | `200` | Headlines to score |
+| `--source`, `-s` |  | Only these news sources |
+
+## `tradebot calendar`
+
+Economic calendar (#167): CPI, rate decisions, jobs data and other releases with their impact.
+
+| Option | Default | Description |
+|---|---|---|
+| `--days` | `14` | Days ahead to show |
+| `--back` | `0` | Days back to show |
+| `--impact` | `high` | Smallest impact to list: low, medium or high |
+| `--country` |  | Only this currency, e.g. USD or EUR |
+| `--refresh` |  | Fetch the calendar again now |
 
 ## `tradebot market`
 
