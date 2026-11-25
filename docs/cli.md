@@ -136,6 +136,14 @@ tradebot bot run ETH/USDT sma_cross --stake 50 --max-daily-loss 20 --max-drawdow
 tradebot bot pair-run BTC/USDT:USDT ETH/USDT:USDT --once
 tradebot bot pair-state BTC/USDT:USDT ETH/USDT:USDT   # the open pair a --live pair bot saved (--keep / --forget)
 tradebot bot kill                   # every running bot stops at its next check
+tradebot bots add eth-trend ETH/USDT sma_cross --tf 1h --stake 200   # several bots at once: the set in bots.toml
+tradebot bots limits --max-total-exposure 1500 --max-open-positions 3
+tradebot bots run                   # every enabled bot until Ctrl+C (--live: also the live ones)
+tradebot bots list                  # state, position, P&L and last event of each bot
+tradebot bots stop eth-trend        # the process running it stops it (--all: every bot)
+tradebot bots disable eth-trend     # left out of `bots run`; tradebot bots enable takes it back
+tradebot bots enable eth-trend
+tradebot bots remove eth-trend
 tradebot bot resume
 tradebot paper show                 # paper account: cash, positions, P&L, latest orders
 tradebot paper reset --balance 5000
@@ -149,7 +157,7 @@ tradebot notify test                # send a test message to every notification 
 ```
 
 The first `bot run ... --live` shows the risk notice and asks you to accept it. Bots record every order in the [journal](journal.md) (`--no-journal` switches it off). Everything about brokers, the risk
-guards and notifications: [Brokers and live trading](live-trading.md).
+guards and notifications: [Brokers and live trading](live-trading.md); several bots at once: [Bots](bots.md).
 
 ## Tab completion
 

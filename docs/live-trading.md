@@ -60,7 +60,8 @@ tradebot bot run ETH/USDT sma_cross --once                                      
 The first `--live` run shows the risk notice and asks you to accept it; your answer is saved as
 `live_risk_accepted = "<date>"` in `config.toml`, so it asks only once. Parameters, `--members`, `--entry`/`--exit` and
 `--fills` work as in `backtest`. A single-symbol `bot run` doesn't remember an open position across a restart: check the broker's positions
-before starting again.
+before starting again. To run several bots at once, with shared limits and a set that starts again after a reboot, see
+[Bots: several at once](bots.md).
 
 ## Paper trading
 
@@ -80,7 +81,7 @@ currency = "USDT"
 fee = 0.001
 ```
 
-There is no GUI view of the paper account yet.
+The app's [Bots page](bots.md#in-the-app-the-bots-page) runs dry-run and paper bots and shows their positions and P&L.
 
 ## Risk guards and the kill switch
 

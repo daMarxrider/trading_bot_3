@@ -104,6 +104,8 @@ QFrame#Strip {{ background: {panel}; border: 1px solid {panel_border}; border-ra
 QFrame#Stat {{ background: transparent; border: none; border-right: 1px solid {panel_border}; border-radius: 0; }}
 QFrame#Stat[last="true"] {{ border-right: none; }}
 QLabel#KpiValue {{ font-size: 16px; font-weight: 600; }}
+QLabel#KpiText {{ font-size: 13px; font-weight: 500; }}
+QLabel#ModeChip[state="bots"] {{ border-color: {warn}; color: {warn}; }}
 QLabel#Muted, QLabel#KpiLabel {{ color: {muted}; }}
 QPushButton {{ background: {input_bg}; border: 1px solid {panel_border}; border-radius: {radius_sm}px; padding: 6px 14px; }}
 QPushButton:hover {{ border-color: {accent}; }}
@@ -178,7 +180,7 @@ QMenu QToolButton#LoadoutDelete {{ background: transparent; border: none; color:
 QMenu QToolButton#LoadoutDelete:hover {{ color: {down}; }}
 QMenu::item:selected {{ background: {selection}; }}
 QTableView, QListWidget {{ background: {panel}; border: 1px solid {panel_border}; border-radius: {radius}px;
-    gridline-color: {grid}; selection-background-color: {selection}; alternate-background-color: {alt_row}; }}
+    gridline-color: {grid}; selection-background-color: {selection}; selection-color: {text}; alternate-background-color: {alt_row}; }}
 QHeaderView {{ background: transparent; }}
 QHeaderView::section {{ background: transparent; color: {muted}; border: none; border-bottom: 1px solid {panel_border}; padding: 6px; }}
 QTableCornerButton::section {{ background: transparent; border: none; }}
