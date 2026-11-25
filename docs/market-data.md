@@ -11,7 +11,6 @@ on the chart (a pane under the candles), in combo rules, in [evolve](evolve.md) 
 | `fear_greed` | Crypto Fear & Greed index, 0 extreme fear to 100 extreme greed, daily | alternative.me | 0-100 |
 | `mvrv` | market value to realized value of the coin, daily | Coin Metrics community API | ratio |
 | `active_addresses` | addresses active on the coin's chain per day | Coin Metrics community API | count |
-
 | `news_sentiment` | tone of the symbol's news headlines per hour, -1 to +1; **any symbol**, not only crypto | the news feeds, see [News sentiment](sentiment-calendar.md) | score |
 
 Every one has a `smooth` parameter (candles averaged, 1 = raw), except `oi_change`.
