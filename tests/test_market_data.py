@@ -132,7 +132,7 @@ def test_failures_leave_the_column_out_without_raising():
 
     out = md(exchange=FakeExchange(fail=True), get_json=limited).attach(frame(5), "BTC/USDT")
     assert not {"funding_rate", "open_interest", "fear_greed", "mvrv"} & set(out.columns)
-    assert set(out.attrs["market_errors"]) == set(market.SOURCES)
+    assert set(out.attrs["market_errors"]) == {c for c, s in market.SOURCES.items() if s.default}
     assert "offline" in out.attrs["market_errors"]["funding_rate"]
 
 

@@ -123,3 +123,11 @@ def _no_news_downloads(monkeypatch):
 
     monkeypatch.setattr(tradebot.news, "fetch_news", lambda symbols, limit=50, sources=None: [])
     monkeypatch.setattr(tradebot.news, "fetch_news_report", lambda symbols, limit=50, sources=None: ([], {}))
+
+
+@pytest.fixture(autouse=True)
+def _no_calendar_downloads(monkeypatch):
+    """The economic calendar feed (#167) is never fetched in tests."""
+    import tradebot.economic
+
+    monkeypatch.setattr(tradebot.economic, "fetch_feed", lambda: [])

@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from tradebot import news
+from tradebot import news, sentiment
 from tradebot.gui.common import run_async
 from tradebot.gui.theme import ThemeManager
 from tradebot.gui.touch import enable_kinetic_scroll
@@ -42,6 +42,23 @@ def ago(when: datetime, now: datetime | None = None) -> str:
     return f"{when:%Y-%m-%d}"
 
 
+def score_chip(score: float, t) -> str:
+    """The headline's sentiment as rich text: a triangle, the signed score and the word, so colour is never the
+    only cue (neutral is muted with a dash)."""
+    colour = t.up if score > sentiment.NEUTRAL else t.down if score < -sentiment.NEUTRAL else t.muted
+    return (f"<span style='color:{colour}; font-weight:600'>{sentiment.arrow(score)} {score:+.2f}</span>"
+            f"<span style='color:{t.muted}'> {sentiment.label(score)}</span>")
+
+
+def summary_html(items, t) -> str:
+    """One line for the whole list: the mean score and how the headlines split."""
+    if not items:
+        return ""
+    total = sentiment.summarize(sentiment.score_item(n) for n in items)
+    return (f"Sentiment {score_chip(total.mean, t)}<span style='color:{t.muted}'> · {total.positive} positive, "
+            f"{total.neutral} neutral, {total.negative} negative</span>")
+
+
 def fill_news_list(widget: QListWidget, items, themes: ThemeManager, show_symbol: bool = True,
                    summary_chars: int = 240, title_px: int = 15, relative: bool = False):
     """One rich-text row per headline; the URL is the item's data (opened by the caller)."""
@@ -51,6 +68,7 @@ def fill_news_list(widget: QListWidget, items, themes: ThemeManager, show_symbol
     for n in items:
         when = ago(n.published) if relative else f"{n.published:%Y-%m-%d %H:%M}"
         meta = " · ".join(p for p in (when, html.escape(n.publisher)) if p)
+        meta += f"</span>&nbsp;&nbsp;{score_chip(sentiment.score_item(n), t)}<span style='color:{t.muted}'>"
         symbol = f"<span style='color:{t.accent}; font-weight:600'>{html.escape(n.symbol)}</span>&nbsp;&nbsp;" \
             if show_symbol else ""
         label = QLabel(
@@ -86,6 +104,8 @@ class NewsPanel(QWidget):
         self._loaded_for = None  # the symbol self.items belong to
         self._visible = False
         self.header = QLabel(objectName="Muted", wordWrap=True)
+        self.summary = QLabel(wordWrap=True, textFormat=Qt.TextFormat.RichText,
+                              toolTip="Tone of the headlines from a word list for financial news: -1 negative to +1 positive")
         self.refresh_btn = QToolButton(text="⟳", toolTip="Refresh the news")
         self.refresh_btn.clicked.connect(self.refresh)
         self.list = QListWidget(objectName="SidebarNews")
@@ -103,6 +123,7 @@ class NewsPanel(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addLayout(head)
+        lay.addWidget(self.summary)
         lay.addWidget(self.body, 1)
         self.timer = QTimer(self, interval=REFRESH_MS, timeout=self.refresh)
         themes.changed.connect(lambda _: self._render())
@@ -150,6 +171,7 @@ class NewsPanel(QWidget):
     def _render(self):
         if self._loaded_for is None:
             return
+        self.summary.setText(summary_html(self.items, self.themes.current))
         if not self.items:
             self._show_message(f"No news for {self._loaded_for}.")
             return

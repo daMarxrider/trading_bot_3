@@ -13,7 +13,7 @@ from tradebot.core import ops
 
 
 #: Optional frame columns with crypto market data (#166, :mod:`tradebot.data.market`), lined up with the candles.
-MARKET_COLUMNS = ("funding_rate", "open_interest", "fear_greed", "mvrv", "active_addresses")
+MARKET_COLUMNS = ("funding_rate", "open_interest", "fear_greed", "mvrv", "active_addresses", "news_sentiment")
 
 
 @dataclass(frozen=True)

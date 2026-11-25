@@ -19,6 +19,8 @@ from tradebot.gui.touch import enable_kinetic_scroll
 
 #: letter beside the marker on the chart, so the kind never depends on colour alone
 LETTERS = {"earnings": "E", "split": "S", "dividend": "D"}
+#: letters of the economic event marks above the candles (#167)
+ECON_LETTERS = {"rates": "R", "cpi": "C", "jobs": "J", "other": "!"}
 SIGNED = ("revenue_growth", "earnings_growth")  # figures that carry a direction: colour plus a triangle
 
 
