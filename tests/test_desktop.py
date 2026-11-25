@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Linux app-launcher entry (#213). Everything goes into tmp_path (XDG_DATA_HOME or --prefix), never the real home."""
 
+import os
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,7 @@ def exec_of(path):
 def private_home(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.setattr(desktop, "refresh_caches", lambda base: None)
 
 
@@ -165,6 +167,7 @@ def test_windows_dev_shortcut_uses_pythonw_and_system_uses_programdata(tmp_path,
 def macos(tmp_path, monkeypatch):
     monkeypatch.setattr(desktop.sys, "platform", "darwin")
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))  # Path.home() on a Windows test host
     return tmp_path
 
 
@@ -174,7 +177,8 @@ def fake_bundle(tmp_path, monkeypatch):
     exe = bundle / "Contents" / "MacOS" / "tradebot"
     exe.write_text("bin")
     (bundle / "Contents" / "Info.plist").write_text("plist")
-    (bundle / "Contents" / "link").symlink_to("Info.plist")
+    if os.name == "posix":  # symlinks need privileges on Windows hosts
+        (bundle / "Contents" / "link").symlink_to("Info.plist")
     monkeypatch.setattr(desktop.sys, "frozen", True, raising=False)
     monkeypatch.setattr(desktop.sys, "executable", str(exe))
     return bundle
@@ -185,7 +189,7 @@ def test_macos_copies_the_running_bundle_into_applications(macos, monkeypatch):
     [app] = desktop.install()
     assert app == macos / "home" / "Applications" / "Tradebot.app"
     assert (app / "Contents" / "MacOS" / "tradebot").read_text() == "bin"
-    assert (app / "Contents" / "link").is_symlink()
+    assert os.name != "posix" or (app / "Contents" / "link").is_symlink()
     assert desktop.install() == [app]  # idempotent
     assert desktop.uninstall() == [app] and not app.exists() and bundle.exists()
     assert desktop.uninstall() == []
@@ -201,7 +205,7 @@ def test_macos_dev_stub_app(macos):
     assert app.name == "Tradebot (dev).app"
     launcher = app / "Contents" / "MacOS" / "launch"
     assert launcher.read_text() == "#!/bin/sh\nexec '/src/my repo/.venv/bin/tradebot' gui\n"
-    assert launcher.stat().st_mode & 0o111
+    assert os.name != "posix" or launcher.stat().st_mode & 0o111
     info = desktop.plistlib.loads((app / "Contents" / "Info.plist").read_bytes())
     assert info["CFBundleName"] == "Tradebot (dev)" and info["LSApplicationCategoryType"] == "public.app-category.finance"
     assert (app / "Contents" / "Resources" / "tradebot.icns").is_file()
