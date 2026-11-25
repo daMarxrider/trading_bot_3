@@ -209,7 +209,7 @@ def test_columns_are_the_indicators_outputs_and_sort_puts_nan_last(make):
     v = make()
     assert "close" not in v.columns and v.columns == ["fast", "slow"]
     menu = v.column_menu()
-    assert [a.text() for a in menu.actions()] == ["fast", "slow", "cross_up (alert)", "cross_down (alert)"]
+    assert [a.text() for a in menu.actions()] == ["fast", "slow", "cross_up (alert)", "cross_down (alert)", "Fundamentals (stocks)"]
     v.set_column("cross_up", True)
     assert v.columns == ["fast", "slow", "cross_up"]
     macd = make()
@@ -348,3 +348,17 @@ def test_indicator_timeframe_goes_to_the_scan_and_the_chart(make):
     v.ind_tf.setCurrentIndex(v.ind_tf.findData("15m"))
     assert v.indicator_tf is None
     assert make()._get("indicator_tf") == "15m"  # remembered
+
+
+def test_fundamentals_columns_for_stocks(make, tmp_path, monkeypatch):
+    from tradebot import fundamentals as fund
+
+    monkeypatch.setattr(fund, "load_many", lambda syms: {s: fund.Snapshot(s, fund.Fundamentals(pe=12.5)) for s in syms})
+    v = make()
+    v.start_scan()
+    wait_until(lambda: v.result is not None)
+    v.set_fund_column("pe", True)
+    wait_until(lambda: "pe" in v.model.df.columns and v.model.df["pe"].notna().all())
+    assert v.model.df["pe"].tolist() == [12.5, 12.5]
+    assert make(Settings(tmp_path / "settings.json")).fund_columns == ["pe"]  # remembered
+    assert gs.fund_formatter("days_to_earnings")(float("nan")) == "–"
