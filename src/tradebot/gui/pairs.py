@@ -25,7 +25,7 @@ class PairView(QWidget):
         self.symbol_a = QLineEdit(watchlist[0] if watchlist else "KO", placeholderText="first, e.g. KO")
         self.symbol_b = QLineEdit(watchlist[1] if len(watchlist) > 1 else "PEP", placeholderText="second, e.g. PEP")
         self.tf = QComboBox()
-        self.tf.addItems([t for t in TIMEFRAMES if t not in ("1m", "5m", "15m", "30m", "1h", "4h")])  # #120
+        self.tf.addItems(list(TIMEFRAMES))
         self.tf.setCurrentText("1d")
         self.bars = QSpinBox(minimum=100, maximum=20000, value=750)
         self.window = QSpinBox(minimum=10, maximum=1000, value=60,
@@ -49,7 +49,7 @@ class PairView(QWidget):
         self.prices.addLegend()
         self.zplot.setXLink(self.prices)
         self.numbers = QLabel("Pick two symbols and press Analyse. Prices in different currencies are "
-                              "converted into A's currency (daily and longer).")
+                              "converted into A's currency (intraday: only candles with a fresh exchange rate).")
         self.numbers.setWordWrap(True)
         self.numbers.setTextFormat(pg.QtCore.Qt.TextFormat.RichText)
         lay = QVBoxLayout(self)
@@ -80,7 +80,7 @@ class PairView(QWidget):
         self.status.emit(f"pairs: loading {a} and {b} …")
 
         def work():
-            ca, cb = (df["close"] for df in self.engine.pair_legs((a, b), tf, bars=bars))  # same currency
+            ca, cb = (df["close"] for df in self.engine.pair_legs((a, b), tf, bars=bars))
             both = ca.to_frame("a").join(cb.rename("b"), how="inner")
             return both["a"], both["b"]
 
