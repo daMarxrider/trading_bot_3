@@ -61,7 +61,7 @@ from tradebot.backtest.metrics import deflated_sharpe, infer_periods_per_year
 from tradebot.core import mtf
 from tradebot.core.series import OHLC, unix_seconds
 from tradebot.evolve.export import load_plugin, plugin_source
-from tradebot.evolve.modules import Library, Template, rewrite
+from tradebot.evolve.modules import Library, rewrite
 from tradebot.evolve.primitives import BOOL, DIST, PRICE, RATIO, WINDOW, Primitive, PrimitiveSet, uses_volume
 from tradebot.evolve.program import (Evaluator, Node, Program, const, constants, log_scale, quantize, random_const,
                                      random_program, random_tree, simplify_tree)
@@ -74,7 +74,8 @@ LIMITS = (6, 40)  #: default max depth and max size
 SCRATCH_LIMITS = (12, 100)  #: from scratch: an RSI alone is depth 8 and ~25 nodes
 SCRATCH_GUARDS = {"permutations": 5, "folds": 3}  #: from scratch: shuffled-price runs and walk-forward folds
 SCRATCH_JOINT = 24  #: from scratch: joint draws of the constants of a new shape
-TUNE_NEW = 0
+SCRATCH_REFINE = 3  #: from scratch: the fittest results that get :meth:`Evolver.refine` at the end
+TIE_SLACK = 0.005  #: refine: tying two near-equal constants may cost this share of the fitness
 SCRATCH_NORMALISE = 0.1  #: from scratch: share of mutations that build a normalised ratio
 SCRATCH_ISLANDS = 4  #: from scratch: separate populations (see :class:`Evolver`)
 SIGNIFICANT = 0.95  #: the deflated Sharpe ratio a result should reach
@@ -308,6 +309,14 @@ class _Symbol:
         return self.segments[-1][1]
 
 
+def _near(spec, a, b) -> bool:
+    """Two values of one constant's range close enough to be one: windows within a factor 1.25, others within
+    a twentieth of the range."""
+    if log_scale(spec) and min(a, b) > 0:
+        return max(a, b) / min(a, b) <= 1.25
+    return abs(a - b) <= (spec.high - spec.low) / 20
+
+
 class Evolver:
     """Genetic programming of entry/exit rules on one or several symbols (``{symbol: frame}``)."""
 
@@ -352,6 +361,7 @@ class Evolver:
         migrants: int = 2,
         joint: int | None = None,
         normalise: float | None = None,
+        polish: int | None = None,
     ):
         """``max_depth``/``max_size`` default to :data:`LIMITS`, from scratch to :data:`SCRATCH_LIMITS`.
         ``library`` (evolved building blocks every ``library_every`` generations), ``dedupe`` (programs
@@ -364,7 +374,9 @@ class Evolver:
         tuned (the best ``tune`` programs are per island). ``joint`` (default 0, from scratch :data:`SCRATCH_JOINT`):
         random joint draws of all the constants of a program whose shape is new, before it is judged (see
         :meth:`joint_tune`). ``normalise`` (default 0, from scratch :data:`SCRATCH_NORMALISE`): the share of
-        mutations that build a normalised ratio such as ``smooth(x) / smooth(abs(x))`` (see :meth:`normalised`)."""
+        mutations that build a normalised ratio such as ``smooth(x) / smooth(abs(x))`` (see :meth:`normalised`).
+        ``polish`` (default 0, from scratch :data:`SCRATCH_REFINE`): the fittest this many results get :meth:`refine`
+        at the end."""
         if from_scratch and indicators is not None:
             raise ValueError("from scratch uses no ready-made indicators; leave out the indicator choice")
         if from_scratch and timeframes:
@@ -401,9 +413,9 @@ class Evolver:
         self.library_every = max(1, library_every)
         self.dedupe, self.deflate = dedupe, deflate
         self.tune = (3 if from_scratch else 0) if tune is None else max(0, tune)
-        self.tune_new = TUNE_NEW
         self.joint = (SCRATCH_JOINT if from_scratch else 0) if joint is None else max(0, joint)
         self.normalise = (SCRATCH_NORMALISE if from_scratch else 0.0) if normalise is None else max(0.0, normalise)
+        self.polish = (SCRATCH_REFINE if from_scratch else 0) if polish is None else max(0, polish)
         islands = (SCRATCH_ISLANDS if from_scratch else 1) if islands is None else islands
         self.islands = max(1, min(islands, population // 4))
         self.migrate_every, self.migrants = max(1, migrate_every), max(0, migrants)
@@ -413,7 +425,8 @@ class Evolver:
                              crossover=crossover, mutation=mutation, elite=elite, hall_of_fame=hall_of_fame,
                              dca_amount=dca_amount, primitives=self.base_ps, from_scratch=from_scratch,
                              library=library, dedupe=dedupe, deflate=deflate, library_every=library_every,
-                             tune=self.tune, joint=self.joint, normalise=self.normalise, islands=self.islands, migrate_every=migrate_every, migrants=migrants)
+                             tune=self.tune, joint=self.joint, normalise=self.normalise, polish=self.polish,
+                             islands=self.islands, migrate_every=migrate_every, migrants=migrants)
 
         self.multi = not isinstance(df, pd.DataFrame)
         frames, self.skipped = select_frames(df if self.multi else {"": df}, align, min_history)
@@ -450,7 +463,6 @@ class Evolver:
         self._fitness: dict[str, float] = {}
         self._validation: dict[str, float] = {}
         self._signature: dict[str, bytes] = {}  #: program -> fingerprint of its training positions
-        self._shapes: set[str] = set()  #: shapes (programs without their constants) that were tuned jointly
         self._sharpe: dict[bytes, float] = {}  #: per distinct behaviour: training Sharpe ratio per candle
 
     # -- scoring --------------------------------------------------------------------------------------
@@ -623,9 +635,8 @@ class Evolver:
                     child = self._with(program, rule, new)
                     if self._fits(child):
                         return self._tuned(child)
-            if new is not None:
-                pass
-            elif kind == "constant" and (consts := [x for x in tree.nodes() if x[1].is_const]):
+                    continue  # too big: another try
+            if kind == "constant" and (consts := [x for x in tree.nodes() if x[1].is_const]):
                 path, node = consts[int(self.rng.integers(len(consts)))]
                 new = tree.replace(path, self._nudge(node))
             elif kind == "point":
@@ -676,10 +687,6 @@ class Evolver:
                     break
         return program, fitness
 
-    def _shape(self, program: Program) -> str:
-        """The program without its constants (equal ones count as one, as in a module's template)."""
-        return f"{Template(program.entry).key}|{Template(program.exit).key}"
-
     def _rebuilt(self, program: Program, groups: list, values: list) -> Program:
         """``program`` with every group of constants set to its value."""
         trees = {"entry": program.entry, "exit": program.exit}
@@ -697,10 +704,7 @@ class Evolver:
         First random joint draws (in a share of them all windows are one, as in a ratio smoothing numerator and
         denominator alike), then a compass search from the best draw whose directions move several constants at
         once, so it can follow a ridge."""
-        groups: dict[tuple, list] = {}
-        for rule, path, node in constants(program):
-            groups.setdefault((id(node.spec), node.value), []).append((rule, path, node))
-        groups = list(groups.values())
+        groups = self._groups(program)
         if not groups:
             return program, fitness
         specs = [g[0][2].spec for g in groups]
@@ -717,46 +721,88 @@ class Evolver:
                 best, best_fit, best_values = child, f, values
         if best is program:
             return program, fitness
-        for _ in range(3):  # compass search, diagonal steps over up to 3 constants at a time
-            dims = [int(i) for i in self.rng.permutation(len(groups))[:3]]
+        return self.hill_climb(*self._compass(program, groups, best, best_fit, best_values)[:2])
+
+    @staticmethod
+    def _groups(program: Program) -> list[list]:
+        """The constants of ``program`` as groups of ``(rule, path, node)``; equal constants are one group."""
+        groups: dict[tuple, list] = {}
+        for rule, path, node in constants(program):
+            groups.setdefault((id(node.spec), node.value), []).append((rule, path, node))
+        return list(groups.values())
+
+    def _compass(self, program: Program, groups: list, best: Program, best_fit: float, best_values: list,
+                 rounds: int = 3, scale: float = 1.0, full: bool = False,
+                 reach: int = 1) -> tuple[Program, float, list]:
+        """Compass search from ``best_values`` (one per group of ``program``): diagonal steps over up to 3 constants
+        at a time, so it can follow a ridge. A step is ``scale`` times a fifth of a window, or a fortieth of the
+        range for other constants (at least one step of their grid), up to ``reach`` steps either way. A round tries
+        3 random constants (``full``: every pair of them); it stops after a round without a gain."""
+        specs = [g[0][2].spec for g in groups]
+        for _ in range(rounds):
+            order = [int(i) for i in self.rng.permutation(len(groups))]
+            subsets = [list(c) for c in itertools.combinations(order, min(2, len(order)))] if full else [order[:3]]
             improved = False
-            for signs in itertools.product((-1, 0, 1), repeat=len(dims)):
+            for dims, signs in ((dims, signs) for dims in subsets
+                                for signs in itertools.product(range(-reach, reach + 1), repeat=len(dims))):
                 if not any(signs):
                     continue
                 values = list(best_values)
                 for i, sign in zip(dims, signs):
                     s, v = specs[i], best_values[i]
                     if s.integer:
-                        values[i] = quantize(s, v + sign * max(1, int(round(0.2 * v)) if log_scale(s) else 1))
+                        step = max(1, int(round(scale * 0.2 * v))) if log_scale(s) else max(1, int(round(scale)))
+                        values[i] = quantize(s, v + sign * step)
                     else:
-                        values[i] = quantize(s, v + sign * (s.high - s.low) / 40)
+                        values[i] = quantize(s, v + sign * max(scale / 40, 1 / 200) * (s.high - s.low))
                 child = self._rebuilt(program, groups, values)
                 if child.key != best.key and self._fits(child) and (f := self.fitness(child)) > best_fit:
                     best, best_fit, best_values, improved = child, f, values, True
             if not improved:
                 break
-        return self.hill_climb(best, best_fit)
+        return best, best_fit, best_values
+
+    def refine(self, program: Program, fitness: float) -> tuple[Program, float]:
+        """The last polish of a result (#105). Constants of one kind and one rule that are nearly equal
+        (``ema(x, 26) / ema(abs(x), 27)``) are tried as one, kept if that costs at most :data:`TIE_SLACK` of the
+        fitness (one parameter fewer is the simpler rule). Then a pattern search (compass steps that get finer)
+        moves the constants jointly along the ridge (``RSI(13) < 29`` to ``RSI(14) < 30``), which the
+        one-at-a-time hill climb of the generations can't."""
+        floor = fitness - TIE_SLACK * abs(fitness)
+        for _ in range(len(self._groups(program))):
+            groups = self._groups(program)
+            values = [g[0][2].value for g in groups]
+            best = None
+            for i, j in itertools.combinations(range(len(groups)), 2):
+                s = groups[i][0][2].spec
+                if (s is not groups[j][0][2].spec or not _near(s, values[i], values[j])
+                        or {r for r, _, _ in groups[i]} != {r for r, _, _ in groups[j]}):  # in one rule
+                    continue
+                for v in {values[i], values[j], quantize(s, (values[i] + values[j]) / 2)}:
+                    tied = list(values)
+                    tied[i] = tied[j] = v
+                    child = self._rebuilt(program, groups, tied)
+                    if (self._fits(child) and (f := self.fitness(child)) >= floor
+                            and (best is None or f > best[1])):
+                        best = (child, f)
+            if best is None:
+                break
+            program, fitness = best
+        groups = self._groups(program)
+        best, values = program, [g[0][2].value for g in groups]
+        for scale, reach in ((1.0, 1), (0.5, 1), (0.2, 2)) if groups else ():  # finer steps once coarse ones stop helping
+            best, fitness, values = self._compass(program, groups, best, fitness, values, 10, scale, True, reach)
+        return best, fitness  # no one-at-a-time hill climb: it would split the tied constants again
 
     def _tuned(self, program: Program) -> Program:
         """``program`` after :meth:`joint_tune` (a newly built shape is judged only once its constants fit)."""
         if not self.joint:
             return program
         if "held" in self.ps and self.rng.random() < 0.5:  # a fixed holding period: the plain way to take a signal
-            program = Program(program.entry, Node(self.ps["held"], (random_const(self.ps["held"].args[0], self.rng, True),)))
+            hold = random_const(self.ps["held"].args[0], self.rng, True)
+            program = Program(program.entry, Node(self.ps["held"], (hold,)))
         fit = self.fitness(program)
         return self.joint_tune(program, fit)[0] if fit > REJECTED / 2 else program
-
-    def _tune_new(self, children: list[Program], fit: np.ndarray, top: int = 2) -> tuple[list[Program], np.ndarray]:
-        """The best ``top`` children of a shape not tuned jointly before get :meth:`joint_tune`."""
-        fresh = [i for i in np.argsort(-fit, kind="stable") if fit[i] > REJECTED / 2
-                 and self._shape(children[i]) not in self._shapes][:top]
-        if not fresh:
-            return children, fit
-        children, fit = list(children), fit.copy()
-        for i in fresh:
-            self._shapes.add(self._shape(children[i]))
-            children[i], fit[i] = self.joint_tune(children[i], float(fit[i]))
-        return children, fit
 
     def compared(self, ratio: Node) -> Node:
         """A condition: ``ratio`` below or above a random level."""
@@ -772,7 +818,7 @@ class Evolver:
         try:
             if rng.random() < 0.65:
                 u = DIST if rng.random() < 0.7 else RATIO
-                x = random_tree(ps, u, int(rng.integers(1, 4)), rng)
+                x = random_tree(ps, u, int(rng.integers(2 if u == DIST else 1, 4)), rng)  # no distance at depth 1
                 smooth = ps[f"{['wilder', 'ema', 'sma'][int(rng.integers(3))]}:{u}"]
                 return Node(ps[f"div:{u},{u}"], (Node(smooth, (x, n)), Node(smooth, (Node(ps[f"abs:{u}"], (x,)), n))))
             x = random_tree(ps, PRICE, int(rng.integers(1, 3)), rng)
@@ -850,6 +896,13 @@ class Evolver:
             if gen == self.generations - 1:
                 break
             islands = [self._next(pop, fit) for pop, fit in islands]
+        for k, c in sorted(hall.items(), key=lambda kv: -kv[1].fitness)[: self.polish]:
+            program, fitness = self.refine(c.program, c.fitness)
+            if program.key != c.program.key:
+                key = self._signature.get(program.key, program.key) if self.dedupe else program.key
+                hall.pop(k)
+                if key not in hall or fitness > hall[key].fitness:
+                    hall[key] = Candidate(program, fitness, c.generation)
         if hall:
             best = self._select(list(hall.values()))
         else:
@@ -886,10 +939,7 @@ class Evolver:
         n_elite = max(1, int(round(len(pop) * self.elite)))
         elite = pop[:n_elite]
         children = self.breed(pop, fit, len(pop) - n_elite, {p.key for p in elite})
-        fits = np.array([self.fitness(c) for c in children])
-        if self.joint and self.tune_new:
-            children, fits = self._tune_new(children, fits, self.tune_new)
-        return elite + children, np.concatenate([fit[:n_elite], fits])
+        return elite + children, np.concatenate([fit[:n_elite], [self.fitness(c) for c in children]])
 
     def _migrate(self, islands: list) -> list:
         """Ring migration: each island's best few replace the worst of the next island."""

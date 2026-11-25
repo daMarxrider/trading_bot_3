@@ -18,7 +18,7 @@ from tradebot.evolve.modules import Library, Template, discover, rewrite
 from tradebot.evolve.primitives import (BOOL, DIST, FACTOR, HOLD, LAG, LEVELS, OSC, PRICE, RATIO, WINDOW,
                                         arith_unit)
 from tradebot.evolve.program import check, const, expand, random_program, simplify_tree
-from tradebot.evolve.search import SCRATCH_LIMITS
+from tradebot.evolve.search import SCRATCH_JOINT, SCRATCH_LIMITS, SCRATCH_NORMALISE, SCRATCH_REFINE
 from tradebot.indicators.base import INDICATORS
 
 from .conftest import make_ohlc
@@ -198,9 +198,11 @@ def test_evolver_from_scratch_settings():
     ev = Evolver(make_ohlc(800, seed=3), **SMALL)
     assert (ev.max_depth, ev.max_size) == SCRATCH_LIMITS and ev.ps.scratch
     assert ev.library is not None and ev.dedupe and ev.deflate and ev.tune == 3
+    assert (ev.joint, ev.normalise, ev.polish) == (SCRATCH_JOINT, SCRATCH_NORMALISE, SCRATCH_REFINE)
     plain_ev = Evolver(make_ohlc(800, seed=3), population=24, generations=1)
     assert (plain_ev.max_depth, plain_ev.max_size) == (6, 40) and plain_ev.library is None and not plain_ev.dedupe
     assert not plain_ev.deflate and plain_ev.tune == 0
+    assert (plain_ev.joint, plain_ev.normalise, plain_ev.polish) == (0, 0, 0)
     with pytest.raises(ValueError, match="indicators"):
         Evolver(make_ohlc(800), from_scratch=True, indicators=["rsi"])
 
@@ -228,6 +230,53 @@ def test_duplicates_count_once():
     assert fit[0] == pytest.approx(fit[1]) and ev._signature[a.key] == ev._signature[b.key]
     deduped = ev._distinct([a, b], fit)
     assert deduped[0] == fit[0] and deduped[1] < -1e8
+
+
+def ratio_rule(n, level, smooth="wilder", m=None):
+    """``smooth(diff(close, 1), n) / smooth(abs(diff(close, 1)), m) < level``: with wilder and ``m == n`` exactly
+    ``RSI(n) < 50 * (1 + level)``; ``ema(x, 2n - 1)`` is Wilder's ``n`` up to the start."""
+    move = node("diff:price", CLOSE, const(LAG, 1))
+    ratio = node("div:dist,dist", node(f"{smooth}:dist", move, const(WINDOW, n)),
+                 node(f"{smooth}:dist", node("abs:dist", move), const(WINDOW, m or n)))
+    return node("below:ratio", ratio, const(PS["below:ratio"].args[1], level))
+
+
+def test_normalised_ratios_are_generic_shapes_with_one_window():
+    ev = Evolver(make_ohlc(800, seed=3), **SMALL)
+    families = set()
+    for _ in range(40):
+        r = ev.normalised()
+        check(r, RATIO, ev.ps)
+        top, bottom = ({n.value for _, n in side.nodes() if n.is_const and n.spec is WINDOW} for side in r.args)
+        assert top and top == bottom  # numerator and denominator smoothed (or ranged) over one window
+        families.add(r.args[0].prim.name.split(":")[0])
+    assert families >= {"wilder", "ema", "sma", "sub"}  # RSI-like and stochastic-like shapes
+    cond = ev.compared(ev.normalised())
+    check(cond, BOOL, ev.ps)
+
+
+def test_joint_tuning_finds_the_ridge_one_step_at_a_time_misses():
+    df = hidden_rsi()
+    ev = Evolver(df, **{**SMALL, "seed": 1})
+    start = Program(ratio_rule(7, -0.4), node("held", const(HOLD, 5)))  # the right shape, the wrong window
+    fit = ev.fitness(start)
+    tuned, tuned_fit = ev.joint_tune(start, fit, draws=40)
+    assert tuned_fit >= fit + 1 and tuned_fit == ev.fitness(tuned)
+    assert ev.hill_climb(start, fit)[1] < tuned_fit
+
+
+def test_refine_ties_near_equal_constants_and_lands_on_the_hidden_rule():
+    df = hidden_rsi()
+    ev = Evolver(df, **{**SMALL, "seed": 1})
+    truth = Program(ratio_rule(14, -0.4), node("held", const(HOLD, 5)))
+    near = Program(ratio_rule(13, -0.42), node("held", const(HOLD, 5)))  # RSI(13) < 29
+    p, f = ev.refine(near, ev.fitness(near))
+    assert p.key == truth.key and f == ev.fitness(truth)
+    untied = Program(ratio_rule(26, -0.41, "ema", 27), node("held", const(HOLD, 5)))
+    p, f = ev.refine(untied, ev.fitness(untied))
+    windows = {n.value for _, n in p.entry.nodes() if n.is_const and n.spec is WINDOW}
+    assert len(windows) == 1 and f >= ev.fitness(untied) * 0.995  # one window now (ema 27 is wilder 14)
+    assert Evolver(df, **{**SMALL, "polish": 0}).polish == 0
 
 
 def test_a_run_from_scratch_reports_its_safeguards():
@@ -298,13 +347,15 @@ def hidden_rsi(n: int = 3000, seed: int = 0) -> pd.DataFrame:
 
 
 @pytest.mark.slow
-def test_from_scratch_nearly_rediscovers_a_hidden_rsi_rule():
-    """From scratch, evolve finds rules that trade much like a hidden ``RSI(14) < 30`` (held 5 candles).
+def test_from_scratch_rediscovers_a_hidden_rsi_rule():
+    """From scratch, evolve finds a rule that trades like a hidden ``RSI(14) < 30`` (held 5 candles) (#105).
 
-    It doesn't find RSI itself yet: the exact rule (``truth``) stays fitter, and the evolved rules are
-    "buy after a fall" variants. Single runs vary a lot (overlap 0.22-0.53 over 12 runs, and floating-point
-    differences between CPUs change which run you get), so this checks the mean over 4 seeds, far above
-    chance (a rule that is always in a trade overlaps ~0.1)."""
+    Newly built normalised ratios (``smooth(x) / smooth(abs(x))``) get their constants tuned jointly, so the
+    right shape is judged at its ridge, not at a random window and level. The found rules are RSI in another
+    form (``ema(diff, 26) / ema(abs(diff), 27) < -0.41`` is RSI 30 up to the smoothing) and are as fit as the
+    hidden one. Measured overlaps (Jaccard of the positions) over seeds 1-6: 0.77 0.58 0.80 0.78 0.78 0.85, against
+    0.45 0.37 0.32 0.41 0.33 0.39 before; single seeds can still miss, so most seeds must overlap by 0.7+
+    (a rule that is always in a trade overlaps ~0.1; floating-point differences between CPUs change the runs)."""
     df = hidden_rsi()
     truth = Program(node("below:osc", rsi_tree(14), const(LEVELS[OSC], 30.0)), node("held", const(HOLD, 5)))
     held = Evaluator(OHLC.from_frame(df)).positions(truth) > 0
@@ -313,8 +364,9 @@ def test_from_scratch_nearly_rediscovers_a_hidden_rsi_rule():
         ev = Evolver(df, from_scratch=True, population=500, generations=60, min_trades=0, seed=seed)
         res = ev.run()
         found = Evaluator(OHLC.from_frame(df)).positions(res.program) > 0
-        assert ev.fitness(truth) >= res.fitness  # the hidden rule is expressible and the fittest
         runs.append(((held & found).sum() / (held | found).sum(), (held & found).sum() / held.sum(),
                      res.fitness / ev.fitness(truth)))
-    overlap, recall, fitness = np.mean(runs, axis=0)
-    assert overlap >= 0.3 and recall >= 0.5 and fitness >= 0.7, np.round(runs, 2).tolist()
+    runs = np.array(runs)
+    hits = runs[:, 0] >= 0.7
+    assert hits.sum() >= 3, np.round(runs, 2).tolist()  # most seeds find the rule
+    assert (runs[hits, 1] >= 0.85).all() and (runs[hits, 2] >= 0.9).all(), np.round(runs, 2).tolist()
