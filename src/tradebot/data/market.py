@@ -81,8 +81,11 @@ SOURCES: dict[str, Source] = {s.column: s for s in (
     Source("fear_greed", "Fear & Greed index", 3 * DAY, pd.Timedelta(0), daily=True),
     Source("mvrv", "MVRV", 4 * DAY, DAY, daily=True),
     Source("active_addresses", "Active addresses", 4 * DAY, DAY, daily=True),
+    Source("exchange_netflow", "Exchange net flow", 4 * DAY, DAY, daily=True),
 )}
-COINMETRICS = {"mvrv": "CapMVRVCur", "active_addresses": "AdrActCnt"}
+#: column -> Coin Metrics metrics; the value is the first minus the others (net flow = inflow - outflow)
+COINMETRICS = {"mvrv": ("CapMVRVCur",), "active_addresses": ("AdrActCnt",),
+               "exchange_netflow": ("FlowInExUSD", "FlowOutExUSD")}
 
 
 def is_crypto(symbol: str) -> bool:
@@ -175,8 +178,8 @@ def fetch_fear_greed(get_json=http_json) -> pd.Series:
 def fetch_onchain(column: str, symbol: str, start, end, get_json=http_json) -> pd.Series:
     """A daily on-chain metric of ``symbol``'s base asset from the Coin Metrics community API (stamped 00:00 UTC of
     its day; known only once the day is over)."""
-    metric = COINMETRICS[column]
-    url = (f"{COINMETRICS_URL}?assets={base_asset(symbol)}&metrics={metric}&frequency=1d&page_size=10000"
+    metrics = COINMETRICS[column]
+    url = (f"{COINMETRICS_URL}?assets={base_asset(symbol)}&metrics={','.join(metrics)}&frequency=1d&page_size=10000"
            f"&start_time={_utc(start):%Y-%m-%d}&end_time={_utc(end):%Y-%m-%d}")
     times, values = [], []
     for _ in range(50):  # pages
@@ -184,14 +187,15 @@ def fetch_onchain(column: str, symbol: str, start, end, get_json=http_json) -> p
         if body.get("error"):
             raise MarketDataError(f"Coin Metrics: {body['error'].get('message', body['error'])}")
         for row in body.get("data", []):
-            if row.get(metric) is not None:
+            if all(row.get(m) is not None for m in metrics):
                 times.append(int(pd.Timestamp(row["time"]).timestamp() * 1000))
-                values.append(float(row[metric]))
+                first, *rest = (float(row[m]) for m in metrics)
+                values.append(first - sum(rest))
         url = body.get("next_page_url")
         if not url:
             break
     if not values:
-        raise MarketDataError(f"no {metric} data for {base_asset(symbol).upper()} (Coin Metrics covers the major coins)")
+        raise MarketDataError(f"no {column} data for {base_asset(symbol).upper()} (Coin Metrics covers the major coins)")
     return _series(times, values, column)
 
 

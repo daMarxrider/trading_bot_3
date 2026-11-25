@@ -53,9 +53,10 @@ def fake_json(url):
         return {"data": [{"value": str(v), "timestamp": str(int((T0 + pd.Timedelta(days=i)).timestamp()))}
                          for i, v in reversed(list(enumerate([10, 20, 30, 40, 50, 60, 70, 80, 90, 95])))]}
     assert "coinmetrics" in url and "assets=btc" in url
-    metric = "CapMVRVCur" if "CapMVRVCur" in url else "AdrActCnt"
+    metrics = [m for m in ("CapMVRVCur", "AdrActCnt", "FlowInExUSD", "FlowOutExUSD") if m in url]
     return {"data": [{"asset": "btc", "time": (T0 + pd.Timedelta(days=i)).strftime("%Y-%m-%dT00:00:00.000000000Z"),
-                      metric: str(1.0 + i)} for i in range(10)]}
+                      **{m: str((1.0 + i) * (0.5 if m == "FlowOutExUSD" else 1)) for m in metrics}}
+                     for i in range(10)]}
 
 
 def frame(n=40, freq="D", start=T0):
@@ -193,7 +194,7 @@ def test_open_interest_bucket_follows_the_candle():
 
 # -- indicators --------------------------------------------------------------------------------------
 def test_indicators_are_registered_and_flagged():
-    for name in ("funding", "open_interest", "oi_change", "fear_greed", "mvrv", "active_addresses"):
+    for name in ("funding", "open_interest", "oi_change", "fear_greed", "mvrv", "active_addresses", "exchange_netflow"):
         cls = INDICATORS.get(name)
         assert cls.market_data and not cls.overlay
     from tradebot.indicators.base import is_screenable
@@ -327,3 +328,9 @@ def test_cli_market_command_and_evolve_flag(monkeypatch):
     assert CliRunner().invoke(cli.app, ["market", "AAPL"]).exit_code != 0
     bad = CliRunner().invoke(cli.app, ["evolve", "BTC/USDT", "--market-data", "--from-scratch"])
     assert bad.exit_code != 0
+
+
+def test_exchange_netflow_is_inflow_minus_outflow():
+    from tradebot.data.market import fetch_onchain
+    out = fetch_onchain("exchange_netflow", "BTC/USDT", T0, T0 + pd.Timedelta(days=9), fake_json)
+    assert out.iloc[0] == 0.5 and out.iloc[3] == 2.0
