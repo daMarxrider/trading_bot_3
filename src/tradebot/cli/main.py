@@ -1986,7 +1986,7 @@ def market(symbol: Annotated[str, typer.Argument(help="A crypto pair, e.g. BTC/U
             value = last.iloc[-1]
             shown = {"funding_rate": f"{value * 100:+.4f} %", "open_interest": f"{value:,.0f}",
                      "fear_greed": f"{value:.0f}", "mvrv": f"{value:.2f}",
-                     "active_addresses": f"{value:,.0f}"}[column]
+                     "active_addresses": f"{value:,.0f}", "exchange_netflow": f"{value / 1e6:+,.0f} M USD"}[column]
             t.add_row(src.title, shown, f"{last.index[-1]:%Y-%m-%d %H:%M}", "[yellow]cached, offline[/]" if offline else "")
     console.print(t)
     if depth:

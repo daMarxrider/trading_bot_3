@@ -312,7 +312,8 @@ def _sample_ohlc(n: int, seed: int = 7) -> OHLC:
     volume = rng.lognormal(10, 0.5, n)  # so volume indicators are checked on real numbers, not NaN
     extra = {"funding_rate": rng.normal(1e-4, 1e-4, n), "open_interest": rng.lognormal(20, 0.1, n),
              "fear_greed": rng.uniform(0, 100, n), "mvrv": rng.uniform(0.8, 4, n),
-             "active_addresses": rng.lognormal(13, 0.1, n)}  # so market data indicators are checked on numbers
+             "active_addresses": rng.lognormal(13, 0.1, n),
+             "exchange_netflow": rng.normal(0, 2e8, n)}  # so market data indicators are checked on numbers
     return OHLC(open_, np.maximum(open_, close) + spread, np.minimum(open_, close) - spread, close, time, volume,
                 extra)
 
