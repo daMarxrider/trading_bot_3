@@ -1500,6 +1500,220 @@ def bot_resume():
     console.print("kill switch off")
 
 
+bots_app = typer.Typer(help="Several bots at once (bots.toml next to config.toml): define, run, watch, stop (#157).",
+                       no_args_is_help=True)
+app.add_typer(bots_app, name="bots")
+BotName = Annotated[str, typer.Argument(help="The bot's name in bots.toml", autocompletion=complete.bot_names)]
+
+
+def _load_bots():
+    from tradebot.live.manager import load_bots
+
+    try:
+        return load_bots()
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+
+
+def _save_bots(bots) -> None:
+    from tradebot.live.manager import save_bots
+
+    console.print(f"saved {save_bots(bots)}")
+
+
+@bots_app.command("list")
+def bots_list():
+    """The bots of bots.toml with their state, position and P&L (also those another process runs)."""
+    from tradebot.live.manager import BotManager, bots_path
+
+    bots = _load_bots()
+    if not bots.bots:
+        console.print(f"no bots yet ({bots_path()}); add one with `tradebot bots add`")
+        return
+    m = BotManager(bots)
+    t = Table(title="bots", caption=str(bots_path()))
+    for col in ("name", "symbol", "strategy", "tf", "mode", "enabled", "state", "position", "P&L", "last event"):
+        t.add_column(col, justify="right" if col in ("position", "P&L") else "left")
+    for r in m.snapshot():
+        state = "running (other process)" if r.state == "elsewhere" else r.state
+        pnl = f"[{'green' if r.pnl >= 0 else 'red'}]{'▲' if r.pnl > 0 else '▼' if r.pnl < 0 else ''}{r.pnl:+,.2f}[/]"
+        t.add_row(r.name, r.symbol, r.strategy, r.timeframe, r.mode, "yes" if r.enabled else "no", state,
+                  f"{r.position:.6g}", pnl, r.last_event)
+    console.print(t)
+    console.print(f"shared limits: {bots.limits.describe()}")
+
+
+@bots_app.command("add")
+def bots_add(
+    name: Annotated[str, typer.Argument(help="A name for the bot (unique)")],
+    symbol: Symbol,
+    algo: Algo,
+    broker: Broker = "binance",
+    tf: TF = "1h",
+    stake: Annotated[float, typer.Option(help="Max quote-currency value per entry")] = 100.0,
+    param: Params = [],
+    members: Members = None,
+    entry: Entry = None,
+    exit: Exit = None,
+    fills: Fills = None,
+    sizing: Sizing = None,
+    mode: Annotated[str, typer.Option(help="dry (nothing is sent), paper (the simulated account) or live (real "
+                                           "orders, only with `bots run --live`)",
+                                      autocompletion=complete.choices(("dry", "nothing is sent"),
+                                                                      ("paper", "simulated account"),
+                                                                      ("live", "real orders")))] = "dry",
+    sandbox: Annotated[bool, typer.Option(help="Use the exchange testnet (ccxt brokers)")] = False,
+    disabled: Annotated[bool, typer.Option(help="Don't start it with `bots run` (only by name)")] = False,
+    max_daily_loss: Annotated[float, typer.Option(help="Per-bot limit, as in `bot run` (0 = off)")] = 0.0,
+    max_drawdown: Annotated[float, typer.Option(help="Per-bot limit, as in `bot run` (0 = off)")] = 0.0,
+    max_exposure: Annotated[float, typer.Option(help="Per-bot limit, as in `bot run` (0 = off)")] = 0.0,
+    max_order: Annotated[float, typer.Option(help="Per-bot limit, as in `bot run` (0 = off)")] = 0.0,
+    replace: Annotated[bool, typer.Option(help="Overwrite a bot of that name")] = False,
+):
+    """Add a bot to bots.toml (dry run unless --mode paper/live). Parameters and rules work as in `bot run`."""
+    from tradebot.live.manager import BotSpec
+
+    try:
+        make_algo(algo, param, members, entry, exit, fills, sizing)  # fail now, not when it starts
+    except KeyError as e:
+        raise typer.BadParameter(str(e.args[0])) from None
+    risk = {k: v for k, v in (("max_daily_loss", max_daily_loss), ("max_drawdown", max_drawdown),
+                              ("max_exposure", max_exposure), ("max_order_value", max_order)) if v}
+    try:
+        spec = BotSpec(name, symbol, algo, broker, tf, stake, mode, parse_kv(param),
+                       members.split(",") if members else None, entry, exit, fills, sizing, sandbox, not disabled, risk)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+    bots = _load_bots()
+    if not replace and any(b.name == spec.name for b in bots.bots):
+        raise typer.BadParameter(f"there already is a bot named {spec.name!r} (--replace overwrites it)")
+    bots.put(spec)
+    _save_bots(bots)
+
+
+@bots_app.command("remove")
+def bots_remove(name: BotName):
+    """Delete a bot from bots.toml (its saved state stays in the config folder's bots/ directory)."""
+    bots = _load_bots()
+    try:
+        bots.remove(name)
+    except KeyError as e:
+        raise typer.BadParameter(str(e.args[0])) from None
+    _save_bots(bots)
+
+
+def _set_enabled(name: str, on: bool) -> None:
+    bots = _load_bots()
+    try:
+        bots.get(name).enabled = on
+    except KeyError as e:
+        raise typer.BadParameter(str(e.args[0])) from None
+    _save_bots(bots)
+
+
+@bots_app.command("enable")
+def bots_enable(name: BotName):
+    """Start this bot with `bots run` again."""
+    _set_enabled(name, True)
+
+
+@bots_app.command("disable")
+def bots_disable(name: BotName):
+    """Leave this bot out of `bots run` (it still starts by name)."""
+    _set_enabled(name, False)
+
+
+@bots_app.command("limits")
+def bots_limits(
+    max_total_exposure: Annotated[Optional[float], typer.Option(
+        help="Reject entries that push all bots' open positions together above this value (0 = off)")] = None,
+    max_open_positions: Annotated[Optional[int], typer.Option(
+        help="Reject entries while this many bots hold a position (0 = off)")] = None,
+    max_daily_loss: Annotated[Optional[float], typer.Option(
+        help="Halt every bot for the rest of the UTC day when all of them together lost this much (0 = off)")] = None,
+    close_on_halt: Annotated[Optional[bool], typer.Option(
+        help="Sell the open positions when that daily limit halts the bots")] = None,
+):
+    """Show or set the account limits all bots share. Without options it only shows them."""
+    bots = _load_bots()
+    changes = {k: v for k, v in (("max_total_exposure", max_total_exposure), ("max_open_positions", max_open_positions),
+                                 ("max_daily_loss", max_daily_loss), ("close_on_halt", close_on_halt)) if v is not None}
+    if changes:
+        from tradebot.live.manager import AccountLimits
+        from dataclasses import asdict
+
+        bots.limits = AccountLimits(**{**asdict(bots.limits), **changes})
+        _save_bots(bots)
+    console.print(f"shared limits: {bots.limits.describe()}"
+                  + (" · positions are sold on a halt" if bots.limits.close_on_halt else ""))
+
+
+@bots_app.command("run")
+def bots_run(
+    names: Annotated[Optional[list[str]], typer.Argument(help="Only these bots (default: every enabled one)",
+                                                         autocompletion=complete.bot_names)] = None,
+    live: Annotated[bool, typer.Option(help="Let the bots with mode = live place real orders")] = False,
+    once: Annotated[bool, typer.Option(help="Evaluate one candle per bot and exit")] = False,
+    journal: Annotated[bool, typer.Option(help="Store every order in the trade journal")] = True,
+):
+    """Run the bot set until Ctrl+C: every bot right away, then just after each of its candles closes.
+
+    Live bots are skipped unless --live. `bots stop NAME`, the app's Bots page or `bot kill` stop them."""
+    from tradebot.journal import Journal
+    from tradebot.live.manager import BotManager
+
+    bots = _load_bots()
+    if names:
+        missing = [n for n in names if n not in {b.name for b in bots.bots}]
+        if missing:
+            raise typer.BadParameter(f"no bot named {', '.join(missing)}")
+    wanted = [b for b in bots.bots if (b.name in names if names else b.enabled)]
+    if not wanted:
+        console.print("no bots to run: add one with `tradebot bots add` (or enable one)")
+        raise typer.Exit(1)
+    confirm_live_risk(live and any(b.mode == "live" for b in wanted))
+
+    def show(name, e):
+        console.print(f"[dim]{e.time:%Y-%m-%d %H:%M}[/] [bold]{name}[/] {e.symbol} target={e.target:.2f} "
+                      f"price={e.price:.6g} → [bold]{e.action}[/] {e.amount:.6g}"
+                      + (" [yellow](dry run)[/]" if e.dry_run else "") + (f" [{e.note}]" if e.note else ""))
+
+    m = BotManager(bots, allow_live=live, journal_factory=Journal if journal else None, on_event=show)
+    for spec in wanted:
+        try:
+            m.start(spec.name)
+            mode = {"live": "[red]LIVE[/]", "paper": "[cyan]paper[/]", "dry": "[yellow]dry run[/]"}[spec.mode]
+            console.print(f"started {spec.name}: {spec.describe()} on {spec.broker_name}:{spec.symbol} "
+                          f"{spec.timeframe}, stake {spec.stake:g} · {mode}")
+        except Exception as e:
+            console.print(f"[red]not started {spec.name}:[/] {e}")
+    if not m.running():
+        raise typer.Exit(1)
+    console.print(f"shared limits: {bots.limits.describe()}")
+    try:
+        m.run(max_ticks=1 if once else None)
+    except KeyboardInterrupt:
+        console.print("stopping")
+    finally:
+        m.shutdown()
+
+
+@bots_app.command("stop")
+def bots_stop(
+    names: Annotated[Optional[list[str]], typer.Argument(help="The bots to stop", autocompletion=complete.bot_names)] = None,
+    all_: Annotated[bool, typer.Option("--all", help="Stop every bot")] = False,
+):
+    """Ask the process that runs a bot (`bots run` or the app) to stop it, within about a second."""
+    from tradebot.live.manager import request_stop
+
+    targets = [b.name for b in _load_bots().bots] if all_ else list(names or [])
+    if not targets:
+        raise typer.BadParameter("name a bot or use --all")
+    for n in targets:
+        request_stop(n)
+    console.print(f"stop requested: {', '.join(targets)}")
+
+
 
 paper_app = typer.Typer(help="The simulated paper trading account.", no_args_is_help=True)
 app.add_typer(paper_app, name="paper")

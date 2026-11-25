@@ -64,6 +64,8 @@ class MarketDataEngine:
         """``disk``: True = the cache as config.toml sets it up, False/None = memory only.
         ``currency_lookup``: symbol -> the currency a stock is quoted in (for pairs across currencies)."""
         self.currency_lookup = currency_lookup
+        #: oldest FX candle (a timedelta) allowed for an intraday bar of a cross-currency pair; None: 2 timeframes
+        self.max_fx_age: pd.Timedelta | None = None
         self.providers = providers if providers is not None else default_providers()
         self._cache: dict[tuple, pd.DataFrame] | None = {} if cache else None
         self.disk = DiskCache.from_config() if disk is True else (disk or None)
@@ -165,23 +167,36 @@ class MarketDataEngine:
 
     def _in_currency_of(self, legs, b, timeframe, start, end, bars) -> pd.DataFrame:
         """The second leg's candles in the first leg's currency, so the gap isn't partly an exchange rate.
-        Daily and longer only: an intraday stock candle has no FX candle closing with it (#120)."""
+        On intraday timeframes bars without a fresh enough FX candle are dropped (#120)."""
         try:
             (ca, fa), (cb, fb) = (quote_currency(leg, self.currency_lookup) for leg in legs)
         except Exception as exc:
             raise DataUnavailable(f"{legs[0]}:{legs[1]}: can't tell which currencies the legs are quoted in ({exc})") from exc
         if ca == cb:
             return b * fb / fa if fa != fb else b
-        if to_timedelta(timeframe) < pd.Timedelta(days=1):
-            raise DataUnavailable(f"{legs[0]} is in {ca} and {legs[1]} in {cb}: pairs across currencies need a daily "
-                                  "or longer timeframe (intraday: issue #120)")
+        step = to_timedelta(timeframe)
         fx_symbol = f"{cb}{ca}=X"  # units of ca per unit of cb
+        intraday = step < pd.Timedelta(days=1)
+        # Intraday: the last FX candle at or before each bar, but not older than ``max_fx_age`` (twice the
+        # timeframe by default). Bars beyond that (FX closed, or a stock trading while the FX feed has a gap)
+        # are dropped rather than priced with a stale rate (#120). Daily and longer: any earlier rate applies.
+        max_age = self.max_fx_age if self.max_fx_age is not None else 2 * step
         try:
-            fx = self.get_ohlc(fx_symbol, timeframe, _utc(start) - pd.Timedelta(days=10) if start is not None else None,
-                               end, AssetClass.STOCK, bars + 10 if bars else None)
+            if intraday and not b.empty:  # FX trades around the clock: ask for the span of the stock candles
+                fx = self.get_ohlc(fx_symbol, timeframe, b.index[0] - max_age, b.index[-1] + step, AssetClass.STOCK)
+            else:
+                fx = self.get_ohlc(fx_symbol, timeframe, _utc(start) - pd.Timedelta(days=10) if start is not None else None,
+                                   end, AssetClass.STOCK, bars + 10 if bars else None)
         except DataUnavailable as exc:
             raise DataUnavailable(f"{legs[0]}:{legs[1]}: no {cb}->{ca} exchange rate ({exc})") from exc
-        rate = fx["close"].reindex(fx.index.union(b.index)).ffill().reindex(b.index)  # the last rate at or before
+        union = fx.index.union(b.index)
+        rate = fx["close"].reindex(union).ffill().reindex(b.index)  # the last rate at or before
+        if intraday:
+            used = pd.Series(fx.index, index=fx.index).reindex(union).ffill().reindex(b.index)
+            rate = rate[(pd.Series(b.index, index=b.index) - used) <= max_age]
+            if rate.empty:
+                raise DataUnavailable(f"{legs[0]}:{legs[1]}: no {cb}->{ca} exchange rate within {max_age} of any candle")
+            b = b.loc[rate.index]
         if rate.isna().any():
             b, rate = b[rate.notna()], rate.dropna()
         out = b.copy()

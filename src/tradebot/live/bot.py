@@ -80,6 +80,11 @@ class TradingBot:
     stream: object | None = None  #: a :class:`~tradebot.data.stream.MarketStream`: act inside the candle (#158)
     levels: dict | None = field(default=None, init=False, repr=False)  #: the intrabar exits for the current candle
     _levels_for: pd.Timestamp | None = field(default=None, init=False, repr=False)  #: the candle they apply to
+    #: limits shared with other bots (#157): ``check(bot)`` returns a halt message or None, ``check_entry(bot,
+    #: value)`` a rejection or None, ``close_on_halt`` sells the position on a shared halt; see :mod:`tradebot.live.manager`
+    account: object | None = None
+    realized: float = 0.0  #: profit of the closed trades since start (quote currency, before fees)
+    last_price: float = 0.0  #: the last closed candle's close
 
     def _risk_trigger(self, e: RiskEvent) -> None:
         notify.notify("risk", f"Risk guard: {self.symbol} {e.kind}", e.message)
@@ -137,6 +142,7 @@ class TradingBot:
             self.holding, self.fraction = 0.0, 0.0
         else:
             self.holding, self.fraction = self.holding - event.amount, target
+        self.realized += (fill - self.entry_price) * event.amount
         if self.guard:
             self.guard.record_trade((fill - self.entry_price) * event.amount)
             self.guard.check()  # a loss that breaks a limit halts right away
@@ -149,7 +155,7 @@ class TradingBot:
             target, size = float(signal.iloc[-1]), float(sizes.iloc[-1])
         else:
             target = float(self.algorithm.run(df).iloc[-1])
-        price = float(df["close"].iloc[-1])
+        price = self.last_price = float(df["close"].iloc[-1])
         event = BotEvent(datetime.now(timezone.utc), self.symbol, target, "hold", price, dry_run=self.dry_run)
         fraction = self.fraction if self.fraction > 0 else 1.0
         halted = self.guard.check(self.holding * (price - self.entry_price) if self.holding > 0 else 0.0) \
@@ -157,6 +163,10 @@ class TradingBot:
         if halted:
             event.note = f"halted: {halted.message}"
             if self.risk.close_on_halt and self.holding > 0:
+                self._sell(event)
+        elif self.account is not None and (shared := self.account.check(self)):
+            event.note = f"halted: {shared}"
+            if getattr(self.account, "close_on_halt", False) and self.holding > 0:
                 self._sell(event)
         elif target > 0.5 and self.holding <= 0:
             event.action, event.amount = "buy", self.stake * size / price
@@ -167,6 +177,10 @@ class TradingBot:
                 veto = self.guard.check_entry(event.amount, price, self.holding, market)
                 if veto:
                     event.action, event.amount, event.note = "hold", 0.0, f"rejected: {veto.message}"
+            if event.action == "buy" and self.account is not None:
+                veto = self.account.check_entry(self, event.amount * price)
+                if veto:
+                    event.action, event.amount, event.note = "hold", 0.0, f"rejected: {veto}"
             if event.action == "buy":
                 if not self.dry_run:
                     event.order = self.broker.place_order(self.symbol, Side.BUY, event.amount)

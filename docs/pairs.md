@@ -6,8 +6,7 @@ BTC and ETH. For the idea behind it see [Pairs trading](pairs-trading.md); the t
 
 ## Using the page
 
-1. Enter the two symbols **A** and **B**, the **timeframe** (the intraday ones are hidden: currency conversion works
-   on daily and longer candles), the number of **candles** (750 by default), the **window** (60 candles by default)
+1. Enter the two symbols **A** and **B**, the **timeframe**, the number of **candles** (750 by default), the **window** (60 candles by default)
    and the **hedge ratio** method.
 2. **Analyse**. The top plot shows both assets normalised to 100 at the start. The bottom plot shows the gap as a
    z-score with lines at 0, +2 and -2.
@@ -23,7 +22,11 @@ BTC and ETH. For the idea behind it see [Pairs trading](pairs-trading.md); the t
 gap, long reacts slowly to a changed relationship. **Hedge ratio** is *rolling* (OLS over the window) or *kalman* (an
 adaptive filter without a window; the hedge ratio follows the pair smoothly).
 
-Prices in different currencies are converted into A's currency.
+Prices in different currencies are converted into A's currency with a Yahoo FX series (`EURUSD=X`). On daily and
+longer candles the last rate at or before each candle applies. On intraday candles the last FX candle at or before
+each bar applies, but only if it is at most two timeframes old; bars without a fresh rate (weekends, FX gaps) are
+dropped instead of being priced with a stale one. FX intraday history has Yahoo's usual limits (1m: 7 days, 5m to
+30m: 60 days, 1h/4h: 730 days). In code the age limit is `MarketDataEngine.max_fx_age`.
 
 ## `A:B` as a symbol
 
