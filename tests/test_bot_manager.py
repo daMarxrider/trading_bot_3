@@ -297,7 +297,7 @@ def test_cli_add_list_limits_run_stop(tmp_path, monkeypatch):
     assert "started eth" in out.output and "not started" not in out.output  # the disabled live bot isn't tried
     out = r.invoke(app, ["bots", "run", "sol", "--once", "--no-journal"])  # live, without --live
     assert out.exit_code == 1 and "live bots run from the terminal" in " ".join(out.output.split())
-    monkeypatch.setattr("tradebot.cli.main.console.width", 200)
+    monkeypatch.setattr("tradebot.cli.main.console._width", 200)  # undo restores None, i.e. auto width
     listed = r.invoke(app, ["bots", "list"])
     assert listed.exit_code == 0 and "eth" in listed.output and "stopped" in listed.output
     assert r.invoke(app, ["bots", "stop", "eth"]).exit_code == 0
