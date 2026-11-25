@@ -6,8 +6,9 @@
 |---|---|---|---|
 | `config.toml` | `~/.config/tradebot/` | `~/.config/tradebot/` | `%USERPROFILE%\.config\tradebot\` |
 | `combos.toml` (saved combos) | next to `config.toml` | same | same |
+| `bots.toml` (the [bot set](bots.md)) | next to `config.toml` | same | same |
 | `plugins/`, `themes/` | `~/.config/tradebot/plugins/`, `.../themes/` | same | same |
-| `settings.json`, `paper_account.json`, `journal.sqlite`, `alerts.json`, `pair_bots/`, `KILL` (kill switch) | `$XDG_CONFIG_HOME/tradebot/` (usually `~/.config/tradebot/`) | `~/Library/Application Support/tradebot/` | `%APPDATA%\tradebot\` |
+| `settings.json`, `paper_account.json`, `journal.sqlite`, `alerts.json`, `pair_bots/`, `bots/` (bot state), `KILL` (kill switch) | `$XDG_CONFIG_HOME/tradebot/` (usually `~/.config/tradebot/`) | `~/Library/Application Support/tradebot/` | `%APPDATA%\tradebot\` |
 | Cache (candles, symbol lists) | `$XDG_CACHE_HOME/tradebot/` (usually `~/.cache/tradebot/`) | `~/Library/Caches/tradebot/` | `%LOCALAPPDATA%\tradebot\Cache\` |
 | Shell completion lookups | in the cache folder | same | same |
 
@@ -19,6 +20,7 @@ delete. Saved evolver results (`--save`) go to the first plugin folder.
 | Variable | Effect |
 |---|---|
 | `TRADEBOT_CONFIG` | path of `config.toml` (its folder also holds `combos.toml`) |
+| `TRADEBOT_BOTS` | path of the bot set (default `bots.toml` next to `config.toml`) |
 | `TRADEBOT_PLUGIN_DIR` | plugin folder(s), separated like `PATH`; replaces `~/.config/tradebot/plugins` |
 | `TRADEBOT_PAIR_STATE_DIR` | folder of the live pair bot's state files (default: `pair_bots/` in the config folder) |
 | `TRADEBOT_JOURNAL` | path of the trade journal database (default `journal.sqlite` in the config folder) |

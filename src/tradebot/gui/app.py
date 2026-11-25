@@ -34,6 +34,7 @@ from tradebot.data.cache import DiskCache
 from tradebot.data.providers import quiet_yfinance
 from tradebot.gui.about import AboutDialog
 from tradebot.gui.alerts import AlertsDialog, AlertWatcher
+from tradebot.gui.bots import BotsView
 from tradebot.gui.chart import ChartView
 from tradebot.gui.common import run_async
 from tradebot.gui.evolve import EvolveView
@@ -81,13 +82,18 @@ class MainWindow(QMainWindow):
         self.lab = BacktestView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)
         self.evolve = EvolveView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)
         self.journal = JournalView(engine, themes)
+        from tradebot.journal import Journal
+
+        self.bots = BotsView(themes, settings, symbol_search=search, journal_factory=Journal)  # #157
+        self.bots.running_changed.connect(self._bots_running)
         self.scripts_page = ScriptsView(themes)
         self.scripts_page.reloaded.connect(self.scanner._script_reloaded)  # the scanner and the charts follow a reload
         groups = [("Markets", [("Chart", "chart", self.chart), ("Screener", "screener", self.screener),
                                ("Scanner", "scanner", self.scanner), ("Pairs", "pairs", self.pairs), ("News", "news", self.news)]),
                   ("Strategies", [("Backtest", "flask", self.lab), ("Evolve", "dna", self.evolve), ("Basket", "basket", self.basket),
                                   ("Scripts", "code", self.scripts_page)]),
-                  ("Account", [("Portfolio", "wallet", self.portfolio), ("Journal", "journal", self.journal)])]
+                  ("Account", [("Bots", "bot", self.bots), ("Portfolio", "wallet", self.portfolio),
+                               ("Journal", "journal", self.journal)])]
         pages = [item for _, items in groups for item in items]
 
         self.stack = QStackedWidget()
@@ -195,9 +201,8 @@ class MainWindow(QMainWindow):
         lay.addLayout(right, 1)
         self.setCentralWidget(root)
         self.setStatusBar(QStatusBar())
-        # the desktop app never places orders, so the chip says so; the kill switch lives next to it (#154, #191)
-        self.mode_chip = QLabel("RESEARCH · NO ORDERS", objectName="ModeChip",
-                                toolTip="The desktop app only analyses. Live bots run with `tradebot bot run`.")
+        # the desktop app never places real orders, so the chip says so; the kill switch lives next to it (#154, #191)
+        self.mode_chip = QLabel("RESEARCH · NO ORDERS", objectName="ModeChip")
         self.kill_btn = QPushButton("Kill switch", objectName="Kill", checkable=True,
                                     toolTip="Stops every running live bot at its next check (same as `tradebot bot kill`)")
         self.kill_btn.setChecked(kill_active())
@@ -219,6 +224,13 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(self.chart.opengl_note, 15000)
         run_async(partial(warm_up, engine, symbols), lambda _: None, lambda err: None)
 
+    def _bots_running(self, _modes=None):
+        self._kill_ui(self.kill_btn.isChecked())
+
+    def closeEvent(self, event):
+        self.bots.shutdown()  # the bots' state is saved, they resume when started again
+        super().closeEvent(event)
+
     def show_about(self):
         AboutDialog(self).exec()
 
@@ -237,8 +249,17 @@ class MainWindow(QMainWindow):
     def _kill_ui(self, on: bool):
         self.kill_banner.setVisible(on)
         self.kill_btn.setText("Kill switch ON" if on else "Kill switch")
-        self.mode_chip.setProperty("state", "kill" if on else "")
-        self.mode_chip.setText("KILL SWITCH ON" if on else "RESEARCH · NO ORDERS")
+        modes = self.bots.manager.running() and sorted({self.bots.bots.get(n).mode for n in self.bots.manager.running()})
+        if on:
+            state, text = "kill", "KILL SWITCH ON"
+        elif modes:  # dry-run and paper bots run in the app (#157): still no real order
+            state, text = "bots", ("PAPER BOTS" if "paper" in modes else "DRY-RUN BOTS") + " · NO REAL ORDERS"
+        else:
+            state, text = "", "RESEARCH · NO ORDERS"
+        self.mode_chip.setProperty("state", state)
+        self.mode_chip.setText(text)
+        self.mode_chip.setToolTip("The app runs only dry-run and paper bots (Bots page); live bots run with "
+                                  "`tradebot bots run --live` or `tradebot bot run --live`.")
         self.mode_chip.style().unpolish(self.mode_chip)
         self.mode_chip.style().polish(self.mode_chip)
 

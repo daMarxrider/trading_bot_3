@@ -528,6 +528,91 @@ Notification channels ([notify.*] in config.toml): Telegram, Discord, webhook, e
 
 Send a test message to every enabled channel and report which worked.
 
+## `tradebot bots`
+
+Several bots at once (bots.toml next to config.toml): define, run, watch, stop (#157).
+
+## `tradebot bots list`
+
+The bots of bots.toml with their state, position and P&L (also those another process runs).
+
+## `tradebot bots add`
+
+Add a bot to bots.toml (dry run unless --mode paper/live). Parameters and rules work as in `bot run`.
+
+Arguments: `NAME`, `SYMBOL`, `ALGO`
+
+| Option | Default | Description |
+|---|---|---|
+| `--broker` | `binance` | Registered broker name |
+| `--tf` | `1h` | Timeframe: 1m 5m 15m 30m 1h 4h 1d 1w |
+| `--stake` | `100.0` | Max quote-currency value per entry |
+| `--param`, `-p` |  | Algorithm parameter, e.g. -p lower=30 |
+| `--members` |  | Comma-separated members for the 'vote' ensemble, or for the 'pool' (strategies and indicators) |
+| `--entry` |  | Combo entry rule (with the 'combo' strategy), e.g. "elliott_wave & close>sma(200)" or "weighted(rsi_threshold:0.5, macd_cross:0.5) >= 0.6" |
+| `--exit` |  | Combo exit rule, e.g. "macd_cross \| stop_atr(2)" (default: when the entry rule stops holding) |
+| `--fills` |  | Combo fills: close (stops, take-profits and limit entries checked on the close) or intrabar (filled inside the candle against its high/low, at the open on a gap; stop first when both are hit) |
+| `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15 |
+| `--mode` | `dry` | dry (nothing is sent), paper (the simulated account) or live (real orders, only with `bots run --live`) |
+| `--sandbox`, `--no-sandbox` |  | Use the exchange testnet (ccxt brokers) |
+| `--disabled`, `--no-disabled` |  | Don't start it with `bots run` (only by name) |
+| `--max-daily-loss` |  | Per-bot limit, as in `bot run` (0 = off) |
+| `--max-drawdown` |  | Per-bot limit, as in `bot run` (0 = off) |
+| `--max-exposure` |  | Per-bot limit, as in `bot run` (0 = off) |
+| `--max-order` |  | Per-bot limit, as in `bot run` (0 = off) |
+| `--replace`, `--no-replace` |  | Overwrite a bot of that name |
+
+## `tradebot bots remove`
+
+Delete a bot from bots.toml (its saved state stays in the config folder's bots/ directory).
+
+Arguments: `NAME`
+
+## `tradebot bots enable`
+
+Start this bot with `bots run` again.
+
+Arguments: `NAME`
+
+## `tradebot bots disable`
+
+Leave this bot out of `bots run` (it still starts by name).
+
+Arguments: `NAME`
+
+## `tradebot bots limits`
+
+Show or set the account limits all bots share. Without options it only shows them.
+
+| Option | Default | Description |
+|---|---|---|
+| `--max-total-exposure` |  | Reject entries that push all bots' open positions together above this value (0 = off) |
+| `--max-open-positions` |  | Reject entries while this many bots hold a position (0 = off) |
+| `--max-daily-loss` |  | Halt every bot for the rest of the UTC day when all of them together lost this much (0 = off) |
+| `--close-on-halt`, `--no-close-on-halt` |  | Sell the open positions when that daily limit halts the bots |
+
+## `tradebot bots run`
+
+Run the bot set until Ctrl+C: every bot right away, then just after each of its candles closes. Live bots are skipped unless --live. `bots stop NAME`, the app's Bots page or `bot kill` stop them.
+
+Arguments: `NAMES` (optional)
+
+| Option | Default | Description |
+|---|---|---|
+| `--live`, `--no-live` |  | Let the bots with mode = live place real orders |
+| `--once`, `--no-once` |  | Evaluate one candle per bot and exit |
+| `--journal`, `--no-journal` | `True` | Store every order in the trade journal |
+
+## `tradebot bots stop`
+
+Ask the process that runs a bot (`bots run` or the app) to stop it, within about a second.
+
+Arguments: `NAMES` (optional)
+
+| Option | Default | Description |
+|---|---|---|
+| `--all` |  | Stop every bot |
+
 ## `tradebot paper`
 
 The simulated paper trading account.
