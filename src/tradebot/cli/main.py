@@ -1414,6 +1414,8 @@ def bot_run(
     close_on_halt: Annotated[bool, typer.Option(help="Sell the open position when a limit halts the bot")] = False,
     paper: Annotated[bool, typer.Option(help="Trade a simulated account that survives restarts (see `tradebot paper`)")] = False,
     journal: Annotated[bool, typer.Option(help="Store every order in the trade journal (`tradebot journal`)")] = True,
+    stream: Annotated[bool, typer.Option(help="Watch the price between closes over a websocket (polling as the "
+                                              "fallback): intrabar stops, take-profits and risk halts act at once")] = True,
 ):
     """Run an algorithm live against a broker (dry run unless --live or --paper). Limits are off at 0; `bot kill` stops it."""
     from tradebot.journal import Journal
@@ -1438,6 +1440,15 @@ def bot_run(
                          + (f" order {e.order.id} {e.order.status.value}" if e.order else "")))
     mode = "[red]LIVE[/]" if live else "[cyan]paper[/]" if broker == "paper" else "[yellow]dry run[/]"
     console.print(f"bot {algo} on {broker}:{symbol} {tf}, stake {stake} · {mode} · {b.execution_mode.value}")
+    if stream and not once:
+        from tradebot.data.stream import open_stream
+
+        try:
+            bot.stream = open_stream(symbol, tf, broker=b)
+            bot.stream.on_state(lambda state, note: console.print(f"[dim]price stream: {state}"
+                                                                  + (f" ({note})" if note else "") + "[/]"))
+        except ValueError as exc:
+            console.print(f"[yellow]no price stream: {exc}; acting at the closes only[/]")
     try:
         bot.run(max_steps=1 if once else None)
     except KeyboardInterrupt:

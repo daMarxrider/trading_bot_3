@@ -13,6 +13,14 @@ one currency (see [Pairs](pairs.md)).
 
 The chart reopens with the symbol, timeframe, indicators and signal you had when you closed it, saved or not.
 
+**Live** (next to Load) keeps the last candle moving with the market: its high, low and close follow every price, and
+a new candle appears when the next one opens; indicators and signals redraw with it, at most once a second. Crypto
+streams from the exchange's websocket, stocks and ETFs from Yahoo's price stream during market hours. When the
+websocket isn't available or keeps dropping, the chart polls for prices every few seconds instead and the button's
+icon turns into a warning sign (its tooltip says why); it tries the websocket again after five minutes. Live follows
+one symbol, not a ratio (`A:B`), and switches to the new symbol or timeframe when you load another. Details:
+[Streaming prices](streaming.md).
+
 ## Candles, line, volume
 
 * **Line** toggles between candles and a line chart. Right-click offers the same.

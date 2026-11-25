@@ -14,13 +14,20 @@ the whole stake; the target it follows is the algorithm's own signal.
 A target above 0.5 buys; once in, a lower target sells that share of the holding (a combo's take-profits in
 steps scale out, #150) and a target of 0 sells everything. The bot follows the same rules as the backtest
 (the algorithm decides on the closed candles), but acts at the close: a combo's intrabar stop that the
-backtest fills inside a candle is sold here at that candle's close (acting inside the candle needs streaming
-data, #158).
+backtest fills inside a candle is sold here at that candle's close.
+
+With a ``stream`` (:class:`tradebot.data.stream.MarketStream`, #158) the bot also watches the price between the
+closes. A combo with ``fills="intrabar"`` then sells inside the candle when the candle's low reaches its stop
+or its high a take-profit (the levels the backtest fills against, :meth:`~tradebot.algorithms.combo.Combo.
+exit_levels`), and the risk guard checks the open profit on every price, so a halt with ``close_on_halt``
+sells right away. Entries (a limit entry too) still go in at the close. Without the stream, or when it falls
+back to polling, the same happens on every poll.
 """
 
 from __future__ import annotations
 
 import logging
+import queue
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -70,6 +77,9 @@ class TradingBot:
     entry_price: float = 0.0  #: price the current position was bought at
     guard: RiskGuard | None = field(default=None, init=False, repr=False)
     journal: Journal | None = None  #: every order is stored here (#159); see :mod:`tradebot.journal`
+    stream: object | None = None  #: a :class:`~tradebot.data.stream.MarketStream`: act inside the candle (#158)
+    levels: dict | None = field(default=None, init=False, repr=False)  #: the intrabar exits for the current candle
+    _levels_for: pd.Timestamp | None = field(default=None, init=False, repr=False)  #: the candle they apply to
 
     def _risk_trigger(self, e: RiskEvent) -> None:
         notify.notify("risk", f"Risk guard: {self.symbol} {e.kind}", e.message)
@@ -164,26 +174,125 @@ class TradingBot:
                 self.entry_price = (event.order.price if event.order else None) or price
         elif self.holding > 0 and target < fraction - 1e-9:
             self._sell(event, target)
+        if self.stream is not None:
+            self.levels = exit_levels(self.algorithm, df) if self.holding > 0 else None
+            self._levels_for = df.index[-1] + to_timedelta(self.timeframe) if len(df) else None
+        return self._finish(event)
+
+    def _finish(self, event: BotEvent) -> BotEvent:
         self.events.append(event)
         self._journal(event)
-        log.info("%s %s target=%.2f price=%.6g amount=%.6g%s%s", self.symbol, event.action, target, price,
-                 event.amount, " (dry run)" if self.dry_run else "", f" [{event.note}]" if event.note else "")
+        log.info("%s %s target=%.2f price=%.6g amount=%.6g%s%s", self.symbol, event.action, event.target,
+                 event.price, event.amount, " (dry run)" if self.dry_run else "",
+                 f" [{event.note}]" if event.note else "")
         if self.on_event:
             self.on_event(event)
         return event
 
+    def on_price(self, price: float, low: float | None = None, high: float | None = None) -> BotEvent | None:
+        """A price between two closes (#158): sell on a stop, a take-profit or a risk halt inside the candle.
+
+        ``low``/``high``: the extremes of the candle so far (from the stream's forming candle), so a level the
+        price went through between two updates counts too. Returns the event when the bot sold, else None."""
+        if self.holding <= 0:
+            return None
+        low = price if low is None else min(low, price)
+        high = price if high is None else max(high, price)
+        event = BotEvent(datetime.now(timezone.utc), self.symbol, self.fraction, "hold", price, dry_run=self.dry_run)
+        if self.guard:
+            halted = self.guard.check(self.holding * (price - self.entry_price))
+            if halted:
+                if not self.risk.close_on_halt:
+                    return None
+                event.target = 0.0
+                self._sell(event)
+                event.note = f"halted inside the candle: {halted.message}"
+                self.levels = None
+                return self._finish(event)
+        lv = self.levels
+        if not lv:
+            return None
+        stop = lv.get("stop")
+        if stop is not None and low <= stop:
+            event.target = 0.0
+            self._sell(event)
+            event.note = f"stop {stop:.6g} reached inside the candle"
+            self.levels = None
+            return self._finish(event)
+        hit = [(level, size) for level, size in lv.get("take_profits", []) if high >= level]
+        if not hit:
+            return None
+        lv["take_profits"] = [t for t in lv["take_profits"] if t not in hit]
+        fraction = self.fraction if self.fraction > 0 else 1.0
+        target = max(fraction - sum(size for _, size in hit), 0.0)
+        event.target = target
+        self._sell(event, target)
+        event.note = f"take-profit {max(level for level, _ in hit):.6g} reached inside the candle" + (
+            f", {event.note}" if event.note else "")
+        if target <= 1e-9:
+            self.levels = None
+        return self._finish(event)
+
+    def _on_tick(self, tick) -> None:
+        current = self._levels_for is not None and tick.candle[0] == self._levels_for
+        low, high = (tick.candle[3], tick.candle[2]) if current else (None, None)  # a later candle: its price only
+        try:
+            ev = self.on_price(tick.price, low, high)
+            if ev is not None:
+                notify.bot_event(ev)
+        except Exception:
+            log.exception("intrabar check failed for %s", self.symbol)
+
+    def _wait(self, until: float, ticks: "queue.Queue | None") -> None:
+        """Sleep until ``until`` (epoch seconds), handling the stream's prices meanwhile."""
+        while (left := until - time.time()) > 0:
+            if ticks is None:
+                time.sleep(left)
+                return
+            try:
+                tick = ticks.get(timeout=min(left, 1.0))
+            except queue.Empty:
+                continue
+            self._on_tick(tick)
+
     def run(self, max_steps: int | None = None) -> None:
         """Evaluate once per candle close until interrupted (or ``max_steps`` reached)."""
         step = to_timedelta(self.timeframe).total_seconds()
+        ticks, started = None, False
+        if self.stream is not None and max_steps != 1:
+            ticks = queue.Queue()
+            self.stream.on_tick(ticks.put)
+            if not self.stream.running:
+                self.stream.start()
+                started = True
         n = 0
-        while max_steps is None or n < max_steps:
-            try:
-                notify.bot_event(self.step())
-            except Exception:
-                log.exception("bot step failed for %s; retrying next candle", self.symbol)
-                notify.notify("error", f"Bot step failed: {self.symbol}", "See the log; retrying next candle.")
-            n += 1
-            if max_steps is not None and n >= max_steps:
-                break
-            now = time.time()
-            time.sleep(step - now % step + 2)  # wake just after the next candle closes
+        try:
+            while max_steps is None or n < max_steps:
+                try:
+                    notify.bot_event(self.step())
+                except Exception:
+                    log.exception("bot step failed for %s; retrying next candle", self.symbol)
+                    notify.notify("error", f"Bot step failed: {self.symbol}", "See the log; retrying next candle.")
+                n += 1
+                if max_steps is not None and n >= max_steps:
+                    break
+                now = time.time()
+                self._wait(now + step - now % step + 2, ticks)  # wake just after the next candle closes
+        finally:
+            if ticks is not None:
+                self.stream.off_tick(ticks.put)
+                if started:
+                    self.stream.stop()
+
+
+def exit_levels(algorithm, df: pd.DataFrame) -> dict | None:
+    """The algorithm's intrabar exits for the next candle (a combo with ``fills="intrabar"``), else None."""
+    inner = algorithm.__dict__.get("inner")  # a sized algorithm (#147): the combo inside, with its parameters
+    try:
+        if inner is not None and hasattr(inner, "exit_levels"):
+            return inner.exit_levels(df, algorithm._inner_params(algorithm.values))
+        if hasattr(type(algorithm), "exit_levels"):
+            return algorithm.exit_levels(df)
+    except Exception:
+        log.exception("couldn't work out the intrabar exits")
+    return None

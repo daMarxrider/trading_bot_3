@@ -405,6 +405,7 @@ Arguments: `SYMBOL`, `ALGO`
 | `--close-on-halt`, `--no-close-on-halt` |  | Sell the open position when a limit halts the bot |
 | `--paper`, `--no-paper` |  | Trade a simulated account that survives restarts (see `tradebot paper`) |
 | `--journal`, `--no-journal` | `True` | Store every order in the trade journal (`tradebot journal`) |
+| `--stream`, `--no-stream` | `True` | Watch the price between closes over a websocket (polling as the fallback): intrabar stops, take-profits and risk halts act at once |
 
 ## `tradebot bot kill`
 

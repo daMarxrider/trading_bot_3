@@ -859,7 +859,25 @@ class Combo(BaseAlgorithm):
             return ops.latch(enter, leave), None  # every fill at the close, whatever the fill model
         return self._with_risk(o, p, enter, leave)
 
-    def _with_risk(self, o, p, enter, leave):
+    def exit_levels(self, df, p: dict | None = None) -> dict | None:
+        """The intrabar exits for the candle after the last one of ``df`` (the live bot's streaming, #158).
+
+        With ``fills="intrabar"`` and a position open at the last close: ``{"position": its size, "stop": the
+        price at or below which it is sold (None without a stop), "take_profits": [(price, size), ...] still to
+        hit, lowest first}``, the same levels the backtest fills against that candle's high and low. None when
+        flat, without risk exits or with fills at the close."""
+        if self.fills != "intrabar" or not self.risks:
+            return None
+        p = self.values if p is None else p
+        o = OHLC.from_frame(df)
+        ev = _Eval(self, o, p)
+        enter = self._entry_truth(ev)[0]
+        leave = self._exit.truth(ev)[0] if self._exit is not None else ops.full(o.close.shape, 0.0, o.close) > 0.5
+        out: dict = {}
+        self._with_risk(o, p, enter, leave, exits=out)
+        return out or None
+
+    def _with_risk(self, o, p, enter, leave, exits: dict | None = None):
         """The latch with risk exits and limit entries: they depend on the entry price, so this walks the candles
         (batched over parameter sets; NumPy either way, converted back to the input's backend).
 
@@ -1034,6 +1052,14 @@ class Combo(BaseAlgorithm):
             pos = cur
             prev_c = c
             out[..., t] = pos
+        if exits is not None and not lead and float(pos) > 0:  # what the next candle fills against (#158)
+            last = shape[-1] - 1
+            stop = float(stop_level(last, entry_px, peak)) if stops else -np.inf
+            exits["position"] = float(pos)
+            exits["stop"] = stop if np.isfinite(stop) else None
+            exits["take_profits"] = sorted(
+                (float(tp_level(term, last)), float(tp_size(term, last))) for k, term in enumerate(tps)
+                if not tp_done[k] and np.isfinite(tp_level(term, last)))
         wrap = (lambda x: ops.asarray(x, o.close)) if ops.is_torch(o.close) else (lambda x: x)
         fills = Fills(wrap(adjust), wrap(extra)) if intrabar else None
         return wrap(out), fills
