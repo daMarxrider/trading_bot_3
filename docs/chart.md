@@ -5,9 +5,16 @@ The **📈 Chart** page is the first page of the desktop app (`tradebot gui`). T
 
 ## Loading a symbol
 
-Type in the symbol field: it suggests matches while you type, your watchlists and portfolio first, then stocks, ETFs
-and indices by ticker or company name (Yahoo search), and crypto pairs from the exchange (`sol` becomes
-`SOL/USDT`). Pick one to load it. The **timeframe** and **candles** boxes reload the chart; optional **From/To**
+Click the symbol field, or just start typing with the chart under the cursor, and the **symbol dialog** opens. It
+searches your watchlists and portfolio first, then stocks, ETFs, indices, forex, futures and Treasury yields by ticker
+or name (Yahoo search), and the exchange's crypto pairs (`sol` finds `SOL/USDT`, `btcusd` finds `BTC/USD`). The rail
+on the left filters by category (All, Stocks, Forex, Crypto, Indices, Futures, Bonds; ETFs and funds count as
+stocks) or shows one of your lists (recent symbols, each watchlist). Each row has the last price and the day change.
+↑/↓ move, Enter loads, Tab switches category, Esc closes. To chart a ratio, press `/` on a symbol (or its ÷ button)
+and pick the divisor: `BTCUSD/ETHUSD` typed the way Scalable writes it works too. For now both sides must be crypto
+pairs, or neither. Fields that take several symbols (Backtest, Evolve) open the dialog with their search icon; it
+stays open until Esc, so you can add several. With the keyboard in a symbol field (Tab), typing still suggests
+matches inline. The **timeframe** and **candles** boxes reload the chart; optional **From/To**
 dates override the candle count. `A:B` (for example `KO:PEP`) is a symbol too: candles of the ratio, converted into
 one currency (see [Pairs](pairs.md)).
 

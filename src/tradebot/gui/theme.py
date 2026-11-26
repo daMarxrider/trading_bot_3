@@ -197,6 +197,24 @@ QStatusBar {{ color: {muted}; background: {status_bg}; border-top: 1px solid {pa
 QStatusBar::item {{ border: none; }}
 QProgressBar {{ text-align: center; }}
 QToolTip {{ background: {menu_bg}; color: {text}; border: 1px solid {panel_border}; }}
+QDialog#SymbolDialog {{ background: {menu_bg}; border: 1px solid {border_strong}; }}
+QFrame#SymbolSearchBar {{ border: none; border-bottom: 1px solid {panel_border}; }}
+QLineEdit#SymbolQuery {{ background: transparent; border: none; padding: 0; font-size: 15px; font-weight: 500; }}
+QFrame#RatioToken {{ background: {selection}; border-radius: {radius_sm}px; }}
+QFrame#RatioToken QLabel {{ background: transparent; font-weight: 600; }}
+QToolButton#SymbolIconButton {{ background: transparent; border: none; border-radius: {radius_sm}px; padding: 4px; }}
+QToolButton#SymbolIconButton:hover {{ background: {nav_hover}; }}
+QLabel#RatioNote {{ background: {selection}; color: {text}; padding: 7px 14px; }}
+QListWidget#SymbolRail {{ background: {rail_bg}; border: none; border-right: 1px solid {panel_border}; border-radius: 0; padding: 8px; outline: 0; }}
+QListWidget#SymbolRail::item {{ border-radius: {radius_sm}px; color: {muted}; padding-left: 10px; }}
+QListWidget#SymbolRail::item:hover {{ background: {nav_hover}; }}
+QListWidget#SymbolRail::item:selected {{ background: {selection}; }}
+QTableView#SymbolTable {{ background: transparent; border: none; border-radius: 0; outline: 0; }}
+QTableView#SymbolTable::item {{ padding: 0 6px; border: none; }}
+QTableView#SymbolTable::item:selected {{ background: {selection}; color: {text}; }}
+QTableView#SymbolTable QHeaderView::section {{ padding: 6px 6px; }}
+QLabel#SymbolEmpty {{ color: {muted}; padding: 40px; }}
+QFrame#SymbolFooter {{ border: none; border-top: 1px solid {panel_border}; }}
 """
 
 

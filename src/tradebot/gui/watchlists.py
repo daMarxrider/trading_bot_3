@@ -30,7 +30,7 @@ from PyQt6.QtWidgets import (
 )
 
 from tradebot.config import Settings, delete_watchlist, save_watchlist, watchlists
-from tradebot.gui.common import SymbolCompleter, run_async
+from tradebot.gui.common import SymbolCompleter, last_and_change, run_async
 from tradebot.gui.icons import bind_icon
 from tradebot.gui.theme import ThemeManager
 from tradebot.gui.touch import LongPressTooltips, enable_kinetic_scroll
@@ -351,9 +351,8 @@ class WatchlistPanel(QWidget):
     def _quoted(self, symbol: str, df, fresh: bool):
         if df is None or df.empty or (not fresh and self.quotes.get(symbol, (0, 0, False))[2]):
             return  # nothing cached, or the current price already came
-        close = df["close"]
-        change = float(close.iloc[-1] / close.iloc[-2] - 1) if len(close) > 1 and close.iloc[-2] else None
-        self.quotes[symbol] = (float(close.iloc[-1]), change, fresh)
+        last, change = last_and_change(df)
+        self.quotes[symbol] = (last, change, fresh)
         self._update_row(symbol)
 
     def _named(self, symbol: str, name: str | None):

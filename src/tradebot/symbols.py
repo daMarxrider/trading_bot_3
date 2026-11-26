@@ -31,8 +31,17 @@ from typing import Callable, Iterable
 
 log = logging.getLogger(__name__)
 
-#: Yahoo quote types the data providers can chart (no futures, options or FX)
-YAHOO_TYPES = {"EQUITY": "stock", "ETF": "ETF", "INDEX": "index", "MUTUALFUND": "fund", "CRYPTOCURRENCY": "crypto"}
+#: Yahoo quote types the data providers can chart (no options)
+YAHOO_TYPES = {"EQUITY": "stock", "ETF": "ETF", "INDEX": "index", "MUTUALFUND": "fund", "CRYPTOCURRENCY": "crypto",
+               "CURRENCY": "forex", "FUTURE": "future"}
+
+#: the symbol dialog's categories (#220), in rail order; ETFs, funds and ADRs count as stocks
+CATEGORIES = {"all": "All", "stocks": "Stocks", "forex": "Forex", "crypto": "Crypto", "indices": "Indices",
+              "futures": "Futures", "bonds": "Bonds"}
+_KIND_CATEGORY = {"stock": "stocks", "ETF": "stocks", "fund": "stocks", "forex": "forex", "crypto": "crypto",
+                  "index": "indices", "future": "futures"}
+#: Yahoo lists Treasury yields as indices; they belong with bonds
+YIELD_SYMBOLS = {"^IRX", "^FVX", "^TNX", "^TYX"}
 CRYPTO_QUOTES = ("USDT", "USDC", "USD", "EUR", "BTC")  #: pairs offered for completion, most common first
 
 
@@ -50,6 +59,24 @@ class SymbolMatch:
         return " — ".join(p for p in (self.symbol, self.name) if p) + (f" · {details}" if details else "")
 
 
+def category(match: SymbolMatch) -> str:
+    """The :data:`CATEGORIES` key of ``match``; a symbol without a known kind (from a watchlist) by its spelling."""
+    symbol = match.symbol.upper()
+    if symbol in YIELD_SYMBOLS or match.kind == "index" and "yield" in match.name.lower():  # not bond ETFs: stocks
+        return "bonds"
+    if match.kind in _KIND_CATEGORY:
+        return _KIND_CATEGORY[match.kind]
+    if "/" in symbol:
+        return "crypto"
+    if symbol.endswith("=X"):
+        return "forex"
+    if symbol.endswith("=F"):
+        return "futures"
+    if symbol.startswith("^"):
+        return "indices"
+    return "stocks"
+
+
 def rank(query: str, match: SymbolMatch) -> int | None:
     """Lower is better; None = no match. Exact symbol < symbol prefix < name prefix < contains."""
     q = query.strip().lower()
@@ -57,9 +84,10 @@ def rank(query: str, match: SymbolMatch) -> int | None:
     base = symbol.split("/")[0].split(".")[0].split("-")[0]  # "sol" matches "SOL/USDT", "sap" matches "SAP.DE"
     if not q:
         return None
-    if symbol == q or base == q:
+    compact = symbol.replace("/", "")  # "btcusd" finds "BTC/USD", as typed on Scalable (#219)
+    if q in (symbol, base, compact):
         return 0
-    if symbol.startswith(q):
+    if symbol.startswith(q) or compact.startswith(q):
         return 1
     if name.startswith(q) or any(word.startswith(q) for word in name.split()):
         return 2
@@ -222,18 +250,35 @@ class SymbolSearch:
     def local(self, query: str) -> list[SymbolMatch]:
         return self._ranked(query, [SymbolMatch(s, kind="watchlist") for s in dict.fromkeys(self.local_symbols())])
 
-    def search(self, query: str) -> list[SymbolMatch]:
+    def search(self, query: str, limit: int | None = None) -> list[SymbolMatch]:
         """Local matches first, then remote ones; slow (network), run it off the GUI thread."""
+        local = self.local(query)
+        seen = {m.symbol for m in local}
+        remote = [m for m in self.remote_matches(query) if not (m.symbol in seen or seen.add(m.symbol))]
+        return (local + remote)[: limit or self.limit]
+
+    def remote_matches(self, query: str) -> list[SymbolMatch]:
+        """The network sources' matches, ranked, without the local ones; slow, run it off the GUI thread."""
         found: list[SymbolMatch] = []
         for source in self.remote:
             try:
                 found += source(query)
             except Exception as exc:  # offline or rate limited: local suggestions still work
                 log.debug("symbol search source failed: %s", exc)
-        local = self.local(query)
-        seen = {m.symbol for m in local}
-        remote = [m for m in self._ranked(query, found) if not (m.symbol in seen or seen.add(m.symbol))]
-        return (local + remote)[: self.limit]
+        return self._ranked(query, found)
+
+    def browse(self, category_key: str) -> list[SymbolMatch]:
+        """Every symbol a source lists without a query (only the crypto pairs do); slow the first time."""
+        out: list[SymbolMatch] = []
+        for source in self.remote:
+            listing = getattr(source, "browse", None)
+            if listing is None:
+                continue
+            try:
+                out += [m for m in listing() if category(m) == category_key]
+            except Exception as exc:
+                log.debug("symbol listing failed: %s", exc)
+        return out
 
     def _ranked(self, query: str, matches: list[SymbolMatch]) -> list[SymbolMatch]:
         scored = [(r, i, m) for i, m in enumerate(matches) if (r := rank(query, m)) is not None]
@@ -242,7 +287,12 @@ class SymbolSearch:
 
 def _crypto_source(cache: Path | None = None) -> Callable[[str], list[SymbolMatch]]:
     pairs = CryptoPairs(cache=cache)
-    return lambda query: pairs.load()
+
+    def source(query: str) -> list[SymbolMatch]:
+        return pairs.load()
+
+    source.browse = pairs.load  # the symbol dialog lists the pairs before anything is typed (#220)
+    return source
 
 
 def cached_queries(source: Callable[[str], list[SymbolMatch]], cache: Path, max_age: float = 7 * 86400.0,

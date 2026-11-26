@@ -9,7 +9,7 @@ import os
 import sys
 from functools import partial
 
-from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtGui import QGuiApplication, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
@@ -51,6 +51,7 @@ from tradebot.gui.theme import GlassBackdrop, ThemeManager
 from tradebot.gui.touch import has_touchscreen
 from tradebot.gui.scanner import ScannerView
 from tradebot.gui.views import BacktestView, NewsView, PortfolioView, ScreenerView
+from tradebot.gui.symbol_dialog import SymbolContext
 from tradebot.symbols import disk_symbol_search, symbol_name, yahoo_search
 
 log = logging.getLogger(__name__)
@@ -71,6 +72,9 @@ class MainWindow(QMainWindow):
         search = disk_symbol_search(lambda: self.chart.watchlists.all_symbols() + self.portfolio_symbols,
                                     engine.disk.symbols_dir if engine.disk else None, yahoo=yahoo_search)
         self.chart = ChartView(engine, themes, symbols, settings, search, opengl=opengl)  # opengl: #71
+        # what the symbol dialog shows besides search results: prices, recent symbols, the watchlists (#220)
+        self.symbol_context = SymbolContext(engine, settings, themes, lambda: self.chart.watchlists.lists)
+        QTimer.singleShot(1500, lambda: self.symbol_context.prewarm(search, self))  # ready before the first click
         self.screener = ScreenerView(engine, themes, symbols)
         self.scanner = ScannerView(engine, themes, lambda: self.chart.watchlists.lists, settings)
         self.chart.watchlists.changed.connect(self.scanner.watchlists_changed)
