@@ -61,6 +61,15 @@ jobs:
       - name: Install
         run: uv sync --extra gui --group build --python 3.14
 
+      - name: Stamp version
+        if: startsWith(github.ref, 'refs/tags/v')
+        # __version__ in the repo isn't bumped on merge (tag.yml only tags), so the build takes it from the tag. The spec
+        # reads it for the exe's version resource and the .app's Info.plist; --version and the About dialog show it.
+        run: |
+          export VERSION=${GITHUB_REF_NAME#v}
+          perl -pi -e 's/^__version__ = ".*"/__version__ = "$ENV{VERSION}"/' src/tradebot/__init__.py
+          grep -qx "__version__ = \"$VERSION\"" src/tradebot/__init__.py
+
       - name: Build
         run: uv run pyinstaller --noconfirm packaging/tradebot.spec
 
@@ -77,6 +86,17 @@ jobs:
           find "$GITHUB_WORKSPACE/dist" -name LICENSE | grep -E '/(_internal|Resources)/LICENSE$'  # tradebot's own GPL text
           ! find "$GITHUB_WORKSPACE/dist" -iname 'pytr*' | grep .  # integrated third-party tools are never bundled
           ./tradebot --version | grep -q "not affiliated"
+          version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$GITHUB_WORKSPACE/src/tradebot/__init__.py")
+          ./tradebot --version | grep -qxF "tradebot $version"
+          if [[ "$RUNNER_OS" == Windows ]]; then  # the version resource SignPath checks: same name and version on both exes
+            for exe in tradebot.exe tradebot-gui.exe; do
+              info=$(powershell -NoProfile -Command "\$v = (Get-Item $exe).VersionInfo; \$v.ProductName + '|' + \$v.ProductVersion")
+              [[ "${info%$'\r'}" == "tradebot|$version" ]] || { echo "$exe: $info"; exit 1; }
+            done
+          fi
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' ../Info.plist | grep -qxF "$version"
+          fi
           if [[ "$RUNNER_OS" == Linux ]]; then  # the launcher entry (#213), into a temporary data dir
             ./tradebot desktop install --dry-run
             xdg=$(mktemp -d)
