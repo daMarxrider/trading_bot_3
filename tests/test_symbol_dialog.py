@@ -270,3 +270,42 @@ def test_typing_over_the_chart_opens_the_dialog(window, monkeypatch, tmp_path):
     assert not press(Qt.Key.Key_E, "e")  # a text field has the keyboard
     assert opened == ["E"]
 
+
+
+def test_the_dialog_is_reused_and_reset(window):
+    from tradebot.gui.symbol_dialog import open_symbol_dialog
+
+    edit = QLineEdit(window)
+    first, second = [], []
+    d = open_symbol_dialog(window.search, edit, first.append, "btcusd")
+    d._search_remote()
+    key(d, Qt.Key.Key_Slash, "/")
+    assert d.numerator == "BTC/USD"
+    d.reject()
+    LISTS["Swing"] = ["NVDA"]
+    try:
+        again = open_symbol_dialog(window.search, edit, second.append, "k")
+        assert again is d and again.numerator is None and not again.token.isVisible() and again.query.text() == "k"
+        assert "list:Swing" in again._counts  # a watchlist made meanwhile is in the rail
+        QApplication.processEvents()  # the rows come right after the window
+        assert shown(again)[0] == "KO"
+        key(again, Qt.Key.Key_Return)
+        assert first == [] and second == ["KO"]  # only the field it was opened for gets the pick
+    finally:
+        del LISTS["Swing"]
+
+
+def test_prices_show_loading_until_they_come(window, monkeypatch):
+    pending = []
+    monkeypatch.setattr(sd, "run_async", lambda fn, done, fail=None: pending.append((fn, done, fail)))
+    d = SymbolDialog(window.search, window, initial="")
+    d.show()
+    d._load_visible()
+    assert d.model.index(0, DAY).data() == "…"
+    for fn, done, fail in pending:
+        try:
+            done(fn())
+        except Exception as exc:
+            fail and fail(str(exc))
+    assert d.model.index(0, DAY).data() == "▲ +10.00%"
+    d.close()

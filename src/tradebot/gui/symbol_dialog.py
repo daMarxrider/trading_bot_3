@@ -58,6 +58,7 @@ KIND_LABELS = {"stock": "Stock", "ETF": "ETF", "fund": "Fund", "index": "Index",
 #: and for a symbol without a known kind (from a watchlist), by category; plain tickers could be stock or ETF
 CATEGORY_LABELS = {"crypto": "Crypto", "forex": "FX", "futures": "Future", "indices": "Index", "bonds": "Yield"}
 
+PLACEHOLDER = "Symbol or name, e.g. AAPL, bitcoin, EURUSD, BTCUSD/ETHUSD"
 HINTS = "↑↓ move    ↵ open    / divide by…    Tab category    Esc close"
 HINTS_RATIO = "↑↓ move    ↵ open    ⌫ back to one symbol    Tab category    Esc close"
 HINTS_MULTI = "↑↓ move    ↵ add    / divide by…    Tab category    Esc done"
@@ -87,6 +88,10 @@ class QuoteBook(QObject):
     def get(self, symbol: str) -> tuple[float, float | None] | None:
         return self.quotes.get(symbol)
 
+    def loading(self, symbol: str) -> bool:
+        """Asked for and not answered yet (and no older price to show meanwhile)."""
+        return symbol in self._loading and symbol not in self.quotes
+
     def request(self, symbol: str):
         if self.engine is None or symbol in self._loading or time.time() - self._fetched.get(symbol, 0) < QUOTE_MAX_AGE:
             return
@@ -100,7 +105,12 @@ class QuoteBook(QObject):
             run_async(lambda: engine.peek(symbol, "1d", bars=QUOTE_BARS), lambda df: self._got(symbol, df, False),
                       lambda err: None)
         run_async(lambda: engine.get_ohlc(symbol, "1d", bars=QUOTE_BARS), lambda df: self._got(symbol, df, True),
-                  lambda err: self._loading.discard(symbol))  # offline or unknown: no price, and no error
+                  lambda err: self._failed(symbol))  # offline or unknown: no price, and no error
+
+    def _failed(self, symbol: str):
+        self._loading.discard(symbol)
+        self._fetched[symbol] = time.time()  # not again right away
+        self.updated.emit(symbol)  # "…" becomes "–"
 
     def _got(self, symbol: str, df, fresh: bool):
         if fresh:
@@ -137,6 +147,18 @@ class SymbolContext:
 
     def watched(self) -> set[str]:
         return {s for symbols in self.lists().values() for s in symbols}
+
+    def dialog(self, search: SymbolSearch, window: QWidget) -> SymbolDialog:
+        """The window's one symbol dialog, built on first use (or by :meth:`prewarm`)."""
+        if getattr(self, "_dialog", None) is None:
+            self._dialog = SymbolDialog(search, window, self)
+        return self._dialog
+
+    def prewarm(self, search: SymbolSearch, window: QWidget):
+        """Build and style the dialog while the app is idle, so the first open is as quick as the next ones."""
+        dialog = self.dialog(search, window)
+        dialog.ensurePolished()
+        dialog.grab()  # lays out and paints it once, off screen
 
 
 def _scaled(font: QFont, factor: float) -> QFont:
@@ -215,10 +237,12 @@ class SymbolTableModel(QAbstractTableModel):
                 return type_label(m)
             if col == EXCHANGE:
                 return m.exchange
+            if col in (LAST, DAY) and quote is None:
+                return "…" if d.ctx.quotes.loading(m.symbol) else "–"
             if col == LAST:
-                return fmt_price(quote[0]) if quote else "–"
+                return fmt_price(quote[0])
             if col == DAY:
-                if not quote or quote[1] is None:
+                if quote[1] is None:
                     return "–"
                 change = quote[1]
                 mark = "▲ " if change > 0 else "▼ " if change < 0 else ""  # colour is never the only cue
@@ -363,7 +387,7 @@ class SymbolDialog(QDialog):
         tl.addWidget(self.token_close)
         self.token.setFixedHeight(28)
         self.query = QLineEdit(initial, objectName="SymbolQuery",
-                               placeholderText="Symbol or name, e.g. AAPL, bitcoin, EURUSD, BTCUSD/ETHUSD")
+                               placeholderText=PLACEHOLDER)
         self.query.setClearButtonEnabled(False)
         self.query.textEdited.connect(self._edited)
         self.close_btn = QToolButton(toolTip="Close (Esc)", objectName="SymbolIconButton")
@@ -388,8 +412,8 @@ class SymbolDialog(QDialog):
             self._rail_item(f"cat:{key}", label)
         self._rail_header("Lists")
         self._rail_item("list:", "Recent")
-        for name in self.ctx.lists():
-            self._rail_item(f"list:{name}", name)
+        self._fixed_rail_rows = self.rail.count()
+        self._fill_lists()
         self.rail.setCurrentRow(0)
         self.rail.currentItemChanged.connect(self._rail_changed)
 
@@ -467,6 +491,31 @@ class SymbolDialog(QDialog):
         if initial.strip():
             self._search_timer.start()
 
+    def reset(self, search: SymbolSearch, parent: QWidget, initial: str = "", multi: bool = False):
+        """Ready a reused dialog for a new pick: shown at once, filled on the next turn of the event loop."""
+        self.search, self.multi = search, multi
+        self._search_timer.stop()
+        self.numerator, self._pending, self._remote = None, "", None
+        self.token.hide()
+        self.ratio_note.hide()
+        self.query.setPlaceholderText(PLACEHOLDER)
+        self.added = []
+        self.watched = self.ctx.watched()
+        self.query.setText(initial)
+        self.rail.blockSignals(True)
+        self._fill_lists()
+        self.rail.setCurrentRow(0)
+        self.rail.blockSignals(False)
+        self.source = "cat:all"
+        self.model.set_rows([])
+        self.results.setCurrentWidget(self.table)
+        self.status.setText("")
+        self._update_hints()
+        self._fit_to(parent)
+        QTimer.singleShot(0, self._refresh)  # the window first, the rows right after
+        if initial.strip():
+            self._search_timer.start()
+
     # -- look --------------------------------------------------------------------------------------------------
     def theme(self):
         return self.ctx.themes.current if self.ctx.themes is not None else None
@@ -505,6 +554,14 @@ class SymbolDialog(QDialog):
         self.rail.addItem(item)
         self.rail.setItemWidget(item, row)
         self._counts[key] = count
+
+    def _fill_lists(self):
+        """The watchlists under Recent, as they are now."""
+        while self.rail.count() > self._fixed_rail_rows:
+            item = self.rail.takeItem(self.rail.count() - 1)
+            self._counts.pop(item.data(Qt.ItemDataRole.UserRole), None)
+        for name in self.ctx.lists():
+            self._rail_item(f"list:{name}", name)
 
     def _rail_header(self, label: str):
         item = QListWidgetItem(label)
@@ -724,7 +781,7 @@ class SymbolDialog(QDialog):
         self.numerator = None
         self.token.hide()
         self.ratio_note.hide()
-        self.query.setPlaceholderText("Symbol or name, e.g. AAPL, bitcoin, EURUSD, BTCUSD/ETHUSD")
+        self.query.setPlaceholderText(PLACEHOLDER)
         self._update_hints()
         self._refresh()
 
@@ -820,9 +877,21 @@ class SymbolDialog(QDialog):
 
 def open_symbol_dialog(search: SymbolSearch, parent: QWidget, on_pick: Callable[[str], None], initial: str = "",
                        multi: bool = False) -> SymbolDialog:
-    """Show the dialog over ``parent``'s window; ``on_pick`` gets each chosen symbol."""
-    dialog = SymbolDialog(search, parent, context_for(parent), initial, multi)
+    """Show the dialog over ``parent``'s window; ``on_pick`` gets each chosen symbol.
+
+    With a :class:`SymbolContext` the window keeps one dialog and reuses it, so it opens without being built."""
+    ctx = context_for(parent)
+    window = parent.window()
+    if ctx is None:
+        dialog = SymbolDialog(search, window, None, initial, multi)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+    else:
+        dialog = ctx.dialog(search, window)
+        dialog.reset(search, window, initial, multi)
+        try:
+            dialog.picked.disconnect()  # the field it was opened for last time
+        except TypeError:
+            pass
     dialog.picked.connect(on_pick)
-    dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
     dialog.open()
     return dialog
