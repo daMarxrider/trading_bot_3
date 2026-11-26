@@ -12,9 +12,10 @@ from html import escape
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
-from PyQt6.QtCore import QEvent, QObject, QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import (
+    QAbstractSpinBox,
     QApplication,
     QColorDialog,
     QComboBox,
@@ -23,7 +24,9 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
+    QTextEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -1016,6 +1019,8 @@ class ChartView(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        # the keyboard to the chart, not its symbol field (the first field gets it by default): typing then searches
+        QTimer.singleShot(0, lambda: QApplication.focusWidget() in (None, self.symbol) and self.canvas.setFocus())
         if self.sidebar.is_open and self.sidebar.current:
             self._sidebar_shown(self.sidebar.current)
 
@@ -1888,6 +1893,8 @@ class ChartView(QWidget):
         self.fit_y(force=True)  # the old y-range means nothing on the other scale
 
     def eventFilter(self, obj, event):
+        if obj is self.canvas and event.type() == QEvent.Type.KeyPress and self._type_to_search(event):
+            return True  # typing on the chart opens the symbol dialog (#220)
         if obj is self.canvas and event.type() == QEvent.Type.Resize:
             bottom = self.canvas.height() - self.fit_btn.height() - 8
             self.fit_btn.move(8, bottom)
@@ -1899,6 +1906,22 @@ class ChartView(QWidget):
             self._hide_snap_marker()
             self._show_values()
         return super().eventFilter(obj, event)
+
+    def _type_to_search(self, event) -> bool:
+        """A letter, digit, ``^`` or ``.`` typed with the cursor over the chart starts a symbol search with it, unless
+        a text field has the keyboard or a dialog or menu is open. Keys with Ctrl/Alt/Meta keep their meaning."""
+        text = event.text()
+        if (len(text) != 1 or not (text.isalnum() or text in "^.") or event.isAutoRepeat()
+                or event.modifiers() & ~(Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.KeypadModifier)):
+            return False
+        app = QApplication.instance()
+        focus = app.focusWidget()
+        if (not self.isVisible() or not self.canvas.underMouse() or app.activeModalWidget() is not None
+                or app.activePopupWidget() is not None or not self.window().isActiveWindow()
+                or isinstance(focus, (QLineEdit, QAbstractSpinBox, QTextEdit, QPlainTextEdit))):
+            return False
+        self.symbols.open_dialog(text.upper())
+        return True
 
     def _context_menu(self, scene_pos, global_pos):
         """Secondary actions: right click, or long press on a touchscreen."""

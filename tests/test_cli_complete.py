@@ -125,7 +125,7 @@ def test_yahoo_search_http_parses_and_filters(monkeypatch):
         def json(self):
             return {"quotes": [{"symbol": "NVDA", "longname": "NVIDIA Corporation", "exchDisp": "NASDAQ",
                                 "quoteType": "EQUITY"},
-                               {"symbol": "SNVDA=F", "quoteType": "FUTURE"}]}
+                               {"symbol": "NVDA261218C00200000", "quoteType": "OPTION"}]}  # options are dropped
 
     seen = {}
     fake = types.SimpleNamespace(get=lambda url, params, headers, timeout: seen.update(params=params, timeout=timeout)

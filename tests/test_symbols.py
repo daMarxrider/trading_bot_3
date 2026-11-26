@@ -54,12 +54,16 @@ def test_limit():
 def test_yahoo_search_filters_types_and_maps_crypto(monkeypatch):
     quotes = [
         {"symbol": "AAPL", "longname": "Apple Inc.", "exchDisp": "NASDAQ", "quoteType": "EQUITY"},
-        {"symbol": "SAAPL=F", "shortname": "Apple futures", "exchDisp": "CME", "quoteType": "FUTURE"},
+        {"symbol": "AAPL261218C00200000", "shortname": "AAPL Dec 2026 200 call", "exchDisp": "OPR", "quoteType": "OPTION"},
         {"symbol": "SOL-USD", "shortname": "Solana USD", "exchDisp": "CCC", "quoteType": "CRYPTOCURRENCY"},
+        {"symbol": "GC=F", "shortname": "Gold", "exchDisp": "COMEX", "quoteType": "FUTURE"},
+        {"symbol": "EURUSD=X", "shortname": "EUR/USD", "exchDisp": "CCY", "quoteType": "CURRENCY"},
     ]
     fake = types.SimpleNamespace(Search=lambda query, max_results, news_count: types.SimpleNamespace(quotes=quotes))
     monkeypatch.setitem(sys.modules, "yfinance", fake)
-    assert yahoo_search("apple") == [APPLE, SymbolMatch("SOL/USD", "Solana USD", "CCC", "crypto")]
+    assert yahoo_search("apple") == [APPLE, SymbolMatch("SOL/USD", "Solana USD", "CCC", "crypto"),
+                                     SymbolMatch("GC=F", "Gold", "COMEX", "future"),
+                                     SymbolMatch("EURUSD=X", "EUR/USD", "CCY", "forex")]  # options are dropped
 
 
 def test_crypto_pairs_fall_back_sort_and_load_once(monkeypatch):

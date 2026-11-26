@@ -45,7 +45,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from tradebot.gui.icons import pixmap
+from tradebot.gui.icons import icon, pixmap
 from tradebot.symbols import SymbolSearch
 
 
@@ -82,6 +82,15 @@ def run_async(fn: Callable[[], object], on_done: Callable[[object], None], on_er
     if on_error:
         signals.failed.connect(on_error)
     QThreadPool.globalInstance().start(_Task(fn, signals))
+
+
+def last_and_change(df) -> tuple[float, float | None] | None:
+    """``(last close, change from the close before)`` of daily candles; None when there are none."""
+    if df is None or df.empty:
+        return None
+    close = df["close"]
+    change = float(close.iloc[-1] / close.iloc[-2] - 1) if len(close) > 1 and close.iloc[-2] else None
+    return float(close.iloc[-1]), change
 
 
 def up_down_mark(value: float) -> str:
@@ -450,6 +459,39 @@ class SymbolCompleter(QObject):
         self._pending: str | None = None  # query of the network search whose results are still wanted
         edit.textEdited.connect(self._edited)
         edit.editingFinished.connect(self._cancel)  # Enter or leaving the field: no late popup
+        # the symbol dialog (#220): the search icon opens it; so does a click into a one-symbol field. Typing into
+        # the field (reached with Tab) still completes inline. A multi field keeps its click for editing the list.
+        self.dialog_action = edit.addAction(icon("search", "#8a877e", 16), QLineEdit.ActionPosition.LeadingPosition)
+        self.dialog_action.setToolTip("Search all symbols…")
+        self.dialog_action.triggered.connect(lambda: self.open_dialog())
+        self.dialog = None
+        if not multi:
+            edit.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if (obj is self.edit and event.type() == QEvent.Type.MouseButtonPress
+                and event.button() == Qt.MouseButton.LeftButton and self.edit.isEnabled() and not self.edit.isReadOnly()):
+            self.open_dialog()
+            return True
+        return super().eventFilter(obj, event)
+
+    def open_dialog(self, initial: str = ""):
+        """Show the symbol dialog; what it picks goes into the field (with ``multi``: is added to it)."""
+        from tradebot.gui.symbol_dialog import open_symbol_dialog
+
+        self._cancel()
+        self.completer.popup().hide()
+        self.dialog = open_symbol_dialog(self.search, self.edit, self._from_dialog, initial, self.multi)
+        return self.dialog
+
+    def _from_dialog(self, symbol: str):
+        if self.multi:
+            have = [s.strip() for s in self.edit.text().split(",") if s.strip()]
+            if symbol not in have:
+                self.edit.setText(", ".join([*have, symbol]))
+        else:
+            self.edit.setText(symbol)
+        self.chosen.emit(symbol)
 
     def _query(self) -> str:
         """What is searched for: the field's text, or with ``multi`` the symbol after the last comma."""
