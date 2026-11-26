@@ -4,6 +4,7 @@
 # on macOS the bundle is wrapped in dist/tradebot.app, whose launcher opens the GUI.
 #   uv sync --extra gui --group build && uv run pyinstaller packaging/tradebot.spec
 import os
+import re
 import sys
 
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
@@ -26,7 +27,44 @@ datas += [(os.path.join(SPECPATH, "..", "LICENSE"), "."), (notices, ".")]
 datas += [(os.path.join(SPECPATH, "..", "src", "tradebot", "gui", "assets"), os.path.join("tradebot", "gui", "assets"))]
 # the launcher entry's icons (#213): the .ico is also the exe's icon on Windows, the .icns the .app's on macOS
 ICONS = os.path.join(SPECPATH, "..", "src", "tradebot", "gui", "assets", "desktop")
-exe_icon = {"icon": os.path.join(ICONS, "tradebot.ico")} if sys.platform == "win32" else {}
+# The version comes from tradebot/__init__.py, which release.yml stamps from the tag. Read, not imported: importing
+# tradebot pulls in every indicator and broker.
+with open(os.path.join(SPECPATH, "..", "src", "tradebot", "__init__.py"), encoding="utf-8") as fh:
+    VERSION = re.search(r'^__version__ = "([^"]+)"', fh.read(), re.M).group(1)
+
+
+def win_version_info(exe_name, description):
+    """The exe's Windows version resource (Properties > Details). SignPath signing requires the product name to be
+    the project name and the product version to be the same in every build of a release."""
+    from PyInstaller.utils.win32.versioninfo import (FixedFileInfo, StringFileInfo, StringStruct, StringTable,
+                                                     VarFileInfo, VarStruct, VSVersionInfo)
+
+    numbers = (tuple(int(n) for n in re.findall(r"\d+", VERSION)[:4]) + (0, 0, 0, 0))[:4]
+    strings = {
+        "CompanyName": "daMarxrider",
+        "FileDescription": description,
+        "FileVersion": VERSION,
+        "InternalName": exe_name,
+        "LegalCopyright": "Copyright (C) 2026 daMarxrider. GPL-3.0-or-later",
+        "OriginalFilename": f"{exe_name}.exe",
+        "ProductName": "tradebot",
+        "ProductVersion": VERSION,
+    }
+    return VSVersionInfo(
+        ffi=FixedFileInfo(filevers=numbers, prodvers=numbers),
+        kids=[
+            StringFileInfo([StringTable("040904B0", [StringStruct(k, v) for k, v in strings.items()])]),
+            VarFileInfo([VarStruct("Translation", [0x0409, 1200])]),  # US English, Unicode
+        ],
+    )
+
+
+def win_exe_options(exe_name, description):
+    if sys.platform != "win32":
+        return {}
+    return {"icon": os.path.join(ICONS, "tradebot.ico"), "version": win_version_info(exe_name, description)}
+
+
 binaries = collect_dynamic_libs("plotext", search_patterns=["*.so", "*.dll", "*.pyd"])
 
 options = dict(
@@ -38,12 +76,14 @@ options = dict(
     excludes=["torch", "tkinter", "pytr"],
 )
 a = Analysis(["entry.py"], **options)
-exe = EXE(PYZ(a.pure), a.scripts, [], exclude_binaries=True, name="tradebot", console=True, **exe_icon)
+exe = EXE(PYZ(a.pure), a.scripts, [], exclude_binaries=True, name="tradebot", console=True,
+          **win_exe_options("tradebot", "tradebot command line"))
 parts = [exe, a.binaries, a.datas]
 
 if sys.platform in ("win32", "darwin"):
     g = Analysis(["gui_entry.py"], **options)
-    gui_exe = EXE(PYZ(g.pure), g.scripts, [], exclude_binaries=True, name="tradebot-gui", console=False, **exe_icon)
+    gui_exe = EXE(PYZ(g.pure), g.scripts, [], exclude_binaries=True, name="tradebot-gui",
+                  console=False, **win_exe_options("tradebot-gui", "tradebot desktop app"))
     parts += [gui_exe, g.binaries, g.datas]  # COLLECT drops the files both builds share
 
 coll = COLLECT(*parts, name="tradebot")
@@ -58,6 +98,8 @@ if sys.platform == "darwin":
             "CFBundleExecutable": "tradebot-gui",  # opening the app starts the GUI
             "CFBundleName": "Tradebot",
             "CFBundleDisplayName": "Tradebot",
+            "CFBundleShortVersionString": VERSION,
+            "CFBundleVersion": VERSION,
             "LSApplicationCategoryType": "public.app-category.finance",
             "NSHighResolutionCapable": True,
         },

@@ -102,6 +102,22 @@ usual and can import any `tradebot` module and the bundled libraries. Entry-poin
 are not found by the binary, because it cannot see your Python's packages; use the plugin directory, or install
 tradebot from source.
 
+**Uninstall.** The binary installs nothing outside its folder except the launcher entry, so removing it takes
+three steps:
+
+1. Remove the launcher entry: `install.ps1 -Uninstall` on Windows, `install.sh --uninstall` on Linux, or
+   `tradebot desktop uninstall` (add `-System` / `--system` if you installed it for all users).
+2. Delete the extracted `tradebot` folder (or `tradebot.app` on macOS).
+3. Optionally, delete your data too: config, plugins, watchlists, settings, the journal, bot state and the data cache.
+
+| | Windows | Linux | macOS |
+|---|---|---|---|
+| Config, plugins, themes | `%USERPROFILE%\.config\tradebot` | `~/.config/tradebot` | `~/.config/tradebot` |
+| Settings, journal, bots, alerts | `%APPDATA%\tradebot` | `~/.config/tradebot` | `~/Library/Application Support/tradebot` |
+| Data cache | `%LOCALAPPDATA%\tradebot` | `~/.cache/tradebot` | `~/Library/Caches/tradebot` |
+
+Broker API keys are kept in `config.toml` in the config folder, so deleting it also removes them.
+
 ## GPU acceleration
 
 The release binaries are CPU-only: they exclude PyTorch and the optimizer falls back to a multi-threaded NumPy

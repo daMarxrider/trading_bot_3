@@ -67,6 +67,9 @@ platform, so they never touch your real menu. The icons come from one source ima
   publishes them on the GitHub Release of a `v*` tag. The Linux tarball also holds `install.sh` and the Windows zip `install.ps1`; the smoke tests
   install and remove the launcher entry on each OS (Linux: also `desktop-file-validate` and `appstreamcli`; macOS: the
   copied bundle must still pass `codesign --verify`).
+  On a tag it first stamps `__version__` in `src/tradebot/__init__.py` with the tag's version (the file in the repo is
+  not bumped), and the spec puts that version into the Windows exes' version resource (product name `tradebot`) and the
+  macOS `Info.plist`; the smoke tests check both.
 
 ## Branches, pull requests and releases
 
