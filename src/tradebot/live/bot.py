@@ -27,6 +27,7 @@ back to polling, the same happens on every poll.
 from __future__ import annotations
 
 import logging
+import math
 import queue
 import time
 from dataclasses import dataclass, field
@@ -41,7 +42,7 @@ from tradebot.brokers.base import BaseBroker
 from tradebot.core.models import Order, Side
 from tradebot.core.timeframes import to_timedelta
 from tradebot.journal import Journal
-from tradebot.live.risk import RiskEvent, RiskGuard, RiskLimits
+from tradebot.live.risk import RiskEvent, RiskGuard, RiskLimits, check_stake
 
 log = logging.getLogger(__name__)
 
@@ -92,6 +93,7 @@ class TradingBot:
             self.on_risk(e)
 
     def __post_init__(self):
+        self.stake = check_stake(self.stake)
         if self.risk is not None:
             self.guard = RiskGuard(self.risk, self.stake, self._risk_trigger)
         if getattr(self.broker, "simulated", False) and not self.dry_run:  # resume a persistent paper account
@@ -162,11 +164,13 @@ class TradingBot:
             if self.guard else None
         if halted:
             event.note = f"halted: {halted.message}"
-            if self.risk.close_on_halt and self.holding > 0:
+            if self.risk.close_on_halt and self.holding > 0 and halted.kind != "bad_data":  # a breach, not a glitch
                 self._sell(event)
         elif self.account is not None and (shared := self.account.check(self)):
             event.note = f"halted: {shared}"
-            if getattr(self.account, "close_on_halt", False) and self.holding > 0:
+            # only the daily loss is a lasting halt (``halted``); bad price data never sells
+            if getattr(self.account, "close_on_halt", False) and self.holding > 0 \
+                    and getattr(self.account, "halted", shared) == shared:
                 self._sell(event)
         elif target > 0.5 and self.holding <= 0:
             event.action, event.amount = "buy", self.stake * size / price
@@ -208,7 +212,7 @@ class TradingBot:
 
         ``low``/``high``: the extremes of the candle so far (from the stream's forming candle), so a level the
         price went through between two updates counts too. Returns the event when the bot sold, else None."""
-        if self.holding <= 0:
+        if self.holding <= 0 or not math.isfinite(price):  # a broken tick: never trade on it, wait for the next
             return None
         low = price if low is None else min(low, price)
         high = price if high is None else max(high, price)
@@ -216,7 +220,7 @@ class TradingBot:
         if self.guard:
             halted = self.guard.check(self.holding * (price - self.entry_price))
             if halted:
-                if not self.risk.close_on_halt:
+                if not self.risk.close_on_halt or halted.kind == "bad_data":
                     return None
                 event.target = 0.0
                 self._sell(event)

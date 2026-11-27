@@ -14,6 +14,8 @@ user sets it, so existing results do not change. Where the setting comes from, f
 
 from __future__ import annotations
 
+import math
+
 #: half spread plus a small move on liquid symbols; widen it for illiquid ones
 SUGGESTED_BPS = {"crypto": 5.0, "stock": 2.0, "fx": 1.0}
 
@@ -49,7 +51,12 @@ def resolve_bps(text: str | float | None, symbol: str | None = None) -> float:
         return configured_bps(symbol)
     if isinstance(text, str) and text.strip().lower() == "auto":
         return suggested_bps(symbol)
-    value = float(text)
+    try:
+        value = float(text)
+    except ValueError:
+        raise ValueError(f"slippage must be a number of basis points or 'auto', got {text!r}") from None
+    if not math.isfinite(value):
+        raise ValueError(f"slippage must be a finite number of basis points, got {text!r}")
     if value < 0:
         raise ValueError("slippage cannot be negative")
     return value

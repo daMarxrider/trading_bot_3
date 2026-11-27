@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import tempfile
 from datetime import datetime, timezone
@@ -42,6 +43,20 @@ log = logging.getLogger(__name__)
 DEFAULT_BALANCE, DEFAULT_FEE, DEFAULT_CURRENCY = 10_000.0, 0.001, "USDT"
 
 
+def _setting(explicit, configured, default: float, name: str) -> float:
+    """The explicit argument, else the config value, else ``default``; 0 counts as set, only None/"" are missing."""
+    value = explicit if explicit is not None else configured
+    if value is None or value == "":
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"paper {name} must be a number, got {value!r}") from None
+    if not math.isfinite(number):
+        raise ValueError(f"paper {name} must be a finite number, got {value!r}")
+    return number
+
+
 def default_account_path() -> Path:
     from tradebot.config import os_config_dir
 
@@ -61,10 +76,14 @@ class PaperBroker(BaseBroker):
         super().__init__(credentials, data)
         c = self.credentials
         self.path = Path(path) if path else default_account_path()
-        self.fee = float(fee if fee is not None else c.get("fee") or DEFAULT_FEE)
+        self.fee = _setting(fee, c.get("fee"), DEFAULT_FEE, "fee")  # an explicit 0 is a zero-fee venue, kept
+        if not 0.0 <= self.fee < 1.0:
+            raise ValueError(f"paper fee must be a fraction from 0 up to 1 (0.001 = 0.1 %), got {self.fee:g}")
         self.currency = str(currency or c.get("currency") or DEFAULT_CURRENCY)
-        self.starting_balance = float(starting_balance if starting_balance is not None
-                                      else c.get("starting_balance") or DEFAULT_BALANCE)
+        self.starting_balance = _setting(starting_balance, c.get("starting_balance"), DEFAULT_BALANCE,
+                                         "starting_balance")
+        if not self.starting_balance > 0:
+            raise ValueError(f"paper starting_balance must be positive, got {self.starting_balance:g}")
         self.cash = self.starting_balance
         self.positions: dict[str, dict] = {}  #: base asset -> {"quantity", "avg_cost"}
         self.orders: list[dict] = []
@@ -76,7 +95,7 @@ class PaperBroker(BaseBroker):
         if not self.path.is_file():
             return
         try:
-            s = json.loads(self.path.read_text())
+            s = json.loads(self.path.read_text(encoding="utf-8"))
             self.starting_balance, self.cash = float(s["starting_balance"]), float(s["cash"])
             self.currency, self.fee = str(s["currency"]), float(s["fee"])
             self.positions, self.orders, self.created = s["positions"], s["orders"], s["created"]
@@ -91,7 +110,7 @@ class PaperBroker(BaseBroker):
                  "fee": self.fee, "created": self.created, "positions": self.positions, "orders": self.orders}
         fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=self.path.name, suffix=".tmp")
         try:
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(state, fh, indent=1)
                 fh.flush()
                 os.fsync(fh.fileno())
@@ -124,10 +143,12 @@ class PaperBroker(BaseBroker):
         side, type = Side(side), OrderType(type)
         if type is not OrderType.MARKET:
             raise NotImplementedError("the paper broker only fills market orders")
-        if amount <= 0:
-            raise ValueError("amount must be positive")
+        if not (amount > 0 and math.isfinite(amount)):  # `amount <= 0` lets NaN through into the account
+            raise ValueError(f"amount must be a positive number, got {amount!r}")
         base = self._base(symbol)
         px = self.fill_price(symbol, side, float(self.get_ticker(symbol).last))
+        if not (px > 0 and math.isfinite(px)):
+            raise ValueError(f"no usable price for {symbol} (got {px!r}); order not filled")
         pos = self.positions.get(base, {"quantity": 0.0, "avg_cost": 0.0})
         fee = amount * px * self.fee
         profit = None

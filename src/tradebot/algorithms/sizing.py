@@ -35,7 +35,7 @@ MIN_KELLY_BARS = 10
 
 MODELS: dict[str, dict[str, Param]] = {
     "fixed": {
-        "fraction": Param(0.5, 0.05, 1.0, "Share of the capital put on at each entry."),
+        "fraction": Param(0.5, 0.05, 1.0, "Share of the capital put on at each entry.", share=True),
     },
     "vol": {
         "target_vol": Param(0.2, 0.02, 1.0, "Annual volatility the position aims for (0.2 = 20%). The size shrinks "
@@ -43,14 +43,14 @@ MODELS: dict[str, dict[str, Param]] = {
         "window": IntParam(20, 5, 100, "Candles the volatility is measured over."),
     },
     "risk": {
-        "risk": Param(0.01, 0.002, 0.05, "Share of the capital lost when the stop is hit (0.01 = 1%)."),
+        "risk": Param(0.01, 0.002, 0.05, "Share of the capital lost when the stop is hit (0.01 = 1%).", share=True),
         "stop_atr": Param(2.0, 0.5, 6.0, "How far below the entry the stop sits, in ATRs. A wider stop means a "
                                          "smaller position."),
         "atr_period": IntParam(14, 5, 50, "Candles in the ATR."),
     },
     "kelly": {
         "kelly_fraction": Param(0.5, 0.1, 1.0, "Share of the Kelly fraction to use (0.5 = half Kelly). Full Kelly "
-                                               "is very aggressive."),
+                                               "is very aggressive.", share=True),
         "window": IntParam(100, 20, 500, "Candles the strategy's recent returns are measured over."),
     },
 }

@@ -8,7 +8,9 @@ percent of ``capital`` (the bot's ``stake`` unless set), on realized plus open p
 * daily loss: halts for the rest of the UTC day (lifts itself at the next day);
 * drawdown and the manual kill switch halt until :meth:`RiskGuard.resume` (or ``tradebot bot resume``);
 * exposure cap, order value cap and price sanity range reject single orders;
-* cool-down: pause entries for ``cooldown_minutes`` after ``cooldown_losses`` losing trades in a row.
+* cool-down: pause entries for ``cooldown_minutes`` after ``cooldown_losses`` losing trades in a row;
+* bad data: a profit that isn't a finite number (a NaN price) halts until the next finite one, without touching
+  the peak or the day's starting point, so no limit is switched off by it.
 
 The kill switch is a file, so the CLI, the GUI and a running bot in another process share it.
 Every trigger is logged and handed to ``on_trigger`` (the hook notifications plug into).
@@ -17,6 +19,7 @@ Every trigger is logged and handed to ``on_trigger`` (the hook notifications plu
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -36,13 +39,38 @@ def set_kill(on: bool = True, reason: str = "manual") -> None:
     path = kill_file()
     if on:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f"{reason}\n")
+        path.write_text(f"{reason}\n", encoding="utf-8")
     else:
         path.unlink(missing_ok=True)
 
 
 def kill_active() -> bool:
     return kill_file().exists()
+
+
+def check_stake(stake) -> float:
+    """``stake`` as a positive finite amount of money; raises ValueError (NaN would slip past ``<= 0``)."""
+    try:
+        value = float(stake)
+    except (TypeError, ValueError):
+        raise ValueError(f"the stake must be a number, not {stake!r}") from None
+    if not (value > 0 and math.isfinite(value)):
+        raise ValueError(f"the stake must be a positive amount, not {stake!r}")
+    return value
+
+
+def check_limit(name: str, value, allow_none: bool = True) -> float | None:
+    """A limit as a finite number of at least 0 (0 or None: off). A NaN limit would never trigger and a negative one
+    would always, both silently, so both are refused."""
+    if value is None and allow_none:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"risk limit {name}: {value!r} is not a number") from None
+    if not (number >= 0 and math.isfinite(number)):
+        raise ValueError(f"risk limit {name}: {value!r} must be 0 (off) or a positive number")
+    return number
 
 
 @dataclass
@@ -57,11 +85,22 @@ class RiskLimits:
     close_on_halt: bool = False  #: also sell the open position when a halt triggers
     capital: float | None = None  #: base for drawdown percent; default the bot's stake
 
+    def __post_init__(self):
+        for name in ("max_daily_loss", "max_drawdown", "max_exposure", "max_order_value", "price_band"):
+            setattr(self, name, check_limit(name, getattr(self, name)))
+        self.cooldown_minutes = check_limit("cooldown_minutes", self.cooldown_minutes, allow_none=False)
+        losses = check_limit("cooldown_losses", self.cooldown_losses, allow_none=False)
+        if losses != int(losses):
+            raise ValueError(f"risk limit cooldown_losses: {self.cooldown_losses!r} must be a whole number")
+        self.cooldown_losses = int(losses)
+        if self.capital is not None:
+            self.capital = check_stake(self.capital) if self.capital else None
+
 
 @dataclass
 class RiskEvent:
     time: datetime
-    kind: str  #: daily_loss, drawdown, kill_switch, exposure, order_size, price_band or cooldown
+    kind: str  #: daily_loss, drawdown, kill_switch, bad_data, exposure, order_size, price_band or cooldown
     message: str
     halts: bool = False  #: True when the bot stopped trading, False when one order was rejected
 
@@ -97,6 +136,9 @@ class RiskGuard:
 
     def record_trade(self, pnl: float, now: datetime | None = None) -> None:
         now = now or datetime.now(timezone.utc)
+        if not math.isfinite(pnl):  # added, it would make every later total NaN
+            self._fire("bad_data", f"trade result {pnl!r} is not a number; not counted", False, now)
+            return
         self.realized += pnl
         self.losses_in_row = self.losses_in_row + 1 if pnl < 0 else 0
         lim = self.limits
@@ -111,6 +153,13 @@ class RiskGuard:
         now = now or datetime.now(timezone.utc)
         lim = self.limits
         total = self.realized + open_pnl
+        if not math.isfinite(total):  # nothing below may see it: NaN fails every limit check and poisons the state
+            if self.halted is None:
+                return self._fire("bad_data", f"open profit {open_pnl!r} is not a number (bad price data); "
+                                  "no trading until prices are valid again", True, now)
+            return self.halted
+        if self.halted and self.halted.kind == "bad_data":
+            self.halted = None  # valid prices again
         day = now.date()
         if self._day != day:
             self._day, self._day_start_pnl = day, total
@@ -137,13 +186,17 @@ class RiskGuard:
         if self.cooldown_until and now < self.cooldown_until:
             return RiskEvent(now, "cooldown", f"cool-down until {self.cooldown_until:%H:%M}")
         value = amount * price
+        if (lim.max_order_value or lim.max_exposure) and not math.isfinite(held * price + value):
+            # fail closed: NaN compares False against every cap and would slip through
+            return self._fire("order_size", f"order value can't be computed (amount {amount!r}, price {price!r})",
+                              False, now)
         if lim.max_order_value and value > lim.max_order_value:
             return self._fire("order_size", f"order value {value:.2f} above {lim.max_order_value:g}", False, now)
         if lim.max_exposure and held * price + value > lim.max_exposure:
             return self._fire("exposure", f"exposure {held * price + value:.2f} above {lim.max_exposure:g}",
                               False, now)
         if lim.price_band and market_price is not None and price > 0 \
-                and abs(market_price / price - 1) * 100 > lim.price_band:
+                and not abs(market_price / price - 1) * 100 <= lim.price_band:  # NaN exchange price: rejected
             return self._fire("price_band", f"exchange price {market_price:.6g} is more than {lim.price_band:g}% "
                               f"from the last close {price:.6g}", False, now)
         return None

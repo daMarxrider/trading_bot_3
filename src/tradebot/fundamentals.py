@@ -209,7 +209,7 @@ def _decode(d: dict) -> Snapshot:
 
 def _read(symbol: str) -> Snapshot | None:
     try:
-        return _decode(json.loads(_path(symbol).read_text()))
+        return _decode(json.loads(_path(symbol).read_text(encoding="utf-8")))
     except (OSError, ValueError, KeyError, TypeError):
         return None
 
@@ -218,7 +218,7 @@ def _write(s: Snapshot) -> None:
     try:
         p = _path(s.symbol)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(_encode(s)))
+        p.write_text(json.dumps(_encode(s)), encoding="utf-8")
     except OSError as exc:
         log.debug("could not cache fundamentals of %s: %s", s.symbol, exc)
 

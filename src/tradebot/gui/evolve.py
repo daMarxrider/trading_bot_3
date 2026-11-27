@@ -788,7 +788,7 @@ class EvolveView(QWidget):
             raise ValueError(f"there already is a strategy called {name!r}")
         source = self.result.plugin_source(name)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(source)
+        path.write_text(source, encoding="utf-8")
         load_plugin(source, f"tradebot_plugin_{name}")  # usable right away, without a restart
         self.saved.emit(name)
         self.status.emit(f"saved {name} in {path}")

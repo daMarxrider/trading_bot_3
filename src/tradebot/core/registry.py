@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib.util
 import inspect
 import logging
+import math
 import os
 import sys
 from contextlib import contextmanager
@@ -38,6 +39,8 @@ class Param:
     description: str = ""
     _: KW_ONLY
     integer: bool = False  #: keyword-only, so a positional description can never turn a float param into an int
+    #: a share from 0 to 1 (of the capital, of a position, ...): ``0.5``, ``50%`` and ``50`` all mean a half
+    share: bool = False
 
     def clip(self, value: float) -> float:
         value = min(max(value, self.low), self.high)
@@ -48,6 +51,26 @@ def IntParam(default: int, low: int, high: int, description: str = "") -> Param:
     return Param(default, low, high, integer=True, description=description)
 
 
+def _number(key: str, spec: Param, value) -> float:
+    """``value`` as the number the parameter means; a share also takes a percentage (``50%``, or ``50``: a share
+    above 1 can only be meant as percent). Raises ValueError naming the parameter."""
+    percent = isinstance(value, str) and value.strip().endswith("%")
+    if percent and not spec.share:
+        raise ValueError(f"parameter {key}: {value!r} is not a number (only shares from 0 to 1 take a percent)")
+    try:
+        number = float(value.strip()[:-1]) if percent else float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"parameter {key}: {value!r} is not a number") from None
+    if not math.isfinite(number):
+        raise ValueError(f"parameter {key}: {value!r} is not a finite number")
+    if spec.share:
+        if percent or 1 < number <= 100:
+            number /= 100
+        if not 0 <= number <= 1:
+            raise ValueError(f"parameter {key}: {value!r} must be a share from 0 to 1 (0.5, 50% or 50 for a half)")
+    return number
+
+
 def resolve_params(space: dict[str, Param], given: dict) -> dict:
     """Fill defaults and reject unknown names; values are cast to int where declared."""
     unknown = set(given) - set(space)
@@ -56,7 +79,15 @@ def resolve_params(space: dict[str, Param], given: dict) -> dict:
     out = {}
     for key, spec in space.items():
         value = given.get(key, spec.default)
-        out[key] = int(value) if spec.integer else float(value)
+        number = _number(key, spec, value)
+        if spec.integer:
+            # a window or a count can't be negative, nor 0 when its range starts at 1 or more (0 = a flag's "off")
+            floor = min(spec.low, 1)
+            if int(number) < floor:
+                raise ValueError(f"parameter {key}: {value!r} is too small, it must be at least {floor:g}")
+            out[key] = int(number)
+        else:
+            out[key] = number
     return out
 
 

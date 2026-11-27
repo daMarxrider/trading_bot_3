@@ -74,6 +74,29 @@ def test_parse_params():
         parse_params("fast=x")
 
 
+@pytest.mark.parametrize("text, expected", [
+    ("fast=10 slow=30", {"fast": 10.0, "slow": 30.0}),  # spaces instead of commas
+    ("  fast=10,,slow=30 , ", {"fast": 10.0, "slow": 30.0}),
+    ("level=-2.5e1", {"level": -25.0}),
+    ("fast=1 fast=2", {"fast": 2.0}),  # the last one wins, as on the command line
+    ("size.fraction=50%", {"size.fraction": "50%"}),  # a percentage is read by the parameter itself
+])
+def test_parameter_text_that_is_understood(text, expected):
+    assert parse_params(text) == expected
+
+
+@pytest.mark.parametrize("text, reason", [
+    ("=10", "write name=value"),
+    ("fast = 10", "write name=value"),  # spaces split it into three parts
+    ("fast=", "'' is not a number"),
+    ("fast=ten", "'ten' is not a number"),
+    ("fast=abc%", "'abc%' is not a number"),
+])
+def test_parameter_text_that_is_rejected_says_why(text, reason):
+    with pytest.raises(ValueError, match=reason):
+        parse_params(text)
+
+
 def test_dashboard_lists_the_set_and_starts_and_stops(view, isolated):
     assert list(view.model.df["bot"]) == ["eth", "btc", "sol"]
     assert set(view.model.df["state"]) == {"stopped"}

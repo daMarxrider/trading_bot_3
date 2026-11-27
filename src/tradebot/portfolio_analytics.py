@@ -15,6 +15,8 @@ out (fees count against you). The return measures are the usual two:
 
 from __future__ import annotations
 
+import math
+
 from datetime import datetime, timezone
 
 import numpy as np
@@ -177,9 +179,18 @@ def parse_targets(text: str) -> dict[str, float]:
         if not part.strip():
             continue
         sym, sep, val = part.replace(":", "=").partition("=")
-        if not sep:
+        sym = sym.strip()
+        if not sep or not sym:
             raise ValueError(f"target {part.strip()!r}: expected SYMBOL=percent")
-        out[sym.strip()] = float(val.strip().rstrip("%"))
+        if sym in out:
+            raise ValueError(f"target {sym} is given twice")
+        try:
+            weight = float(val.strip().rstrip("%"))
+        except ValueError:
+            raise ValueError(f"target {part.strip()!r}: {val.strip()!r} is not a number") from None
+        if not math.isfinite(weight):
+            raise ValueError(f"target {part.strip()!r}: the weight must be a finite number")
+        out[sym] = weight
     total = sum(out.values())
     if not out or total <= 0 or any(v < 0 for v in out.values()):
         raise ValueError("targets must be positive numbers")

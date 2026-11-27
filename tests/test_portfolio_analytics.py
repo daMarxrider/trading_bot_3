@@ -90,3 +90,32 @@ def test_rebalance_tolerance_and_unlisted_sold():
     assert set(df["action"]) == {"hold"}
     df = pa.rebalance({"A": 500.0, "X": 500.0}, {"A": 1, "X": 1}, {"A": 1.0})
     assert df.set_index("symbol").loc["X", "action"] == "sell"
+
+
+# -- parse_targets: what a user can type into the target allocation ------------------------------------------
+@pytest.mark.parametrize("text, expected", [
+    ("AAPL=1, MSFT=3", {"AAPL": 0.25, "MSFT": 0.75}),  # any scale: weights are normalised
+    ("AAPL=50%; MSFT=50%", {"AAPL": 0.5, "MSFT": 0.5}),  # semicolons and percent signs
+    (" AAPL = 40 ,, MSFT : 60 ,", {"AAPL": 0.4, "MSFT": 0.6}),  # spaces and empty parts
+    ("BTC/USDT=1", {"BTC/USDT": 1.0}),
+    ("AAPL=0, MSFT=1", {"AAPL": 0.0, "MSFT": 1.0}),  # a zero target means: sell it all
+])
+def test_targets_that_are_understood(text, expected):
+    assert pa.parse_targets(text) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("text, message", [
+    ("", "positive"),
+    (" , ", "positive"),
+    ("AAPL=0", "positive"),
+    ("AAPL=-10, MSFT=60", "positive"),
+    ("AAPL=abc", "'abc' is not a number"),
+    ("AAPL=", "'' is not a number"),
+    ("=40, MSFT=60", "expected SYMBOL=percent"),
+    ("AAPL=nan", "finite"),
+    ("AAPL=inf, MSFT=1", "finite"),
+    ("AAPL=40, AAPL=60", "AAPL is given twice"),
+])
+def test_targets_that_are_rejected_say_why(text, message):
+    with pytest.raises(ValueError, match=message):
+        pa.parse_targets(text)

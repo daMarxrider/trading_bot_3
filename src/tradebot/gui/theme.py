@@ -316,7 +316,7 @@ class ThemeManager(QObject):
         out = {}
         for path in sorted(directory.glob("*.json")) if directory.is_dir() else []:
             try:
-                data = json.loads(path.read_text())
+                data = json.loads(path.read_text(encoding="utf-8"))
                 base = BUILTIN.get(data.pop("base", "dark"), BUILTIN["dark"])
                 if "series" in data:
                     data["series"] = tuple(data["series"])

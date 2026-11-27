@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -101,7 +102,12 @@ def validate(a: Alert) -> Alert:
     if a.kind == "price":
         if a.op not in PRICE_OPS:
             raise ValueError(f"unknown operator {a.op!r}; use one of {' '.join(PRICE_OPS)}")
-        a.value = float(a.value)
+        try:
+            a.value = float(a.value)
+        except (TypeError, ValueError):
+            raise ValueError(f"price: a number, not {a.value!r}") from None
+        if not math.isfinite(a.value):
+            raise ValueError(f"price: a finite number, not {a.value!r}")  # NaN never compares true: never fires
     else:
         from tradebot.indicators import INDICATORS
 
@@ -118,7 +124,7 @@ def validate(a: Alert) -> Alert:
 # -- storage ---------------------------------------------------------------------------------------
 def _read(path: Path) -> list[dict]:
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return []
     except (OSError, ValueError) as exc:
@@ -129,9 +135,27 @@ def _read(path: Path) -> list[dict]:
 
 def _write(path: Path, items: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    _set_aside_if_unreadable(path)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(items, indent=2))
+    tmp.write_text(json.dumps(items, indent=2), encoding="utf-8")
     tmp.replace(path)  # atomic
+
+
+def _set_aside_if_unreadable(path: Path) -> None:
+    """An alerts file that isn't valid JSON (a typo from a hand edit) would be replaced by the next write and the
+    user's alerts lost; move it to ``<name>.corrupt`` first, to be repaired by hand."""
+    try:
+        json.loads(path.read_text(encoding="utf-8"))
+        return
+    except FileNotFoundError:
+        return
+    except (OSError, ValueError):
+        pass
+    backup = path.with_name(path.name + ".corrupt")
+    if backup.exists():  # never overwrite an earlier backup
+        backup = path.with_name(f"{path.name}.corrupt.{time.time_ns()}")
+    path.replace(backup)
+    log.warning("alerts file %s was unreadable; moved to %s, starting a new one", path, backup)
 
 
 def load(path: Path | None = None) -> list[Alert]:
@@ -268,5 +292,11 @@ def parse_price(text: str) -> tuple[str, float]:
     t = text.strip()
     for op in (">=", "<=", ">", "<"):
         if t.startswith(op):
-            return op, float(t[len(op):])
+            try:
+                value = float(t[len(op):])
+            except ValueError:
+                break
+            if math.isfinite(value):
+                return op, value
+            break
     raise ValueError(f"{text!r}: use '>=100000', '<=90000', '>' or '<' and a number")

@@ -88,11 +88,11 @@ RISK: dict[str, tuple[tuple[str, Param], ...]] = {
                  ("period", IntParam(14, 2, 100, "Candles the ATR (average true range) is measured over."))),
     "take_profit": (("pct", Param(10.0, 0.5, 200.0, "Take-profit: sell when the price is this many percent above "
                                                      "the entry price.")),
-                    ("size", Param(1.0, 0.05, 1.0, _SIZE))),
+                    ("size", Param(1.0, 0.05, 1.0, _SIZE, share=True))),
     "take_profit_atr": (("mult", Param(3.0, 0.5, 20.0, "Take-profit: sell when the price is this many ATRs above "
                                                         "the entry price (ATR at the entry).")),
                         ("period", IntParam(14, 2, 100, "Candles the ATR (average true range) is measured over.")),
-                        ("size", Param(1.0, 0.05, 1.0, _SIZE))),
+                        ("size", Param(1.0, 0.05, 1.0, _SIZE, share=True))),
     "trail_pct": (("pct", Param(5.0, 0.5, 50.0, "Trailing stop: sell when the price is this many percent below "
                                                  "the highest close since the entry.")),),
     "trail_atr": (("mult", Param(3.0, 0.5, 10.0, "Trailing stop: sell when the price is this many ATRs below "

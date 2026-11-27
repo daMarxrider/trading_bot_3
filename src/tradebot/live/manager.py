@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -53,7 +54,7 @@ from tradebot import notify
 from tradebot.config import config_path, os_config_dir
 from tradebot.core.timeframes import to_timedelta
 from tradebot.live.bot import BotEvent, TradingBot
-from tradebot.live.risk import RiskLimits
+from tradebot.live.risk import RiskLimits, check_limit, check_stake
 
 log = logging.getLogger(__name__)
 
@@ -106,18 +107,25 @@ class BotSpec:
             raise ValueError(f"bot {self.name!r} needs a symbol and an algorithm")
         if self.mode not in MODES:
             raise ValueError(f"bot {self.name!r}: mode must be one of {', '.join(MODES)}, not {self.mode!r}")
-        self.stake = float(self.stake)
-        if self.stake <= 0:
-            raise ValueError(f"bot {self.name!r}: the stake must be above 0")
+        try:
+            self.stake = check_stake(self.stake)
+        except ValueError as e:
+            raise ValueError(f"bot {self.name!r}: {e}") from None
         try:
             to_timedelta(self.timeframe)
         except Exception:
             raise ValueError(f"bot {self.name!r}: unknown timeframe {self.timeframe!r}") from None
-        self.params = {str(k): float(v) for k, v in (self.params or {}).items()}
+        # a share may be kept as percent text ("50%"); the algorithm reads it (build_algorithm checks every value)
+        self.params = {str(k): v.strip() if isinstance(v, str) and v.strip().endswith("%") else float(v)
+                       for k, v in (self.params or {}).items()}
         known = {f.name for f in fields(RiskLimits)}
         unknown = set(self.risk or {}) - known
         if unknown:
             raise ValueError(f"bot {self.name!r}: unknown risk limit(s) {', '.join(sorted(unknown))}")
+        try:
+            self.limits()
+        except ValueError as e:
+            raise ValueError(f"bot {self.name!r}: {e}") from None
 
     @property
     def broker_name(self) -> str:
@@ -171,9 +179,12 @@ class AccountLimits:
     close_on_halt: bool = False  #: sell the open positions when the daily loss halts the bots
 
     def __post_init__(self):
-        self.max_total_exposure = float(self.max_total_exposure) if self.max_total_exposure else None
-        self.max_daily_loss = float(self.max_daily_loss) if self.max_daily_loss else None
-        self.max_open_positions = int(self.max_open_positions or 0)
+        self.max_total_exposure = check_limit("max_total_exposure", self.max_total_exposure) or None
+        self.max_daily_loss = check_limit("max_daily_loss", self.max_daily_loss) or None
+        positions = check_limit("max_open_positions", self.max_open_positions) or 0
+        if positions != int(positions):
+            raise ValueError(f"risk limit max_open_positions: {self.max_open_positions!r} must be a whole number")
+        self.max_open_positions = int(positions)
         self.close_on_halt = bool(self.close_on_halt)
 
     def active(self) -> bool:
@@ -223,19 +234,23 @@ def load_bots(path: Path | None = None) -> BotSet:
     if not path.is_file():
         return BotSet()
     try:
-        data = tomllib.loads(path.read_text())
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise ValueError(f"can't read {path}: {exc}") from None
     limits = data.get("limits", {})
     unknown = set(limits) - {f.name for f in fields(AccountLimits)}
     if unknown:
         raise ValueError(f"{path}: unknown limit(s) {', '.join(sorted(unknown))}")
-    bots = [BotSpec.from_dict(b) for b in data.get("bots", [])]
+    try:
+        bots = [BotSpec.from_dict(b) for b in data.get("bots", [])]
+        account = AccountLimits(**limits)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{path}: {exc}") from None
     names = [b.name for b in bots]
     dup = {n for n in names if names.count(n) > 1}
     if dup:
         raise ValueError(f"{path}: more than one bot named {', '.join(sorted(dup))}")
-    return BotSet(bots, AccountLimits(**limits))
+    return BotSet(bots, account)
 
 
 def _toml(value) -> str:
@@ -267,7 +282,7 @@ def save_bots(bots: BotSet, path: Path | None = None) -> Path:
     tomllib.loads(text)  # never write a file that can't be read back
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text)
+    tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
     return path
 
@@ -293,6 +308,8 @@ class AccountGuard:
         """The shared halt message, or None while the bots may trade."""
         now = now or datetime.now(timezone.utc)
         total = self.pnl()
+        if not math.isfinite(total):  # bad price data: no trading, and the day's starting point stays valid
+            return "the bots' profit is not a number (bad price data); no trading until prices are valid again"
         if self._day != now.date():
             self._day, self._day_start, self.halted = now.date(), total, None  # a new day, a new allowance
         lim = self.limits.max_daily_loss
@@ -467,7 +484,10 @@ class BotManager:
                 bot.last_price = float(saved.get("last", 0))
                 r.events.extend(saved.get("events", [])[-EVENTS_KEPT:])
             r.bot, r.error, r.next_due = bot, "", self.clock()
-            self.stop_request_path(name).unlink(missing_ok=True)
+            try:  # an old stop request; like the state file, a broken state folder must not keep the bot from running
+                self.stop_request_path(name).unlink(missing_ok=True)
+            except OSError as exc:
+                log.warning("could not clear the stop request of bot %s: %s", name, exc)
             self._write_state(r)
             log.info("bot %s started (%s %s %s, %s)", name, spec.symbol, spec.algorithm, spec.timeframe, spec.mode)
 
@@ -506,7 +526,10 @@ class BotManager:
         out = []
         for name, r in list(self._runners.items()):
             if r.running and self.stop_request_path(name).exists():
-                self.stop_request_path(name).unlink(missing_ok=True)
+                try:
+                    self.stop_request_path(name).unlink(missing_ok=True)
+                except OSError as exc:  # the stop must happen anyway
+                    log.warning("could not remove the stop request of bot %s: %s", name, exc)
                 self.stop(name)
                 continue
             if not r.running:
@@ -586,7 +609,7 @@ class BotManager:
 
     def _read_state(self, name: str) -> dict | None:
         try:
-            data = json.loads(self.state_path(name).read_text())
+            data = json.loads(self.state_path(name).read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else None
         except (OSError, ValueError):
             return None
@@ -612,7 +635,7 @@ class BotManager:
             self.state_dir.mkdir(parents=True, exist_ok=True)
             path = self.state_path(r.spec.name)
             tmp = path.with_name(path.name + ".tmp")
-            tmp.write_text(json.dumps(data, indent=1))
+            tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
             tmp.replace(path)
         except OSError as exc:
             log.warning("could not save the state of bot %s: %s", r.spec.name, exc)
@@ -675,5 +698,5 @@ def request_stop(name: str, path: Path | None = None) -> Path:
     """Ask the process that runs ``name`` to stop it at its next tick (within a second or so)."""
     p = (path or state_dir()) / f"{_slug(name)}.stop"
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("stop\n")
+    p.write_text("stop\n", encoding="utf-8")
     return p

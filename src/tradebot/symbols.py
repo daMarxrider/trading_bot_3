@@ -218,7 +218,7 @@ class CryptoPairs:
             return None, False
         try:
             stale = time.time() - self.cache.stat().st_mtime > self.max_age
-            return [SymbolMatch(*row) for row in json.loads(self.cache.read_text())], stale
+            return [SymbolMatch(*row) for row in json.loads(self.cache.read_text(encoding="utf-8"))], stale
         except (OSError, ValueError, TypeError):
             return None, False
 
@@ -302,7 +302,7 @@ def cached_queries(source: Callable[[str], list[SymbolMatch]], cache: Path, max_
     def search(query: str) -> list[SymbolMatch]:
         key = query.strip().lower()
         try:
-            entries = json.loads(cache.read_text())
+            entries = json.loads(cache.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             entries = {}
         hit = entries.get(key)
@@ -342,7 +342,7 @@ def _symbols_dir() -> Path | None:
 
 def _read_json(path: Path) -> dict:
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -354,7 +354,7 @@ def _write_json(path: Path | None, data) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data))
+        tmp.write_text(json.dumps(data), encoding="utf-8")
         tmp.replace(path)
     except OSError as exc:
         log.debug("could not write cache %s: %s", path, exc)
