@@ -337,6 +337,10 @@ Arguments: `SYMBOL`
 |---|---|---|
 | `--tf` | `1d` | Timeframe |
 | `--bars` | `500` | Candles to analyse |
+| `--window` | `60` | Candles for the rolling z-score (twice as many for the reversion speed) |
+| `--exit` | `0.5` | The trade's exit band, in σ |
+| `--stop` | `4.0` | The trade's stop, in σ |
+| `--horizon` | `30` | Candles the gap has to close in, for --min-probability |
 
 ## `tradebot pair-backtest`
 
@@ -355,6 +359,8 @@ Arguments: `SYMBOL`
 | `--fee` | `0.001` | Fee per change of either leg |
 | `--borrow` | `0.02` | Yearly cost of the short leg (stocks ~0.02, crypto 0) |
 | `--method` | `rolling` | Hedge ratio: rolling (OLS over --window) or kalman (adaptive filter) |
+| `--min-probability` |  | Open only when the chance that the gap closes before the stop within --horizon candles is at least this (0.6 = 60 %; 0 = off). From the gap's mean reversion (#223) |
+| `--horizon` | `30` | Candles the gap has to close in, for --min-probability |
 
 ## `tradebot pair-scan`
 
@@ -457,6 +463,8 @@ Arguments: `LEG_A`, `LEG_B`
 | `--exit` | `0.5` | Close when it is back inside this many σ |
 | `--stop` | `4.0` | Give up beyond this many σ |
 | `--method` | `rolling` | Hedge ratio: rolling or kalman |
+| `--min-probability` |  | Open only when the chance that the gap closes before the stop within --horizon candles is at least this (0.6 = 60 %; 0 = off). From the gap's mean reversion (#223) |
+| `--horizon` | `30` | Candles the gap has to close in, for --min-probability |
 | `--live`, `--no-live` |  | Actually place orders (default: dry run) |
 | `--sandbox`, `--no-sandbox` |  | Use the exchange testnet (ccxt brokers) |
 | `--once`, `--no-once` |  | Evaluate a single candle and exit |
