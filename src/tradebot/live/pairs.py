@@ -49,6 +49,7 @@ from tradebot.brokers.base import BaseBroker
 from tradebot.core.models import Order, OrderStatus, Side
 from tradebot.core.timeframes import to_timedelta
 from tradebot.journal import Journal
+from tradebot.live.risk import check_stake
 
 log = logging.getLogger(__name__)
 STATE_VERSION = 1
@@ -178,6 +179,7 @@ class PairBot:
     journal: Journal | None = None  #: every order is stored here (#159)
 
     def __post_init__(self):
+        self.stake = check_stake(self.stake)
         if not 0 <= self.exit < self.entry < self.stop:
             raise ValueError("need 0 <= exit < entry < stop")
         if self.method not in ("rolling", "kalman"):

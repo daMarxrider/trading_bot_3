@@ -90,9 +90,9 @@ class Candles(BaseIndicator):
 
     name = "candles"
     description = "Candlestick patterns (hammer, engulfing, stars, three soldiers/crows, harami, tweezers) with markers and alerts"
-    params = {"doji_ratio": Param(0.1, 0.01, 0.4, "largest body, as a share of the candle's range, of a doji"),
+    params = {"doji_ratio": Param(0.1, 0.01, 0.4, "largest body, as a share of the candle's range, of a doji", share=True),
               "trend": IntParam(5, 1, 50, "candles a hammer / shooting star must follow a fall / rise over"),
-              "long_ratio": Param(0.6, 0.3, 0.95, "share of its range the first candle of a star must be body")}
+              "long_ratio": Param(0.6, 0.3, 0.95, "share of its range the first candle of a star must be body", share=True)}
     outputs = ("pattern", "anchor", "bullish", "bearish", *pt.CANDLE_PATTERNS)
     labels = {"pattern": CANDLE_LABELS}
     label_help = {"pattern": CANDLE_HELP}

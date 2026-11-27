@@ -128,3 +128,34 @@ def test_cli_backtest_passes_slippage(monkeypatch):
     assert out["free"] != out["slip"]
     bad = CliRunner().invoke(cli.app, ["backtest", "AAPL", "rsi_threshold", "--no-plot", "--slippage", "-3"])
     assert bad.exit_code != 0
+
+
+@pytest.mark.parametrize("text, expected", [("0", 0.0), ("2.5", 2.5), (3, 3.0), (" AUTO ", 1.0)])
+def test_slippage_text_that_is_understood(text, expected):
+    assert resolve_bps(text, "EURUSD=X") == expected  # auto for fx is 1 bp
+
+
+@pytest.mark.parametrize("text, message", [
+    ("-1", "negative"),
+    ("abc", "basis points or 'auto'"),
+    ("", "basis points or 'auto'"),
+    ("nan", "finite"),
+    ("inf", "finite"),
+])
+def test_slippage_text_that_is_rejected(text, message):
+    with pytest.raises(ValueError, match=message):
+        resolve_bps(text, "AAPL")
+
+
+@pytest.mark.parametrize("symbol, kind", [(None, "stock"), ("", "stock"), ("btc/usdt", "crypto"),
+                                          ("eurusd=x", "fx"), ("SAP.DE", "stock")])
+def test_asset_class_of_odd_symbols(symbol, kind):
+    assert asset_class(symbol) == kind
+
+
+def test_a_negative_configured_slippage_counts_as_zero():
+    assert configured_bps("AAPL", {"backtest": {"slippage_bps": -4}}) == 0.0
+
+
+def test_an_asset_class_missing_from_the_config_table_is_zero():
+    assert configured_bps("AAPL", {"backtest": {"slippage_bps": {"crypto": 5}}}) == 0.0

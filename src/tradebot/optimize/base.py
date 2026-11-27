@@ -240,6 +240,8 @@ class PopulationOptimizer(ABC):
             raise ValueError(f"unknown aggregate {aggregate!r}; choose {', '.join(AGGREGATES)}")
         self.aggregate = aggregate
         self.multi = not isinstance(df, pd.DataFrame)
+        if split_at is None and not train_fraction > 0:  # a negative one would slice from the end
+            raise ValueError(f"the training fraction must be above 0 (0.7 = the first 70 %), got {train_fraction!r}")
         frames, self.skipped = select_frames(df if self.multi else {"": df}, align, min_history)
         self.data = []
         for symbol, frame in frames.items():
@@ -248,6 +250,9 @@ class PopulationOptimizer(ABC):
             else:
                 split = int(len(frame) * train_fraction) if train_fraction < 1 else len(frame)
             train_df = frame.iloc[:split]
+            if len(train_df) < 2:
+                raise ValueError(f"{symbol or 'the data'}: the training part has {len(train_df)} candle(s), at least "
+                                 "2 are needed; raise the training fraction or load more candles")
             self.data.append(_Data(symbol, train_df, frame.iloc[split:], infer_periods_per_year(frame.index),
                                    OHLC.from_frame(train_df, device=self.backend.device)))
         if not 0 <= min_symbols_beating <= len(self.data):

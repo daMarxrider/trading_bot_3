@@ -206,7 +206,13 @@ def watchlists() -> dict[str, list[str]]:
     table = config.get(WATCHLISTS)
     lists = {str(name): [str(s) for s in symbols] for name, symbols in table.items() if isinstance(symbols, list)} \
         if isinstance(table, dict) else {}
-    return lists or {MAIN_LIST: [str(s) for s in config.get("watchlist", DEFAULT_WATCHLIST)]}
+    if lists:
+        return lists
+    old = config.get("watchlist", DEFAULT_WATCHLIST)
+    if not isinstance(old, list):  # a string would be split into its letters
+        log.warning("ignoring watchlist = %r in %s: it must be a list like [\"AAPL\", \"MSFT\"]", old, config_path())
+        old = DEFAULT_WATCHLIST
+    return {MAIN_LIST: [str(s) for s in old]}
 
 
 def watchlist(name: str | None = None) -> list[str]:
@@ -285,11 +291,16 @@ class Settings:
         return self._data.get(key, default)
 
     def set(self, key: str, value) -> None:
+        try:
+            text = json.dumps({**self._data, key: value}, indent=2, sort_keys=True)
+        except (TypeError, ValueError) as exc:  # kept out of memory too, or every later save would fail on it
+            log.warning("not saving setting %s: %s", key, exc)
+            return
         self._data[key] = value
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self._data, indent=2, sort_keys=True))
+            tmp.write_text(text)
             tmp.replace(self.path)  # atomic: a crash mid-write never leaves a half-written file
         except OSError as exc:
             log.warning("could not save settings to %s: %s", self.path, exc)

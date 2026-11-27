@@ -60,8 +60,10 @@ class Margin:
             raise ValueError("leverage must be between 1 and 125")
         if not 0.0 <= self.maintenance < 1.0 / self.leverage:
             raise ValueError(f"the maintenance margin must be between 0 and 1/leverage ({1 / self.leverage:.4f})")
-        if self.borrow < 0:
-            raise ValueError("the borrow fee cannot be negative")
+        if not self.borrow >= 0 or not np.isfinite(self.borrow):  # `borrow < 0` lets NaN through
+            raise ValueError("the borrow fee must be a finite number, not negative")
+        if not np.isfinite(self.funding):
+            raise ValueError("the funding rate must be a finite number")
 
     @property
     def plain(self) -> bool:

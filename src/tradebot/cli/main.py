@@ -41,7 +41,8 @@ desktop_app = typer.Typer(help="App-launcher entry (Linux .desktop, Windows Star
 app.add_typer(desktop_app, name="desktop")
 console = Console()
 
-Params = Annotated[list[str], typer.Option("--param", "-p", help="Algorithm parameter, e.g. -p lower=30",
+Params = Annotated[list[str], typer.Option("--param", "-p", help="Algorithm parameter, e.g. -p lower=30 (a share also as percent, "
+                                           "e.g. -p size.fraction=50%)",
                                            autocompletion=complete.algorithm_params)]
 Members = Annotated[Optional[str], typer.Option(
     help="Comma-separated members for the 'vote' ensemble, or for the 'pool' (strategies and indicators)",
@@ -59,7 +60,8 @@ Fills = Annotated[Optional[str], typer.Option(
 Sizing = Annotated[Optional[str], typer.Option(
     help="Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility "
          "target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional "
-         "Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15",
+         "Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15; shares take a percent too: "
+         "-p size.fraction=50%",
     autocompletion=complete.choices(("none", "full size"), ("fixed", "fixed fraction"),
                                     ("vol", "volatility target"), ("risk", "fixed risk per trade"),
                                     ("kelly", "fractional Kelly"))
@@ -128,13 +130,25 @@ def _main(verbose: Annotated[bool, typer.Option("-v", "--verbose")] = False,
 
 
 # -- helpers ------------------------------------------------------------------------------------------
+def _kv_value(value: str) -> float | str:
+    """A number, or ``"50%"`` kept as text for the parameter to read (only shares take a percent)."""
+    text = value.strip()
+    if text.endswith("%"):
+        float(text[:-1])  # ValueError when the part before % isn't a number
+        return text
+    return float(text)
+
+
 def parse_kv(items: list[str]) -> dict:
     out = {}
     for item in items or []:
         key, sep, value = item.partition("=")
-        if not sep:
+        if not sep or not key.strip():
             raise typer.BadParameter(f"expected key=value, got {item!r}")
-        out[key.strip()] = float(value)
+        try:
+            out[key.strip()] = _kv_value(value)
+        except ValueError:
+            raise typer.BadParameter(f"{item!r}: {value.strip()!r} is not a number") from None
     return out
 
 
@@ -217,6 +231,8 @@ def make_algo(name: str, params: list[str], members: str | None, entry: str | No
         return sized(directed(algo, direction), sizing, **size)
     except ValueError as e:
         raise typer.BadParameter(str(e)) from None
+    except KeyError as e:  # an unknown strategy or member name; args[0] is the message without KeyError's quotes
+        raise typer.BadParameter(str(e.args[0] if e.args else e)) from None
 
 
 def _margin(leverage: float = 1.0, maintenance: float = 0.005, borrow: float = 0.0, funding: str | None = None):
@@ -376,7 +392,7 @@ def backtest(
     maintenance_margin: MaintenanceMargin = 0.005,
     borrow_fee: BorrowFee = 0.0,
     funding: Funding = None,
-    fee: Annotated[float, typer.Option(help="Fee per side, fraction")] = 0.001,
+    fee: Annotated[float, typer.Option(min=0.0, max=1.0, help="Fee per side, fraction")] = 0.001,
     slippage: Slippage = None,
     no_entry_before_earnings: EarningsBlackout = None,
     flat_around_events: FlatAroundEvents = None,
@@ -483,7 +499,7 @@ def montecarlo(
     members: Members = None,
     entry: Entry = None,
     exit: Exit = None,
-    fee: Annotated[float, typer.Option(help="Fee per side, fraction")] = 0.001,
+    fee: Annotated[float, typer.Option(min=0.0, max=1.0, help="Fee per side, fraction")] = 0.001,
     runs: Annotated[int, typer.Option(help="Number of simulated re-orderings")] = 1000,
     method: Annotated[str, typer.Option(help="shuffle (same trades, random order) | bootstrap (draw with "
                                         "replacement) | block (bootstrap in runs of consecutive items)",
@@ -673,7 +689,7 @@ def optimize(
     train: Annotated[float, typer.Option(help="Fraction of data used for training")] = 0.7,
     backend: Annotated[str, typer.Option(help="auto | gpu | cuda | rocm | cpu | numpy", autocompletion=complete.choices(
         ("auto", "GPU if available"), ("gpu", "any GPU"), ("cuda", "NVIDIA only"), ("rocm", "AMD only (alias: amd)"), ("cpu", "torch on the CPU"), ("numpy", "")))] = "auto",
-    fee: float = 0.001,
+    fee: Annotated[float, typer.Option(min=0.0, max=1.0, help="Fee per side, fraction")] = 0.001,
     slippage: Slippage = None,
     min_trades: Annotated[int, typer.Option(help="Reject parameter sets with fewer round trips")] = 4,
     dca_amount: DcaAmount = None,
@@ -1085,7 +1101,7 @@ def evolve(
     folds: Annotated[Optional[int], typer.Option(
         help="Walk-forward: also run the search on this many rolling windows, each scored on the stretch after it "
         "(default 0, with --from-scratch 3)")] = None,
-    fee: float = 0.001,
+    fee: Annotated[float, typer.Option(min=0.0, max=1.0, help="Fee per side, fraction")] = 0.001,
     slippage: Slippage = None,
     dca_amount: DcaAmount = None,
     best_result: Annotated[bool, typer.Option(
@@ -1451,16 +1467,22 @@ def bot_run(
     from tradebot.journal import Journal
     from tradebot.live import RiskLimits, TradingBot
 
+    from tradebot.live.risk import check_stake
+
     if paper:
         broker = "paper"
+    try:  # before the broker is contacted or anything is confirmed
+        check_stake(stake)
+        limits = RiskLimits(max_daily_loss or None, max_drawdown or None, max_exposure or None, max_order or None,
+                            price_band or None, cooldown_losses, cooldown_minutes, close_on_halt)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
     confirm_live_risk(live)
 
     kwargs = {"sandbox": True} if sandbox else {}
     b = create_broker(broker, **kwargs)
     if live and not b.can_trade:
         raise typer.BadParameter(f"{broker} is read-only")
-    limits = RiskLimits(max_daily_loss or None, max_drawdown or None, max_exposure or None, max_order or None,
-                        price_band or None, cooldown_losses, cooldown_minutes, close_on_halt)
     bot = TradingBot(b, make_algo(algo, param, members, entry, exit, fills, sizing), symbol, tf, stake,
                      dry_run=not (live or broker == "paper"), risk=limits, journal=Journal() if journal else None, on_risk=lambda e: console.print(f"[red]risk guard {e.kind}:[/] {e.message}"),
                      on_event=lambda e: console.print(
@@ -1645,7 +1667,10 @@ def bots_limits(
         from tradebot.live.manager import AccountLimits
         from dataclasses import asdict
 
-        bots.limits = AccountLimits(**{**asdict(bots.limits), **changes})
+        try:
+            bots.limits = AccountLimits(**{**asdict(bots.limits), **changes})
+        except ValueError as e:
+            raise typer.BadParameter(str(e)) from None
         _save_bots(bots)
     console.print(f"shared limits: {bots.limits.describe()}"
                   + (" · positions are sold on a halt" if bots.limits.close_on_halt else ""))
@@ -1834,7 +1859,13 @@ def bot_pair_run(
     from tradebot.journal import Journal
     from tradebot.live import PairBot, PairStateError, pair_state_path
 
+    from tradebot.live.risk import check_stake
+
     legs, symbol = (leg_a, leg_b), f"{leg_a} / {leg_b}"
+    try:
+        check_stake(stake)
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--stake") from None
     confirm_live_risk(live)
     b = create_broker(broker, **({"sandbox": True} if sandbox else {}))
     if live and not b.can_trade:
@@ -1937,6 +1968,18 @@ def positions(broker: Broker = "binance"):
     console.print(t)
 
 
+def _positions(brokers: list[str], engine) -> list:
+    """The holdings of ``brokers``; a missing or broken holdings file (or a broker without holdings) is reported as
+    an error message, not a traceback."""
+    try:
+        return [p for name in brokers for p in create_broker(name, data=engine).get_positions()]
+    except KeyError as exc:  # an unknown broker name
+        raise typer.BadParameter(str(exc.args[0] if exc.args else exc), param_hint="--broker") from None
+    except (OSError, ValueError, NotImplementedError) as exc:
+        console.print(f"[bold red]can't read the holdings:[/] {escape(str(exc))}")
+        raise typer.Exit(1) from None
+
+
 @app.command()
 def portfolio(broker: Annotated[list[str], typer.Option(help="Broker(s) to aggregate",
                                                        autocompletion=complete.brokers)] = ["scalable"]):
@@ -1945,7 +1988,7 @@ def portfolio(broker: Annotated[list[str], typer.Option(help="Broker(s) to aggre
     from tradebot.portfolio import build_portfolio
 
     engine = MarketDataEngine()
-    positions_ = [p for name in broker for p in create_broker(name, data=engine).get_positions()]
+    positions_ = _positions(broker, engine)
     with console.status("pricing holdings ..."):
         pf = build_portfolio(positions_, engine.latest_price)
     t = Table(title="portfolio")
@@ -1981,9 +2024,12 @@ def portfolio_analytics(
     from tradebot.portfolio import build_portfolio
     from tradebot.portfolio_analytics import analyse, parse_targets
 
+    try:  # before any broker is contacted: a typo fails at once
+        targets = parse_targets(target) if target else None
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--target") from None
     engine = MarketDataEngine()
-    positions_ = [p for name in broker for p in create_broker(name, data=engine).get_positions()]
-    targets = parse_targets(target) if target else None
+    positions_ = _positions(broker, engine)
     journal = Journal()
     fills = journal.fills(mode)
     journal.close()
@@ -1999,6 +2045,8 @@ def portfolio_analytics(
 
 
 def _print_analytics(out: dict, plot: bool, benchmark: str) -> None:
+    from tradebot.cli.charts import render_lines
+
     pct = lambda v: "–" if v is None or v != v else f"{v * 100:+.2f}%"  # noqa: E731
     perf = out["performance"]
     if perf and perf["summary"]:
@@ -2112,7 +2160,7 @@ def scan(
     for item in param:
         key, sep, value = item.partition("=")
         try:
-            params[key] = float(value)
+            params[key] = _kv_value(value)
         except ValueError:
             raise typer.BadParameter(f"{item!r}: use name=number", param_hint="--param") from None
     filters = [parse_where(w) for w in where] + [
@@ -2418,7 +2466,7 @@ def pair_backtest_(
         entry: Annotated[float, typer.Option(help="Open when the gap is this many σ wide")] = 2.0,
         exit: Annotated[float, typer.Option(help="Close when it is back inside this many σ")] = 0.5,
         stop: Annotated[float, typer.Option(help="Give up beyond this many σ")] = 4.0,
-        fee: Annotated[float, typer.Option(help="Fee per change of either leg")] = 0.001,
+        fee: Annotated[float, typer.Option(min=0.0, max=1.0, help="Fee per change of either leg")] = 0.001,
         borrow: Annotated[float, typer.Option(help="Yearly cost of the short leg (stocks ~0.02, crypto 0)")] = 0.02,
         method: Annotated[str, typer.Option(help="Hedge ratio: rolling (OLS over --window) or kalman (adaptive filter)",
                                             autocompletion=complete.choices(("rolling", "rolling regression"),
@@ -2696,7 +2744,7 @@ def _scan_params(items: list[str]) -> dict:
     for item in items:
         key, _, value = item.partition("=")
         try:
-            params[key] = float(value)
+            params[key] = _kv_value(value)
         except ValueError:
             raise typer.BadParameter(f"{item!r}: use name=number", param_hint="--param") from None
     return params

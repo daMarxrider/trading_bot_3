@@ -370,7 +370,7 @@ class VolumeProfile(BaseIndicator):
     description = "Rolling volume profile: point of control and value area of the last N candles"
     params = {"period": IntParam(100, 10, 1000, "candles of the window"),
               "bins": IntParam(24, 5, 200, "price bins the window's range is split into"),
-              "value_area": Param(0.7, 0.5, 0.95, "share of the volume the value area holds")}
+              "value_area": Param(0.7, 0.5, 0.95, "share of the volume the value area holds", share=True)}
     outputs = ("poc", "vah", "val", "above_value", "below_value")
     uses_volume = True
     styles = {"poc": Style(color="accent", width=1.6), "vah": Style(color="muted", width=1, dash="dash"),

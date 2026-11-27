@@ -53,15 +53,35 @@ def _collect_garbage_between_gui_tests(request):
         _flush_deferred_deletes(request.module)
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _never_the_users_folders(tmp_path_factory):
+    """Background work that outlives its test (a chart's name lookup in a thread) runs after the test's own
+    monkeypatched folders are restored. Without this it would then read and write the user's real cache and
+    config, e.g. take a chart title from ~/.cache/tradebot and leak it into a later test. The per-test fixtures
+    below still give every test its own folders."""
+    base = tmp_path_factory.mktemp("session-home")
+    with pytest.MonkeyPatch.context() as mp:
+        for var in ("TRADEBOT_CACHE_DIR", "TRADEBOT_PAIR_STATE_DIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "APPDATA",
+                    "LOCALAPPDATA"):
+            mp.setenv(var, str(base / var.lower()))
+        mp.setenv("TRADEBOT_CONFIG", str(base / "config.toml"))
+        mp.setenv("TRADEBOT_JOURNAL", str(base / "journal.sqlite"))
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _no_symbol_name_lookups(monkeypatch):
-    """The chart looks up the instrument's full name online after loading; tests stay offline."""
+    """The chart looks up the instrument's full name online after loading; tests stay offline, and a name found
+    by an earlier test (``symbol_name`` keeps them in memory) never shows up in a later one."""
     import tradebot.symbols
 
     def offline(*args, **kwargs):
         raise ConnectionError("network disabled in tests")
 
     monkeypatch.setattr(tradebot.symbols, "yahoo_search_http", offline)
+    tradebot.symbols.symbol_name.cache_clear()
+    yield
+    tradebot.symbols.symbol_name.cache_clear()
 
 
 def make_ohlc(n: int = 400, seed: int = 0, freq: str = "D") -> pd.DataFrame:

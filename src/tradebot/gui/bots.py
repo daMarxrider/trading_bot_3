@@ -49,15 +49,20 @@ COLUMNS = ["bot", "symbol", "strategy", "tf", "mode", "state", "position", "entr
 EVENT_COLUMNS = ["time", "bot", "action", "amount", "price", "note"]
 
 
-def parse_params(text: str) -> dict[str, float]:
-    """``fast=10, slow=30`` (commas or spaces) -> ``{"fast": 10.0, "slow": 30.0}``; raises ValueError."""
+def parse_params(text: str) -> dict[str, float | str]:
+    """``fast=10, slow=30`` (commas or spaces) -> ``{"fast": 10.0, "slow": 30.0}``; raises ValueError. A share may
+    be given in percent (``size.fraction=50%``), kept as text for the parameter to read."""
     out = {}
     for part in text.replace(",", " ").split():
         key, sep, value = part.partition("=")
         if not sep or not key:
             raise ValueError(f"parameter {part!r}: write name=value")
         try:
-            out[key.strip()] = float(value)
+            if value.endswith("%"):
+                float(value[:-1])  # only checked here: the parameter itself knows whether it takes a percent
+                out[key.strip()] = value
+            else:
+                out[key.strip()] = float(value)
         except ValueError:
             raise ValueError(f"parameter {key}: {value!r} is not a number") from None
     return out

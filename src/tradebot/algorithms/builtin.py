@@ -169,7 +169,7 @@ class VotingEnsemble(BaseAlgorithm):
     description = "Majority vote over several algorithms"
     poolable = False
     params = {"threshold": Param(0.7, 0.5, 1.0, "The share of member strategies that must agree before "
-                                                 "buying or selling: 0.7 means 70%.")}
+                                                 "buying or selling: 0.7 means 70%.", share=True)}
 
     def __init__(self, members: list[BaseAlgorithm | str] | None = None, **params):
         members = [ALGORITHMS.get(m)() if isinstance(m, str) else m for m in members or ()]

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -53,7 +54,7 @@ from tradebot import notify
 from tradebot.config import config_path, os_config_dir
 from tradebot.core.timeframes import to_timedelta
 from tradebot.live.bot import BotEvent, TradingBot
-from tradebot.live.risk import RiskLimits
+from tradebot.live.risk import RiskLimits, check_limit, check_stake
 
 log = logging.getLogger(__name__)
 
@@ -106,18 +107,25 @@ class BotSpec:
             raise ValueError(f"bot {self.name!r} needs a symbol and an algorithm")
         if self.mode not in MODES:
             raise ValueError(f"bot {self.name!r}: mode must be one of {', '.join(MODES)}, not {self.mode!r}")
-        self.stake = float(self.stake)
-        if self.stake <= 0:
-            raise ValueError(f"bot {self.name!r}: the stake must be above 0")
+        try:
+            self.stake = check_stake(self.stake)
+        except ValueError as e:
+            raise ValueError(f"bot {self.name!r}: {e}") from None
         try:
             to_timedelta(self.timeframe)
         except Exception:
             raise ValueError(f"bot {self.name!r}: unknown timeframe {self.timeframe!r}") from None
-        self.params = {str(k): float(v) for k, v in (self.params or {}).items()}
+        # a share may be kept as percent text ("50%"); the algorithm reads it (build_algorithm checks every value)
+        self.params = {str(k): v.strip() if isinstance(v, str) and v.strip().endswith("%") else float(v)
+                       for k, v in (self.params or {}).items()}
         known = {f.name for f in fields(RiskLimits)}
         unknown = set(self.risk or {}) - known
         if unknown:
             raise ValueError(f"bot {self.name!r}: unknown risk limit(s) {', '.join(sorted(unknown))}")
+        try:
+            self.limits()
+        except ValueError as e:
+            raise ValueError(f"bot {self.name!r}: {e}") from None
 
     @property
     def broker_name(self) -> str:
@@ -171,9 +179,12 @@ class AccountLimits:
     close_on_halt: bool = False  #: sell the open positions when the daily loss halts the bots
 
     def __post_init__(self):
-        self.max_total_exposure = float(self.max_total_exposure) if self.max_total_exposure else None
-        self.max_daily_loss = float(self.max_daily_loss) if self.max_daily_loss else None
-        self.max_open_positions = int(self.max_open_positions or 0)
+        self.max_total_exposure = check_limit("max_total_exposure", self.max_total_exposure) or None
+        self.max_daily_loss = check_limit("max_daily_loss", self.max_daily_loss) or None
+        positions = check_limit("max_open_positions", self.max_open_positions) or 0
+        if positions != int(positions):
+            raise ValueError(f"risk limit max_open_positions: {self.max_open_positions!r} must be a whole number")
+        self.max_open_positions = int(positions)
         self.close_on_halt = bool(self.close_on_halt)
 
     def active(self) -> bool:
@@ -230,12 +241,16 @@ def load_bots(path: Path | None = None) -> BotSet:
     unknown = set(limits) - {f.name for f in fields(AccountLimits)}
     if unknown:
         raise ValueError(f"{path}: unknown limit(s) {', '.join(sorted(unknown))}")
-    bots = [BotSpec.from_dict(b) for b in data.get("bots", [])]
+    try:
+        bots = [BotSpec.from_dict(b) for b in data.get("bots", [])]
+        account = AccountLimits(**limits)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{path}: {exc}") from None
     names = [b.name for b in bots]
     dup = {n for n in names if names.count(n) > 1}
     if dup:
         raise ValueError(f"{path}: more than one bot named {', '.join(sorted(dup))}")
-    return BotSet(bots, AccountLimits(**limits))
+    return BotSet(bots, account)
 
 
 def _toml(value) -> str:
@@ -293,6 +308,8 @@ class AccountGuard:
         """The shared halt message, or None while the bots may trade."""
         now = now or datetime.now(timezone.utc)
         total = self.pnl()
+        if not math.isfinite(total):  # bad price data: no trading, and the day's starting point stays valid
+            return "the bots' profit is not a number (bad price data); no trading until prices are valid again"
         if self._day != now.date():
             self._day, self._day_start, self.halted = now.date(), total, None  # a new day, a new allowance
         lim = self.limits.max_daily_loss

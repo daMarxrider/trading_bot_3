@@ -305,3 +305,37 @@ def test_cli_add_list_limits_run_stop(tmp_path, monkeypatch):
     assert r.invoke(app, ["bots", "disable", "eth"]).exit_code == 0 and not load_bots().get("eth").enabled
     assert r.invoke(app, ["bots", "remove", "eth"]).exit_code == 0 and [b.name for b in load_bots().bots] == ["sol"]
     assert r.invoke(app, ["bots", "remove", "nope"]).exit_code != 0
+
+
+# -- the shared account guard with bad price data ---------------------------------------------------------------
+from datetime import datetime, timezone  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+T0 = datetime(2026, 3, 2, 12, tzinfo=timezone.utc)
+
+
+def holding_bot(entry=100.0, last=100.0, realized=0.0):
+    return SimpleNamespace(holding=1.0, entry_price=entry, last_price=last, realized=realized)
+
+
+def test_the_account_guard_stops_trading_on_bad_prices():
+    bots = [holding_bot(last=float("nan"))]
+    assert "bad price data" in mgr.AccountGuard(AccountLimits(max_daily_loss=50), lambda: bots).check(now=T0)
+
+
+def test_bad_prices_at_the_start_of_a_day_keep_the_shared_daily_limit():
+    bot = holding_bot(last=float("nan"))
+    g = mgr.AccountGuard(AccountLimits(max_daily_loss=50), lambda: [bot])
+    g.check(now=T0)
+    bot.last_price = 100.0
+    g.check(now=T0)  # the day starts here, at 0
+    bot.last_price = 40.0  # 60 lost
+    assert "all bots lost 60.00 today" in g.check(now=T0)
+
+
+def test_the_account_guard_lifts_once_prices_are_valid():
+    bot = holding_bot(last=float("nan"))
+    g = mgr.AccountGuard(AccountLimits(max_daily_loss=50), lambda: [bot])
+    g.check(now=T0)
+    bot.last_price = 99.0
+    assert g.check(now=T0) is None and g.halted is None

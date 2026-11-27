@@ -10,10 +10,21 @@ shared data engine; orders become manual :class:`OrderIntent` objects.
 from __future__ import annotations
 
 import csv
+import math
 from pathlib import Path
 
 from tradebot.brokers.base import ManualExecutionBroker
 from tradebot.core.models import AssetClass, Balance, Position, guess_asset_class
+
+
+def _number(text: str, column: str, path: Path, line: int) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        value = math.nan
+    if not math.isfinite(value):
+        raise ValueError(f"{path}, line {line}: {column} {text!r} is not a number (use a dot as the decimal point)")
+    return value
 
 
 class HoldingsFileBroker(ManualExecutionBroker):
@@ -31,14 +42,30 @@ class HoldingsFileBroker(ManualExecutionBroker):
         return Path(path).expanduser()
 
     def get_positions(self) -> list[Position]:
+        """Rows of ``symbol,quantity[,avg_cost]`` (any case, comma or semicolon separated, UTF-8 with or without
+        the BOM Excel writes); rows without a symbol or quantity are skipped. A file without those columns or
+        with a value that isn't a number raises ValueError naming the line, so holdings never vanish silently."""
+        path = self._holdings_path()
+        if not path.is_file():
+            raise FileNotFoundError(f"{self.name}: the holdings file {path} does not exist; fix "
+                                    f"brokers.{self.name}.holdings_csv in the config")
         out = []
-        with self._holdings_path().open(newline="") as fh:
-            for row in csv.DictReader(fh):
-                row = {k.strip().lower(): (v or "").strip() for k, v in row.items() if k}
+        with path.open(newline="", encoding="utf-8-sig") as fh:
+            header = fh.readline()
+            fh.seek(0)
+            delimiter = ";" if header.count(";") > header.count(",") else ","
+            reader = csv.DictReader(fh, delimiter=delimiter)
+            columns = {(k or "").strip().lower() for k in reader.fieldnames or []}
+            if header.strip() and not {"symbol", "quantity"} <= columns:
+                raise ValueError(f"{path}: needs the columns symbol and quantity (optional avg_cost); "
+                                 f"found {', '.join(sorted(c for c in columns if c)) or 'none'}")
+            for row in reader:
+                row = {k.strip().lower(): (v or "").strip() for k, v in row.items() if isinstance(k, str)}
                 if not row.get("symbol") or not row.get("quantity"):
                     continue
                 cost = row.get("avg_cost")
-                out.append(Position(row["symbol"], float(row["quantity"]), float(cost) if cost else None,
+                out.append(Position(row["symbol"], _number(row["quantity"], "quantity", path, reader.line_num),
+                                    _number(cost, "avg_cost", path, reader.line_num) if cost else None,
                                     guess_asset_class(row["symbol"])))
         return out
 

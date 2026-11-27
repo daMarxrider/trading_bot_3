@@ -211,3 +211,31 @@ def test_cli_optimize_both(monkeypatch):
     assert "GA vs PSO: parameters" in res.output and "verdict:" in res.output and "agreement" in res.output
     bad = CliRunner().invoke(cli.app, ["optimize", "X", "sma_cross", "--method", "nope"])
     assert bad.exit_code != 0
+
+
+# -- the training split as the user sets it (--train, the lab's slider) ----------------------------------------
+@pytest.mark.parametrize("fraction", [0.0, -0.5, float("nan")])
+def test_a_training_fraction_of_zero_or_less_is_refused(fraction):
+    with pytest.raises(ValueError, match="training fraction must be above 0"):
+        GeneticOptimizer(build_algorithm("sma_cross"), make_ohlc(300), backend="numpy", train_fraction=fraction)
+
+
+def test_a_training_part_too_short_to_backtest_is_refused():
+    # 300 candles * 0.001 = 0 candles to train on
+    with pytest.raises(ValueError, match="training part has 0 candle"):
+        GeneticOptimizer(build_algorithm("sma_cross"), make_ohlc(300), backend="numpy", train_fraction=0.001)
+
+
+def quick_run(train_fraction):
+    return GeneticOptimizer(build_algorithm("sma_cross"), make_ohlc(300), backend="numpy", seed=1, population=8,
+                            generations=1, min_trades=0, train_fraction=train_fraction).run()
+
+
+def test_a_training_fraction_of_one_or_more_trains_on_everything_without_a_test():
+    res = quick_run(1.5)
+    assert len(res.train.returns) == 300 and res.test is None
+
+
+def test_the_split_follows_the_fraction():
+    res = quick_run(0.7)
+    assert (len(res.train.returns), len(res.test.returns)) == (210, 90)

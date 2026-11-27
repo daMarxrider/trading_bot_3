@@ -278,3 +278,28 @@ def test_cli_funding_history(monkeypatch):
     monkeypatch.setattr(funding, "fetch_history", offline)
     res = CliRunner().invoke(cli.app, ["backtest", "BTC/USDT", "sma_cross", "--no-plot", "--funding", "history"])
     assert res.exit_code != 0 and "funding" in res.output
+
+
+# -- Margin settings from the CLI / app: what is refused -----------------------------------------------------
+@pytest.mark.parametrize("kwargs, message", [
+    ({"leverage": 0.5}, "leverage"),
+    ({"leverage": 126}, "leverage"),
+    ({"leverage": float("nan")}, "leverage"),
+    ({"maintenance": -0.01}, "maintenance"),
+    ({"leverage": 10, "maintenance": 0.1}, "maintenance"),  # 1/leverage = 0.1: liquidated at once
+    ({"maintenance": float("nan")}, "maintenance"),
+    ({"borrow": -0.01}, "borrow"),
+    ({"borrow": float("nan")}, "borrow"),
+    ({"borrow": float("inf")}, "borrow"),
+    ({"funding": float("nan")}, "funding"),
+    ({"funding": float("inf")}, "funding"),
+])
+def test_impossible_margin_settings_are_refused(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        Margin(**kwargs)
+
+
+@pytest.mark.parametrize("kwargs", [{"leverage": 1}, {"leverage": 125}, {"maintenance": 0.0},
+                                    {"funding": -0.0003}])  # negative funding: shorts pay longs
+def test_margin_settings_at_the_edges_are_allowed(kwargs):
+    assert Margin(**kwargs)
