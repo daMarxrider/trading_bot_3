@@ -1846,6 +1846,8 @@ def bot_pair_run(
     exit: Annotated[float, typer.Option(help="Close when it is back inside this many σ")] = 0.5,
     stop: Annotated[float, typer.Option(help="Give up beyond this many σ")] = 4.0,
     method: Annotated[str, typer.Option(help="Hedge ratio: rolling or kalman")] = "rolling",
+    min_probability: MinProbability = 0.0,
+    horizon: Horizon = 30,
     live: Annotated[bool, typer.Option(help="Actually place orders (default: dry run)")] = False,
     sandbox: Annotated[bool, typer.Option(help="Use the exchange testnet (ccxt brokers)")] = False,
     once: Annotated[bool, typer.Option(help="Evaluate a single candle and exit")] = False,
@@ -1866,16 +1868,20 @@ def bot_pair_run(
         check_stake(stake)
     except ValueError as e:
         raise typer.BadParameter(str(e), param_hint="--stake") from None
+    _reversion_filter(min_probability, horizon)
     confirm_live_risk(live)
     b = create_broker(broker, **({"sandbox": True} if sandbox else {}))
     if live and not b.can_trade:
         raise typer.BadParameter(f"{broker} is read-only")
     try:
         bot = PairBot(b, legs, tf, stake, window, entry, exit, stop, method, dry_run=not live,
+                      min_probability=min_probability, horizon=horizon,
                       state_path=pair_state_path(broker, legs, sandbox) if live else None,
                       journal=Journal() if journal else None,
                       on_event=lambda e: console.print(
-                          f"[dim]{e.time:%Y-%m-%d %H:%M}[/] {e.pair} z={e.z:+.2f} β={e.beta:.2f} → [bold]{e.action}[/]"
+                          f"[dim]{e.time:%Y-%m-%d %H:%M}[/] {e.pair} z={e.z:+.2f} β={e.beta:.2f}"
+                          + (f" p={e.probability:.0%}" if e.probability == e.probability else "")
+                          + f" → [bold]{e.action}[/]"
                           + (f" {e.amount_a:.6g} {legs[0]} / {e.amount_b:.6g} {legs[1]}" if e.action != "hold" else "")
                           + (" [yellow](dry run)[/]" if e.dry_run else "")
                           + (f" [yellow]({e.note})[/]" if e.note else "")))
@@ -2416,10 +2422,30 @@ def fundamentals(symbols: Annotated[Optional[list[str]], typer.Argument(autocomp
                 console.print(f"[dim]{e.day:%Y-%m-%d}[/] [cyan]{s:>9}[/] {e.label}" + ("  [bold](upcoming)[/]" if e.upcoming else ""))
 
 
+MinProbability = Annotated[float, typer.Option(
+    "--min-probability", help="Open only when the chance that the gap closes before the stop within --horizon candles "
+                              "is at least this (0.6 = 60 %; 0 = off). From the gap's mean reversion (#223)")]
+Horizon = Annotated[float, typer.Option(help="Candles the gap has to close in, for --min-probability")]
+
+
+def _reversion_filter(min_probability: float, horizon: float) -> None:
+    from tradebot.analysis.reversion import check_filter
+
+    try:
+        check_filter(min_probability, horizon)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+
+
 @app.command()
 def pair(symbol: Annotated[str, typer.Argument(help="Two symbols joined by a colon: KO:PEP, BTC/USDT:ETH/USDT")],
          tf: Annotated[str, typer.Option(help="Timeframe")] = "1d",
-         bars: Annotated[int, typer.Option(help="Candles to analyse")] = 500):
+         bars: Annotated[int, typer.Option(help="Candles to analyse")] = 500,
+         window: Annotated[int, typer.Option(help="Candles for the rolling z-score (twice as many for the "
+                                                  "reversion speed)")] = 60,
+         exit: Annotated[float, typer.Option(help="The trade's exit band, in σ")] = 0.5,
+         stop: Annotated[float, typer.Option(help="The trade's stop, in σ")] = 4.0,
+         horizon: Horizon = 30):
     """How far two assets that move together are apart now: z-score, hedge ratio, half-life.
 
     The pair itself is also a symbol (``chart``, ``backtest``, ... accept ``KO:PEP``): the candles are the
@@ -2442,7 +2468,24 @@ def pair(symbol: Annotated[str, typer.Argument(help="Two symbols joined by a col
     t.add_row("hedge ratio β (log a ≈ α + β·log b)", f"{st.beta:.2f}")
     t.add_row("z-score of the gap now", f"{st.zscore:+.2f}")
     t.add_row("half-life of a gap", "does not revert" if st.half_life is None else f"{st.half_life:.1f} candles")
-    from tradebot.analysis.pairs import cointegration, pair_health
+    from tradebot.analysis.pairs import cointegration, pair_health, rolling_pair
+    from tradebot.analysis.reversion import check_filter, reversion
+
+    try:
+        if not 0 <= exit < stop:
+            raise ValueError("need 0 <= --exit < --stop")
+        check_filter(0.0, horizon)
+        z = rolling_pair(a, b, window).zscore
+        now = reversion(z, horizon, exit, stop, 2 * window).iloc[-1]
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from None
+    if now.half_life == now.half_life:  # not NaN
+        t.add_row(f"half-life now (last {2 * window} candles)", f"{now.half_life:.1f} candles")
+        t.add_row(f"chance it closes to ±{exit:g}σ before ±{stop:g}σ in {horizon:g} candles",
+                  "inside the exit band" if abs(z.iloc[-1]) <= exit else f"{now.probability:.0%}")
+    else:
+        t.add_row(f"half-life now (last {2 * window} candles)", "no reversion seen" if len(z) > 3 * window + 1
+                  else f"needs {3 * window + 2} candles")
 
     co = cointegration(a, b)
     t.add_row("cointegration (Engle-Granger)", f"t = {co.stat:.2f}, {co.p_text}" + (" ✓" if co.passed else ""))
@@ -2470,7 +2513,9 @@ def pair_backtest_(
         borrow: Annotated[float, typer.Option(help="Yearly cost of the short leg (stocks ~0.02, crypto 0)")] = 0.02,
         method: Annotated[str, typer.Option(help="Hedge ratio: rolling (OLS over --window) or kalman (adaptive filter)",
                                             autocompletion=complete.choices(("rolling", "rolling regression"),
-                                                                            ("kalman", "Kalman filter")))] = "rolling"):
+                                                                            ("kalman", "Kalman filter")))] = "rolling",
+        min_probability: MinProbability = 0.0,
+        horizon: Horizon = 30):
     """Backtest trading the gap of two assets: long A and short B (or the reverse) at the same time."""
     from tradebot.analysis.pairs import pair_health
     from tradebot.backtest.pairs import pair_backtest
@@ -2479,9 +2524,11 @@ def pair_backtest_(
     legs = split_pair(symbol)
     if legs is None:
         raise typer.BadParameter("write the pair as A:B, e.g. KO:PEP")
+    _reversion_filter(min_probability, horizon)
     a, b = (load_data(leg, tf, None, None, bars) for leg in legs)
     try:
-        res = pair_backtest(a, b, window, entry, exit, stop, fee, borrow, method=method)
+        res = pair_backtest(a, b, window, entry, exit, stop, fee, borrow, method=method,
+                            min_probability=min_probability, horizon=horizon)
     except ValueError as e:
         raise typer.BadParameter(str(e)) from None
     console.print(results_table(f"{symbol} · {tf} · long/short", {"pairs": res.metrics}))

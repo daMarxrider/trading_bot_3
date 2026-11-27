@@ -18,44 +18,59 @@ import numpy as np
 import pandas as pd
 
 from tradebot.analysis.pairs import kalman_pair, rolling_pair
+from tradebot.analysis.reversion import check_filter, reversion
 from tradebot.backtest import metrics as m
 from tradebot.backtest.engine import BacktestResult
 
 
-def next_side(s: float, z: float, beta: float, entry: float, exit: float, stop: float) -> float:
+def next_side(s: float, z: float, beta: float, entry: float, exit: float, stop: float,
+              probability: float = float("nan"), min_probability: float = 0.0) -> float:
     """The position (+1 long the gap: long A / short B, -1 short it, 0 flat) after seeing z-score ``z`` and
-    hedge ratio ``beta`` while holding ``s``. The one rule shared by the backtest and the live bot."""
+    hedge ratio ``beta`` while holding ``s``. The one rule shared by the backtest and the live bot.
+
+    ``min_probability`` (0 = off): open only when ``probability``, the chance that the gap reaches the exit band
+    before the stop (:func:`tradebot.analysis.reversion.probability`), is at least this; unknown (NaN) is not."""
     if np.isnan(z) or np.isnan(beta):
         return 0.0
     if s == 0.0:
         # a negative β is no pair: the legs move against each other
-        return (-1.0 if z > 0 else 1.0) if entry <= abs(z) < stop and beta > 0 else 0.0
+        if not (entry <= abs(z) < stop and beta > 0):
+            return 0.0
+        if min_probability > 0 and not probability >= min_probability:
+            return 0.0
+        return -1.0 if z > 0 else 1.0
     return 0.0 if abs(z) <= exit or abs(z) >= stop else s
 
 
 def pair_backtest(a: pd.DataFrame, b: pd.DataFrame, window: int = 60, entry: float = 2.0, exit: float = 0.5,
                   stop: float = 4.0, fee: float = 0.001, borrow: float = 0.02, initial_capital: float = 10_000.0,
-                  periods_per_year: float | None = None, method: str = "rolling") -> BacktestResult:
+                  periods_per_year: float | None = None, method: str = "rolling", min_probability: float = 0.0,
+                  horizon: float = 30) -> BacktestResult:
     """Trade the gap of two OHLC frames: open when its z-score passes ``±entry``, close inside ``±exit``,
     give up (stop) beyond ``±stop``. ``borrow`` is the yearly cost of the short leg (stocks; ~0 for crypto).
     ``method`` picks the hedge ratio: ``rolling`` (OLS over ``window`` candles) or ``kalman`` (a filter that
-    follows the pair smoothly, no window)."""
+    follows the pair smoothly, no window). ``min_probability`` (0 = off): open only when the chance that the gap
+    closes before the stop within ``horizon`` candles is at least this (#223, :mod:`tradebot.analysis.reversion`;
+    the reversion speed comes from the last ``2 * window`` z-scores: a speed needs more candles than a z-score)."""
     if method not in ("rolling", "kalman"):
         raise ValueError("method must be rolling or kalman")
     if not 0 <= exit < entry < stop:
         raise ValueError("need 0 <= exit < entry < stop")
+    min_probability, horizon = check_filter(min_probability, horizon)
     idx = a.index.intersection(b.index)
     ca, cb = a["close"].loc[idx], b["close"].loc[idx]
     if len(idx) < window + 10:
         raise ValueError(f"need at least {window + 10} common candles")
     roll = kalman_pair(ca, cb) if method == "kalman" else rolling_pair(ca, cb, window)
     z, beta = roll.zscore.to_numpy(), roll.beta.to_numpy()
+    prob = (reversion(roll.zscore, horizon, exit, stop, 2 * window)["probability"].to_numpy() if min_probability > 0
+            else np.full(len(z), np.nan))
     n = len(idx)
     side, wa, wb = np.zeros(n), np.zeros(n), np.zeros(n)
     s = 0.0
     held_beta = 1.0
     for t in range(n):
-        new = next_side(s, z[t], beta[t], entry, exit, stop)
+        new = next_side(s, z[t], beta[t], entry, exit, stop, prob[t], min_probability)
         if s == 0.0 and new != 0.0:
             held_beta = beta[t]
         s = new
@@ -72,6 +87,7 @@ def pair_backtest(a: pd.DataFrame, b: pd.DataFrame, window: int = 60, entry: flo
     positions = pd.Series(side, index=idx, name="position")
     trades = m.extract_trades(positions, returns)
     return BacktestResult(
-        algorithm="pairs", params={"method": method, "window": window, "entry": entry, "exit": exit, "stop": stop},
+        algorithm="pairs", params={"method": method, "window": window, "entry": entry, "exit": exit, "stop": stop,
+                                   "min_probability": min_probability, "horizon": horizon},
         positions=positions, returns=returns, equity=(initial_capital * (1 + returns).cumprod()).rename("equity"),
         trades=trades, metrics=m.compute_metrics(returns, positions, trades, ppy))

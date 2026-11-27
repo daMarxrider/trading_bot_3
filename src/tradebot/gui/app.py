@@ -81,7 +81,7 @@ class MainWindow(QMainWindow):
         self.scanner.indicator_reloaded.connect(self.chart.reload_indicators)
         self.news = NewsView(themes, lambda: list(dict.fromkeys(self.chart.watchlists.all_symbols()
                                                                 + self.portfolio_symbols)))
-        self.pairs = PairView(engine, themes, symbols)
+        self.pairs = PairView(engine, themes, symbols, search)
         self.basket = PortfolioBacktestView(engine, themes, symbols)  # #148
         self.portfolio = PortfolioView(engine, themes)
         self.lab = BacktestView(engine, themes, symbols, search, settings, lambda: self.chart.watchlists.lists)

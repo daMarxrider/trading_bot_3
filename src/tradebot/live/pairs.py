@@ -44,6 +44,7 @@ import pandas as pd
 
 from tradebot import notify
 from tradebot.analysis.pairs import kalman_pair, rolling_pair
+from tradebot.analysis.reversion import check_filter, reversion
 from tradebot.backtest.pairs import next_side
 from tradebot.brokers.base import BaseBroker
 from tradebot.core.models import Order, OrderStatus, Side
@@ -151,6 +152,8 @@ class PairEvent:
     orders: list[Order] = field(default_factory=list)
     dry_run: bool = True
     note: str = ""
+    #: chance that a trade opened now closes before the stop within the horizon (#223); NaN when not computed
+    probability: float = float("nan")
 
 
 @dataclass
@@ -177,11 +180,15 @@ class PairBot:
     opened: str | None = None  #: when the open pair was opened (ISO time)
     halted: str = ""  #: why the bot stopped trading (an outcome it can't know); a restart needs a check
     journal: Journal | None = None  #: every order is stored here (#159)
+    #: open only when the gap's chance to close before the stop within ``horizon`` candles is this high (#223); 0 = off
+    min_probability: float = 0.0
+    horizon: float = 30
 
     def __post_init__(self):
         self.stake = check_stake(self.stake)
         if not 0 <= self.exit < self.entry < self.stop:
             raise ValueError("need 0 <= exit < entry < stop")
+        self.min_probability, self.horizon = check_filter(self.min_probability, self.horizon)
         if self.method not in ("rolling", "kalman"):
             raise ValueError("method must be rolling or kalman")
         self.legs = (str(self.legs[0]), str(self.legs[1]))
@@ -426,8 +433,17 @@ class PairBot:
         roll = kalman_pair(ca, cb) if self.method == "kalman" else rolling_pair(ca, cb, self.window)
         z, beta = float(roll.zscore.iloc[-1]), float(roll.beta.iloc[-1])
         pa, pb = float(ca.iloc[-1]), float(cb.iloc[-1])
-        new = 0.0 if self.closing else next_side(self.side, z, beta, self.entry, self.exit, self.stop)
-        event = PairEvent(datetime.now(timezone.utc), self.name, z, beta, "hold", pa, pb, dry_run=self.dry_run)
+        prob = float(reversion(roll.zscore, self.horizon, self.exit, self.stop, 2 * self.window)["probability"].iloc[-1])
+        new = 0.0 if self.closing else next_side(self.side, z, beta, self.entry, self.exit, self.stop, prob,
+                                                 self.min_probability)
+        event = PairEvent(datetime.now(timezone.utc), self.name, z, beta, "hold", pa, pb, dry_run=self.dry_run,
+                          probability=prob)
+        if new == 0.0 == self.side and not self.closing and self.min_probability > 0 \
+                and next_side(0.0, z, beta, self.entry, self.exit, self.stop) != 0.0:  # only the filter said no
+            event.note = (f"not opened: the gap closes before the stop with {prob:.1%} chance in {self.horizon:g} "
+                          f"candles, below {self.min_probability:.1%}" if prob == prob else
+                          "not opened: the chance to close is unknown (the gap shows no reversion over the last "
+                          f"{2 * self.window} candles, or there are fewer than {3 * self.window + 2})")
         if new != self.side:
             try:
                 if self.side != 0.0:  # close what is open: the reverse of the entry, same amounts

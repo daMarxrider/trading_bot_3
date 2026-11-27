@@ -31,6 +31,29 @@ weights stay fixed until the exit. Same execution model as everywhere in tradebo
 *t* is filled at that close and earns the next candle's return. Costs: the fee on every change of either leg, and
 `--borrow` (yearly, default 0.02 for stocks, use 0 for crypto) on the short leg for every candle it is held.
 
+## The chance that a gap closes
+
+A z-score of 2 means something different for a pair whose gaps close in three candles and one that takes thirty.
+`pair` shows, and `--min-probability` filters on, **how likely a trade opened now reaches the exit band before the
+stop within `--horizon` candles** (default 30).
+
+* The gap's z-score is modelled as mean-reverting (an Ornstein–Uhlenbeck process): pulled back to 0 at a speed
+  `κ = ln 2 / half-life`, with a long-run spread of 1. The speed comes from the last `2 × --window` z-scores (a
+  speed needs more candles than a z-score), corrected for the small-sample bias of that fit; the candle itself never
+  enters its own estimate.
+* By the Feynman–Kac formula, the chance solves the backward equation of that process with the exit band and the
+  stop as barriers. The speed and the horizon only enter as `κ × horizon`, so the equation is solved once per exit
+  and stop into a table and every candle is a lookup. Without a time limit it has a closed form, which the tests
+  check the table against, as well as a Monte Carlo simulation.
+* `--min-probability 0.6`: open only when the chance is at least 60 %. Trades that are already open are not
+  affected. The live bot logs every entry the filter kept it out of, with the chance it saw. 0 (the default)
+  switches the filter off.
+
+While the speed is unknown (fewer than `3 × --window + 2` candles, or no reversion seen in the last `2 × --window`) the
+filter doesn't open. The chance is only as good as the model: a pair that breaks apart still looks mean-reverting
+until the window has caught up, so keep the stop, and let `pair-backtest` (or a walk-forward test) show whether the
+filter helps a pair.
+
 ## Finding pairs
 
 `pair-scan` tests every combination of the symbols you give it. Testing hundreds of pairs finds some that look
