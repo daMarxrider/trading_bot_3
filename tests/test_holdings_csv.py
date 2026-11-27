@@ -99,3 +99,14 @@ def test_the_balance_lists_each_holding(tmp_path):
     path = tmp_path / "holdings.csv"
     path.write_text("symbol,quantity\nAAPL,2\n")
     assert ScalableCapitalBroker({"holdings_csv": str(path)}).get_balance()["AAPL"].free == 2.0
+
+
+def test_trade_republic_without_pytr_says_how_to_install_it(monkeypatch):
+    import sys
+
+    from tradebot.brokers.stocks import TradeRepublicBroker
+
+    monkeypatch.setitem(sys.modules, "pytr", None)  # as if it weren't installed
+    monkeypatch.setitem(sys.modules, "pytr.account", None)
+    with pytest.raises(ImportError, match=r"pip install 'tradebot\[traderepublic\]'"):
+        TradeRepublicBroker({}).connect()

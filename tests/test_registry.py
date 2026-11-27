@@ -233,3 +233,23 @@ def test_a_take_profit_selling_half_in_percent():
 
 def test_the_vote_threshold_takes_a_percentage():
     assert build_algorithm("vote", {"threshold": "70%"}, ["rsi_threshold", "sma_cross"]).values["threshold"] == 0.7
+
+
+# -- plugins installed as packages (entry points) ----------------------------------------------------------------------
+class EntryPoint:
+    def __init__(self, name, fails=False):
+        self.name, self.fails = name, fails
+
+    def load(self):
+        if self.fails:
+            raise ImportError("plugin needs a missing package")
+
+
+def test_a_broken_installed_plugin_is_skipped_and_the_others_load(monkeypatch, tmp_path, caplog):
+    import tradebot.core.registry as registry
+
+    monkeypatch.setenv("TRADEBOT_PLUGIN_DIR", str(tmp_path))  # no plugin files
+    monkeypatch.setattr(registry, "entry_points",
+                        lambda group: [EntryPoint("good"), EntryPoint("broken", fails=True)])
+    assert load_plugins() == ["good"]
+    assert "failed to load plugin entry point broken" in caplog.text

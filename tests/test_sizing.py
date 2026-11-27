@@ -124,3 +124,89 @@ def test_live_bot_buys_stake_times_size():
     assert ev.action == "buy" and ev.amount == pytest.approx(100.0 * 0.4 / 100.0) and "40%" in ev.note
     a.next = 0.0
     assert bot.step().action == "sell"
+
+
+# -- the wrapper's contract with the strategy inside it, and the year length it assumes ---------------------------
+def test_without_candle_times_a_year_has_252_candles():
+    from tradebot.algorithms.sizing import periods_per_year
+    from tradebot.core.series import OHLC
+
+    o = OHLC.from_frame(frame(50))
+    o_without_times = OHLC(o.open, o.high, o.low, o.close)
+    assert periods_per_year(o_without_times) == 252.0
+
+
+def test_daily_candles_are_365_and_a_quarter_a_year():
+    from tradebot.algorithms.sizing import periods_per_year
+    from tradebot.core.series import OHLC
+
+    assert periods_per_year(OHLC.from_frame(frame(50))) == pytest.approx(365.25)
+
+
+def test_an_unknown_sizing_model_is_refused_in_the_size_calculation():
+    from tradebot.algorithms.sizing import multiplier
+    from tradebot.core.series import OHLC
+
+    with pytest.raises(ValueError, match="unknown sizing model 'martingale'"):
+        multiplier("martingale", OHLC.from_frame(frame(50)), np.ones(50), {})
+
+
+def test_a_loop_based_strategy_stays_loop_based_when_sized():
+    assert sized(build_algorithm("elliott_wave"), "fixed").vectorized is False
+
+
+def test_the_sized_strategy_shows_the_inner_strategys_chart_indicators():
+    inner = build_algorithm("sma_cross")
+    assert [type(i) for i in sized(inner, "fixed").chart_indicators()] == [type(i) for i in inner.chart_indicators()]
+
+
+def test_an_attribute_the_inner_strategy_lacks_is_an_attribute_error():
+    with pytest.raises(AttributeError):
+        sized(build_algorithm("sma_cross"), "fixed").no_such_thing  # noqa: B018
+
+
+def test_signals_are_the_sized_positions():
+    from tradebot.core.series import OHLC
+
+    s = sized(build_algorithm("sma_cross"), "fixed", **{"size.fraction": 0.5})
+    o = OHLC.from_frame(frame(300))
+    np.testing.assert_array_equal(s.signals(o, s.values), s.execute(o, s.values)[0])
+
+
+def test_intrabar_fills_are_scaled_by_the_size_too():
+    df = frame(400)
+    combo = build_algorithm("combo", {}, None, "rsi_threshold", "stop_pct(3)", "intrabar")
+    _, plain = combo.run_fills(df)
+    _, half = sized(combo, "fixed", **{"size.fraction": 0.5}).run_fills(df)
+    np.testing.assert_allclose(half["turnover"], 0.5 * plain["turnover"])
+    np.testing.assert_allclose(half["adjust"].iloc[1:], 0.5 * plain["adjust"].iloc[1:])  # the size of the bar before
+
+
+def test_reusing_parameters_keeps_the_sizing_and_what_the_pool_needs():
+    pool = build_algorithm("pool", {}, ["rsi_threshold", "sma_cross"])
+    s = sized(pool, "fixed", **{"size.fraction": 0.3})
+    params = {**s.values, "use.rsi_threshold": 1, "use.sma_cross": 0}
+    out = s.reuse_params(params)
+    assert out["size.fraction"] == 0.3
+    assert not any(k.startswith("use.") or k.startswith("sma_cross.") for k in out)
+
+
+def test_the_risk_size_is_the_same_on_torch_as_on_numpy():
+    torch = pytest.importorskip("torch")  # the GPU path of the fixed-risk size; skipped (visibly) without torch
+    from tradebot.algorithms.sizing import multiplier
+    from tradebot.core.series import OHLC
+
+    df = frame(300)
+    s = sized(build_algorithm("sma_cross"), "risk")
+    pos = s.inner.run(df).to_numpy()
+    on_numpy = multiplier("risk", OHLC.from_frame(df), pos, s.values)
+    on_torch = multiplier("risk", OHLC.from_frame(df, device="cpu"), torch.tensor(pos), s.values)
+    np.testing.assert_allclose(on_torch.numpy(), on_numpy)
+
+
+def test_a_sized_strategy_can_be_copied():
+    import copy
+
+    s = sized(build_algorithm("sma_cross"), "fixed", **{"size.fraction": 0.3})
+    twin = copy.deepcopy(s)
+    assert twin.values == s.values and twin.inner is not s.inner

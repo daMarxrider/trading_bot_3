@@ -484,7 +484,10 @@ class BotManager:
                 bot.last_price = float(saved.get("last", 0))
                 r.events.extend(saved.get("events", [])[-EVENTS_KEPT:])
             r.bot, r.error, r.next_due = bot, "", self.clock()
-            self.stop_request_path(name).unlink(missing_ok=True)
+            try:  # an old stop request; like the state file, a broken state folder must not keep the bot from running
+                self.stop_request_path(name).unlink(missing_ok=True)
+            except OSError as exc:
+                log.warning("could not clear the stop request of bot %s: %s", name, exc)
             self._write_state(r)
             log.info("bot %s started (%s %s %s, %s)", name, spec.symbol, spec.algorithm, spec.timeframe, spec.mode)
 
@@ -523,7 +526,10 @@ class BotManager:
         out = []
         for name, r in list(self._runners.items()):
             if r.running and self.stop_request_path(name).exists():
-                self.stop_request_path(name).unlink(missing_ok=True)
+                try:
+                    self.stop_request_path(name).unlink(missing_ok=True)
+                except OSError as exc:  # the stop must happen anyway
+                    log.warning("could not remove the stop request of bot %s: %s", name, exc)
                 self.stop(name)
                 continue
             if not r.running:

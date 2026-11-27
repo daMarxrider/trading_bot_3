@@ -339,3 +339,152 @@ def test_the_account_guard_lifts_once_prices_are_valid():
     g.check(now=T0)
     bot.last_price = 99.0
     assert g.check(now=T0) is None and g.halted is None
+
+
+# -- starting bots: what is refused, with the reason ---------------------------------------------------------------
+def one_bot(**kw):
+    return BotSet([BotSpec("b1", "ETH/USDT", "x", timeframe="1d", **kw)])
+
+
+def test_an_unknown_mode_is_refused():
+    with pytest.raises(ValueError, match="mode must be one of dry, paper, live, not 'real'"):
+        BotSpec("b1", "ETH/USDT", "x", mode="real")
+
+
+def test_starting_a_bot_that_does_not_exist_is_refused(tmp_path, algos):
+    with pytest.raises(ValueError, match="no bot named 'nope'"):
+        manager(one_bot(), FakeBroker(), tmp_path).start("nope")
+
+
+def test_starting_a_running_bot_again_changes_nothing(tmp_path, algos):
+    m = manager(one_bot(), FakeBroker(), tmp_path)
+    m.start("b1")
+    bot = m._runners["b1"].bot
+    m.start("b1")
+    assert m._runners["b1"].bot is bot and m.running() == ["b1"]
+
+
+def test_a_live_bot_on_a_read_only_broker_is_refused(tmp_path, algos):
+    broker = FakeBroker()
+    broker.can_trade = False
+    with pytest.raises(ValueError, match="binance is read-only"):
+        manager(one_bot(mode="live"), broker, tmp_path, allow_live=True).start("b1")
+
+
+def test_a_saved_bot_whose_parameters_no_longer_fit_its_strategy_says_so(tmp_path):
+    # no `algos` fixture: the real strategy is built, and bots.toml names a parameter it doesn't have
+    bots = BotSet([BotSpec("b1", "ETH/USDT", "sma_cross", timeframe="1d", params={"nope": 1})])
+    with pytest.raises(ValueError, match=r"b1: unknown parameter\(s\) \['nope'\]"):
+        manager(bots, FakeBroker(), tmp_path).start("b1")
+
+
+def test_the_default_broker_factory_builds_the_paper_account(tmp_path, algos):
+    m = BotManager(one_bot(mode="paper"), state_path=tmp_path / "state")
+    m.start("b1")
+    assert type(m._runners["b1"].bot.broker).__name__ == "PaperBroker"
+
+
+# -- bots.toml that can't be used ------------------------------------------------------------------------------------
+def test_an_unreadable_bots_file_is_reported(tmp_path):
+    path = tmp_path / "bots.toml"
+    path.write_text("[[bots]\nname =")
+    with pytest.raises(ValueError, match="can't read .*bots.toml"):
+        load_bots(path)
+
+
+def test_an_unknown_account_limit_is_reported(tmp_path):
+    path = tmp_path / "bots.toml"
+    path.write_text("[limits]\nmax_loss = 5\n")
+    with pytest.raises(ValueError, match="unknown limit"):
+        load_bots(path)
+
+
+# -- the scheduler keeps going ----------------------------------------------------------------------------------------
+def test_an_idle_running_bot_writes_a_heartbeat(tmp_path, algos):
+    now = [1_000_000.0]
+    m = manager(one_bot(), FakeBroker(), tmp_path, clock=lambda: now[0])
+    m.start("b1")
+    m.tick()  # its first step; the next one is due after the daily candle closes
+    now[0] += mgr.HEARTBEAT
+    m.tick()
+    assert json.loads((tmp_path / "state" / "b1.json").read_text())["heartbeat"] == now[0]
+
+
+def test_run_ticks_until_the_limit(tmp_path, algos):
+    m = manager(one_bot(), FakeBroker(), tmp_path)
+    m.start("b1")
+    ticks = []
+    real_tick = m.tick
+    m.tick = lambda: ticks.append(1) or real_tick()
+    m.run(max_ticks=3, poll=0)
+    assert len(ticks) == 3
+
+
+def test_the_background_loop_survives_a_failing_tick(tmp_path, algos, caplog):
+    import time
+
+    m = manager(one_bot(), FakeBroker(), tmp_path)
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("exchange hiccup")
+        return []
+
+    m.tick = flaky
+    m.start_loop()
+    deadline = time.monotonic() + 10
+    while len(calls) < 2 and time.monotonic() < deadline:  # condition-based: the loop ticks once a second
+        m._stop.wait(0.05)
+    m.shutdown()
+    assert len(calls) >= 2 and "bot scheduler tick failed" in caplog.text
+
+
+def test_starting_the_background_loop_twice_keeps_one_thread(tmp_path, algos):
+    m = manager(one_bot(), FakeBroker(), tmp_path)
+    m.start_loop()
+    first = m._thread
+    m.start_loop()
+    second = m._thread
+    m.shutdown()
+    assert first is second
+
+
+def test_a_state_file_that_cant_be_written_does_not_stop_the_bot(tmp_path, algos, caplog):
+    (tmp_path / "state").write_text("a file where the folder should be")
+    m = manager(one_bot(), FakeBroker(), tmp_path)
+    m.start("b1")
+    assert m.running() == ["b1"] and "could not save the state of bot b1" in caplog.text
+
+
+def test_a_stop_request_that_cant_be_removed_still_stops_the_bot(tmp_path, algos, monkeypatch, caplog):
+    import pathlib
+
+    m = manager(one_bot(), FakeBroker(), tmp_path)
+    m.start("b1")
+    m.stop_request_path("b1").write_text("")
+
+    def read_only(self, missing_ok=False):
+        raise PermissionError("read-only folder")
+
+    monkeypatch.setattr(pathlib.Path, "unlink", read_only)
+    m.tick()
+    assert m.running() == [] and "could not remove the stop request of bot b1" in caplog.text
+
+
+def test_a_value_toml_cant_hold_is_refused_and_the_saved_bots_stay(tmp_path):
+    path = tmp_path / "bots.toml"
+    save_bots(one_bot(), path)
+    before = path.read_text()
+    broken = one_bot()
+    broken.bots[0].members = [{1, 2}]  # set by code after validation; never written half
+    with pytest.raises(TypeError, match="can't write"):
+        save_bots(broken, path)
+    assert path.read_text() == before
+
+
+@pytest.mark.parametrize("symbol, algorithm", [(" ", "sma_cross"), ("ETH/USDT", " ")])
+def test_a_bot_needs_a_symbol_and_a_strategy(symbol, algorithm):
+    with pytest.raises(ValueError, match="bot 'b1' needs a symbol and an algorithm"):
+        BotSpec("b1", symbol, algorithm)
