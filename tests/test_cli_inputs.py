@@ -3,6 +3,8 @@
 """What a user types on the command line: wrong input is a usage error (exit code 2, the reason named), never a
 traceback, and is caught before any data is fetched or any broker contacted."""
 
+import re
+
 import pytest
 import typer
 from typer.testing import CliRunner
@@ -25,8 +27,10 @@ def run(*args):
 
 
 def message(result) -> str:
-    """The usage error text with the box drawing and line breaks of the terminal layout removed."""
-    return " ".join(result.output.replace("│", " ").split())
+    """The usage error text without the terminal layout: colour codes (CI forces colours), box drawing and the
+    line breaks of the wrapped box removed."""
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    return " ".join(plain.replace("│", " ").split())
 
 
 # -- parse_kv (-p key=value) --------------------------------------------------------------------------------

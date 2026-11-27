@@ -124,7 +124,7 @@ def validate(a: Alert) -> Alert:
 # -- storage ---------------------------------------------------------------------------------------
 def _read(path: Path) -> list[dict]:
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return []
     except (OSError, ValueError) as exc:
@@ -137,7 +137,7 @@ def _write(path: Path, items: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     _set_aside_if_unreadable(path)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(items, indent=2))
+    tmp.write_text(json.dumps(items, indent=2), encoding="utf-8")
     tmp.replace(path)  # atomic
 
 
@@ -145,7 +145,7 @@ def _set_aside_if_unreadable(path: Path) -> None:
     """An alerts file that isn't valid JSON (a typo from a hand edit) would be replaced by the next write and the
     user's alerts lost; move it to ``<name>.corrupt`` first, to be repaired by hand."""
     try:
-        json.loads(path.read_text())
+        json.loads(path.read_text(encoding="utf-8"))
         return
     except FileNotFoundError:
         return

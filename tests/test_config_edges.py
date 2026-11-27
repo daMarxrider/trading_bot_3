@@ -200,3 +200,40 @@ def test_settings_survive_a_restart(tmp_path):
     path = tmp_path / "settings.json"
     Settings(path).set("splitter", [1, 2, 3])
     assert Settings(path).get("splitter") == [1, 2, 3]
+
+
+# -- every text file is UTF-8 on every platform --------------------------------------------------------------------
+def text_io_without_encoding() -> list[str]:
+    """``file:line`` of every ``read_text``/``write_text``/``open``/``fdopen`` call in the app that opens a file as
+    text without naming its encoding (Windows would then use its ANSI code page)."""
+    import ast
+    from pathlib import Path
+
+    import tradebot
+
+    found = []
+    for path in sorted(Path(tradebot.__file__).parent.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Call):
+                continue
+            name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+            keywords = {k.arg for k in node.keywords}
+            if name in ("read_text", "write_text") and "encoding" not in keywords:
+                found.append(f"{path.name}:{node.lineno}")
+            elif name in ("open", "fdopen") and node.args and "encoding" not in keywords:
+                mode = next((a.value for a in node.args[1:2] if isinstance(a, ast.Constant)), None)
+                mode = next((k.value.value for k in node.keywords if k.arg == "mode"
+                             and isinstance(k.value, ast.Constant)), mode)
+                if isinstance(mode, str) and "b" not in mode:
+                    found.append(f"{path.name}:{node.lineno}")
+    return found
+
+
+def test_every_text_file_is_read_and_written_as_utf8():
+    # a Windows default (cp1252) config.toml with "Dépôt" in it can't be read back: tomllib only reads UTF-8
+    assert text_io_without_encoding() == []
+
+
+def test_a_non_ascii_watchlist_is_stored_as_utf8(config_file):
+    save_watchlist("Dépôt €", ["SAP.DE"])
+    assert "Dépôt €".encode("utf-8") in config_file.read_bytes()

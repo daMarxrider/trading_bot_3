@@ -84,7 +84,7 @@ def write_json_atomic(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
     try:
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=1)
             fh.flush()
             os.fsync(fh.fileno())
@@ -100,7 +100,7 @@ def read_pair_state(path: Path | str) -> dict | None:
     if not path.is_file():
         return None
     try:
-        s = json.loads(path.read_text())
+        s = json.loads(path.read_text(encoding="utf-8"))
         if s.get("version") != STATE_VERSION:
             raise ValueError(f"unknown version {s.get('version')!r}")
         legs, amounts = [str(x) for x in s["legs"]], [float(x) for x in s["amounts"]]

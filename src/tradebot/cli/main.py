@@ -1237,7 +1237,7 @@ def evolve(
     shown = ",".join(r.symbol for r in res.symbols) or symbols[0]
     if target is not None:
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(res.plugin_source(save))
+        target.write_text(res.plugin_source(save), encoding="utf-8")
         console.print(f"saved as [bold]{save}[/] in {target}\n"
                       f"use it with: [cyan]tradebot backtest {shown} {save}[/] · fine-tune the constants: "
                       f"[cyan]tradebot optimize {shown} {save}[/]")

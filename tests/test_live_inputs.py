@@ -3,6 +3,8 @@
 """Money and safety settings of the live bots, as typed on the command line, in the app or in bots.toml: a stake
 or a risk limit that can't work (NaN, negative) is refused with its name, never silently switched off."""
 
+import re
+
 import pytest
 from typer.testing import CliRunner
 
@@ -36,7 +38,10 @@ def run(*args):
 
 
 def message(result) -> str:
-    return " ".join(result.output.replace("│", " ").split())
+    """The usage error text without the terminal layout: colour codes (CI forces colours), box drawing and the
+    line breaks of the wrapped box removed."""
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    return " ".join(plain.replace("│", " ").split())
 
 
 # -- the stake ---------------------------------------------------------------------------------------------------

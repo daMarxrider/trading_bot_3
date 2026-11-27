@@ -39,7 +39,7 @@ def set_kill(on: bool = True, reason: str = "manual") -> None:
     path = kill_file()
     if on:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f"{reason}\n")
+        path.write_text(f"{reason}\n", encoding="utf-8")
     else:
         path.unlink(missing_ok=True)
 

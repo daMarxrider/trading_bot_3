@@ -234,7 +234,7 @@ def load_bots(path: Path | None = None) -> BotSet:
     if not path.is_file():
         return BotSet()
     try:
-        data = tomllib.loads(path.read_text())
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise ValueError(f"can't read {path}: {exc}") from None
     limits = data.get("limits", {})
@@ -282,7 +282,7 @@ def save_bots(bots: BotSet, path: Path | None = None) -> Path:
     tomllib.loads(text)  # never write a file that can't be read back
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text)
+    tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
     return path
 
@@ -609,7 +609,7 @@ class BotManager:
 
     def _read_state(self, name: str) -> dict | None:
         try:
-            data = json.loads(self.state_path(name).read_text())
+            data = json.loads(self.state_path(name).read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else None
         except (OSError, ValueError):
             return None
@@ -635,7 +635,7 @@ class BotManager:
             self.state_dir.mkdir(parents=True, exist_ok=True)
             path = self.state_path(r.spec.name)
             tmp = path.with_name(path.name + ".tmp")
-            tmp.write_text(json.dumps(data, indent=1))
+            tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
             tmp.replace(path)
         except OSError as exc:
             log.warning("could not save the state of bot %s: %s", r.spec.name, exc)
@@ -698,5 +698,5 @@ def request_stop(name: str, path: Path | None = None) -> Path:
     """Ask the process that runs ``name`` to stop it at its next tick (within a second or so)."""
     p = (path or state_dir()) / f"{_slug(name)}.stop"
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("stop\n")
+    p.write_text("stop\n", encoding="utf-8")
     return p

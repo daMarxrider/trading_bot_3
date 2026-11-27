@@ -141,7 +141,7 @@ def _path():
 
 def _read() -> tuple[list[EconEvent], float]:
     try:
-        data = json.loads(_path().read_text())
+        data = json.loads(_path().read_text(encoding="utf-8"))
         events = [EconEvent(datetime.fromisoformat(e[0]), *e[1:7], bool(e[7])) for e in data["events"]]
         return events, float(data.get("fetched", 0))
     except (OSError, ValueError, KeyError, TypeError, IndexError):
@@ -153,7 +153,7 @@ def _write(events: list[EconEvent], fetched: float) -> None:
         p = _path()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps({"fetched": fetched, "events": [
-            [e.time.isoformat(), e.title, e.country, e.impact, e.kind, e.forecast, e.previous, e.approx] for e in events]}))
+            [e.time.isoformat(), e.title, e.country, e.impact, e.kind, e.forecast, e.previous, e.approx] for e in events]}), encoding="utf-8")
     except OSError as exc:
         log.debug("could not cache the economic calendar: %s", exc)
 

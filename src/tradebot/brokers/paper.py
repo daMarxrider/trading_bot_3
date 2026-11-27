@@ -95,7 +95,7 @@ class PaperBroker(BaseBroker):
         if not self.path.is_file():
             return
         try:
-            s = json.loads(self.path.read_text())
+            s = json.loads(self.path.read_text(encoding="utf-8"))
             self.starting_balance, self.cash = float(s["starting_balance"]), float(s["cash"])
             self.currency, self.fee = str(s["currency"]), float(s["fee"])
             self.positions, self.orders, self.created = s["positions"], s["orders"], s["created"]
@@ -110,7 +110,7 @@ class PaperBroker(BaseBroker):
                  "fee": self.fee, "created": self.created, "positions": self.positions, "orders": self.orders}
         fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=self.path.name, suffix=".tmp")
         try:
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(state, fh, indent=1)
                 fh.flush()
                 os.fsync(fh.fileno())

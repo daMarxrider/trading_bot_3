@@ -70,7 +70,7 @@ def save_config_value(key: str, value: str | bool | int | float | list[str] | No
     """
     path = config_path()
     try:
-        text = path.read_text() if path.is_file() else ""
+        text = path.read_text(encoding="utf-8") if path.is_file() else ""
     except OSError as exc:
         log.warning("could not read %s: %s", path, exc)
         return False
@@ -93,7 +93,7 @@ def save_config_value(key: str, value: str | bool | int | float | list[str] | No
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(new)
+        tmp.write_text(new, encoding="utf-8")
         tmp.replace(path)
     except OSError as exc:
         log.warning("could not save %s to %s: %s", key, path, exc)
@@ -278,7 +278,7 @@ class Settings:
     def __init__(self, path: Path | None = None):
         self.path = path or os_config_dir() / "settings.json"
         try:
-            self._data = json.loads(self.path.read_text())
+            self._data = json.loads(self.path.read_text(encoding="utf-8"))
             if not isinstance(self._data, dict):
                 raise ValueError("not a JSON object")
         except FileNotFoundError:
@@ -300,7 +300,7 @@ class Settings:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(text)
+            tmp.write_text(text, encoding="utf-8")
             tmp.replace(self.path)  # atomic: a crash mid-write never leaves a half-written file
         except OSError as exc:
             log.warning("could not save settings to %s: %s", self.path, exc)

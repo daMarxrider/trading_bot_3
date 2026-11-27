@@ -31,12 +31,12 @@ Arguments: `SYMBOL`
 | `--bars` | `150` | Number of candles |
 | `--indicator`, `-i` |  | e.g. -i sma:period=50 -i rsi; tf= on a higher timeframe: -i sma:period=200,tf=1d |
 | `--algo` |  | Overlay this algorithm's buy/sell signals |
-| `--param`, `-p` |  | Algorithm parameter, e.g. -p lower=30 |
+| `--param`, `-p` |  | Algorithm parameter, e.g. -p lower=30 (a share also as percent, e.g. -p size.fraction=50%) |
 | `--members` |  | Comma-separated members for the 'vote' ensemble, or for the 'pool' (strategies and indicators) |
 | `--entry` |  | Combo entry rule (with the 'combo' strategy), e.g. "elliott_wave & close>sma(200)" or "weighted(rsi_threshold:0.5, macd_cross:0.5) >= 0.6" |
 | `--exit` |  | Combo exit rule, e.g. "macd_cross \| stop_atr(2)" (default: when the entry rule stops holding) |
 | `--fills` |  | Combo fills: close (stops, take-profits and limit entries checked on the close) or intrabar (filled inside the candle against its high/low, at the open on a gap; stop first when both are hit) |
-| `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15 |
+| `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15; shares take a percent too: -p size.fraction=50% |
 | `--direction` |  | Trade direction (#149): long (default), short (short on the strategy's sell signal) or long_short (long on its buy signal, short on its sell signal). Shorts are backtested with liquidation and --borrow-fee / --funding; the live bot does not open shorts |
 | `--line`, `--no-line` |  | Line chart instead of candles |
 | `--volume`, `--no-volume` | `True` | Volume bars under the candles (when the data has volume) |
@@ -56,12 +56,12 @@ Arguments: `SYMBOL`, `ALGO`
 | `--start` |  | ISO date |
 | `--end` |  | ISO date |
 | `--bars` | `1000` | Number of candles (ignored with --start) |
-| `--param`, `-p` |  | Algorithm parameter, e.g. -p lower=30 |
+| `--param`, `-p` |  | Algorithm parameter, e.g. -p lower=30 (a share also as percent, e.g. -p size.fraction=50%) |
 | `--members` |  | Comma-separated members for the 'vote' ensemble, or for the 'pool' (strategies and indicators) |
 | `--entry` |  | Combo entry rule (with the 'combo' strategy), e.g. "elliott_wave & close>sma(200)" or "weighted(rsi_threshold:0.5, macd_cross:0.5) >= 0.6" |
 | `--exit` |  | Combo exit rule, e.g. "macd_cross \| stop_atr(2)" (default: when the entry rule stops holding) |
 | `--fills` |  | Combo fills: close (stops, take-profits and limit entries checked on the close) or intrabar (filled inside the candle against its high/low, at the open on a gap; stop first when both are hit) |
-| `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15 |
+| `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15; shares take a percent too: -p size.fraction=50% |
 | `--direction` |  | Trade direction (#149): long (default), short (short on the strategy's sell signal) or long_short (long on its buy signal, short on its sell signal). Shorts are backtested with liquidation and --borrow-fee / --funding; the live bot does not open shorts |
 | `--leverage` | `1.0` | Leverage (#149): each position is this many times its margin. Positions are liquidated (the margin is lost) when the price reaches the liquidation price |
 | `--maintenance-margin` | `0.005` | Maintenance margin rate, fraction of the notional (0.005 = 0.5%); liquidation below it |
@@ -96,7 +96,7 @@ Arguments: `SYMBOL`, `ALGO`
 | `--start` |  | ISO date |
 | `--end` |  | ISO date |
 | `--bars` | `1000` | Number of candles (ignored with --start) |
-| `--param`, `-p` |  | Algorithm parameter, e.g. -p lower=30 |
+| `--param`, `-p` |  | Algorithm parameter, e.g. -p lower=30 (a share also as percent, e.g. -p size.fraction=50%) |
 | `--members` |  | Comma-separated members for the 'vote' ensemble, or for the 'pool' (strategies and indicators) |
 | `--entry` |  | Combo entry rule (with the 'combo' strategy), e.g. "elliott_wave & close>sma(200)" or "weighted(rsi_threshold:0.5, macd_cross:0.5) >= 0.6" |
 | `--exit` |  | Combo exit rule, e.g. "macd_cross \| stop_atr(2)" (default: when the entry rule stops holding) |
@@ -124,7 +124,7 @@ Arguments: `SYMBOL` (optional), `ALGO` (optional)
 | `--entry` |  | Combo entry rule (with the 'combo' strategy), e.g. "elliott_wave & close>sma(200)" or "weighted(rsi_threshold:0.5, macd_cross:0.5) >= 0.6" |
 | `--exit` |  | Combo exit rule, e.g. "macd_cross \| stop_atr(2)" (default: when the entry rule stops holding) |
 | `--fills` |  | Combo fills: close (stops, take-profits and limit entries checked on the close) or intrabar (filled inside the candle against its high/low, at the open on a gap; stop first when both are hit) |
-| `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15 |
+| `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15; shares take a percent too: -p size.fraction=50% |
 | `--direction` |  | Trade direction (#149): long (default), short (short on the strategy's sell signal) or long_short (long on its buy signal, short on its sell signal). Shorts are backtested with liquidation and --borrow-fee / --funding; the live bot does not open shorts |
 | `--leverage` | `1.0` | Leverage (#149): each position is this many times its margin. Positions are liquidated (the margin is lost) when the price reaches the liquidation price |
 | `--maintenance-margin` | `0.005` | Maintenance margin rate, fraction of the notional (0.005 = 0.5%); liquidation below it |
@@ -140,7 +140,7 @@ Arguments: `SYMBOL` (optional), `ALGO` (optional)
 | `--objective` | `sharpe` | sharpe \| return \| calmar |
 | `--train` | `0.7` | Fraction of data used for training |
 | `--backend` | `auto` | auto \| gpu \| cuda \| rocm \| cpu \| numpy |
-| `--fee` | `0.001` |  |
+| `--fee` | `0.001` | Fee per side, fraction |
 | `--slippage` |  | Slippage per side in basis points (5 = 0.05%), charged on top of the fee; 'auto' = suggested for the asset class (crypto 5, stock 2). Default: [backtest] slippage_bps in config.toml, else 0 |
 | `--min-trades` | `4` | Reject parameter sets with fewer round trips |
 | `--dca-amount` |  | Amount the monthly-investing baseline invests each month (default: capital / months) |
@@ -193,7 +193,7 @@ Arguments: `SYMBOL` (optional)
 | `--market-data` |  | Crypto symbols: let the rules also use funding rate, open interest, Fear & Greed and on-chain MVRV / active addresses (fetched and lined up without look-ahead; see `tradebot market`). Naming those indicators in --indicators does the same |
 | `--permutations` |  | Also run the search this many times on shuffled candles, to see whether it finds as much in noise (default 0, with --from-scratch 5) |
 | `--folds` |  | Walk-forward: also run the search on this many rolling windows, each scored on the stretch after it (default 0, with --from-scratch 3) |
-| `--fee` | `0.001` |  |
+| `--fee` | `0.001` | Fee per side, fraction |
 | `--slippage` |  | Slippage per side in basis points (5 = 0.05%), charged on top of the fee; 'auto' = suggested for the asset class (crypto 5, stock 2). Default: [backtest] slippage_bps in config.toml, else 0 |
 | `--dca-amount` |  | Amount the monthly-investing baseline invests each month (default: capital / months) |
 | `--best-result` |  | Set every setting for the best out-of-sample result, ignoring runtime (much slower than the defaults): bigger search, shuffled-price runs, walk-forward folds, limits scaled to the data. Flags you give yourself still win |
@@ -412,12 +412,12 @@ Arguments: `SYMBOL`, `ALGO`
 | `--broker` | `binance` | Registered broker name |
 | `--tf` | `1h` | Timeframe: 1m 5m 15m 30m 1h 4h 1d 1w |
 | `--stake` | `100.0` | Max quote-currency value per entry |
-| `--param`, `-p` |  | Algorithm parameter, e.g. -p lower=30 |
+| `--param`, `-p` |  | Algorithm parameter, e.g. -p lower=30 (a share also as percent, e.g. -p size.fraction=50%) |
 | `--members` |  | Comma-separated members for the 'vote' ensemble, or for the 'pool' (strategies and indicators) |
 | `--entry` |  | Combo entry rule (with the 'combo' strategy), e.g. "elliott_wave & close>sma(200)" or "weighted(rsi_threshold:0.5, macd_cross:0.5) >= 0.6" |
 | `--exit` |  | Combo exit rule, e.g. "macd_cross \| stop_atr(2)" (default: when the entry rule stops holding) |
 | `--fills` |  | Combo fills: close (stops, take-profits and limit entries checked on the close) or intrabar (filled inside the candle against its high/low, at the open on a gap; stop first when both are hit) |
-| `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15 |
+| `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15; shares take a percent too: -p size.fraction=50% |
 | `--live`, `--no-live` |  | Actually place orders (default: dry run) |
 | `--sandbox`, `--no-sandbox` |  | Use the exchange testnet (ccxt brokers) |
 | `--once`, `--no-once` |  | Evaluate a single candle and exit |
@@ -508,7 +508,7 @@ Arguments: `NAME`
 | `--entry` |  | Entry rule, e.g. "elliott_wave & close>sma(200)" |
 | `--exit` |  | Exit rule, e.g. "macd_cross \| stop_atr(2)" |
 | `--description` |  | Shown in tradebot list and the GUI |
-| `--param`, `-p` |  | Algorithm parameter, e.g. -p lower=30 |
+| `--param`, `-p` |  | Algorithm parameter, e.g. -p lower=30 (a share also as percent, e.g. -p size.fraction=50%) |
 | `--fills` | `close` | Combo fills: close (stops, take-profits and limit entries checked on the close) or intrabar (filled inside the candle against its high/low, at the open on a gap; stop first when both are hit) |
 
 ## `tradebot combo list`
@@ -574,12 +574,12 @@ Arguments: `NAME`, `SYMBOL`, `ALGO`
 | `--broker` | `binance` | Registered broker name |
 | `--tf` | `1h` | Timeframe: 1m 5m 15m 30m 1h 4h 1d 1w |
 | `--stake` | `100.0` | Max quote-currency value per entry |
-| `--param`, `-p` |  | Algorithm parameter, e.g. -p lower=30 |
+| `--param`, `-p` |  | Algorithm parameter, e.g. -p lower=30 (a share also as percent, e.g. -p size.fraction=50%) |
 | `--members` |  | Comma-separated members for the 'vote' ensemble, or for the 'pool' (strategies and indicators) |
 | `--entry` |  | Combo entry rule (with the 'combo' strategy), e.g. "elliott_wave & close>sma(200)" or "weighted(rsi_threshold:0.5, macd_cross:0.5) >= 0.6" |
 | `--exit` |  | Combo exit rule, e.g. "macd_cross \| stop_atr(2)" (default: when the entry rule stops holding) |
 | `--fills` |  | Combo fills: close (stops, take-profits and limit entries checked on the close) or intrabar (filled inside the candle against its high/low, at the open on a gap; stop first when both are hit) |
-| `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15 |
+| `--sizing` |  | Position sizing on top of the strategy (#147): fixed (fraction of the capital), vol (volatility target), risk (fixed risk per trade, the ATR stop distance decides the size) or kelly (fractional Kelly). Tune it with -p size.<name>=value, e.g. -p size.target_vol=0.15; shares take a percent too: -p size.fraction=50% |
 | `--mode` | `dry` | dry (nothing is sent), paper (the simulated account) or live (real orders, only with `bots run --live`) |
 | `--sandbox`, `--no-sandbox` |  | Use the exchange testnet (ccxt brokers) |
 | `--disabled`, `--no-disabled` |  | Don't start it with `bots run` (only by name) |

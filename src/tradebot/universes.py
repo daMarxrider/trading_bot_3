@@ -125,7 +125,7 @@ def index_symbols(key: str, cache_dir: Path | None = None, now: float | None = N
     cached: dict | None = None
     if path is not None:
         try:
-            cached = json.loads(path.read_text())
+            cached = json.loads(path.read_text(encoding="utf-8"))
             if now - float(cached["time"]) < REFRESH_SECONDS and cached["symbols"]:
                 return _cap(key, cached["symbols"])
         except (OSError, ValueError, KeyError, TypeError):
@@ -137,7 +137,7 @@ def index_symbols(key: str, cache_dir: Path | None = None, now: float | None = N
         if path is not None:
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(json.dumps({"time": now, "symbols": symbols}))
+                path.write_text(json.dumps({"time": now, "symbols": symbols}), encoding="utf-8")
             except OSError as exc:
                 log.warning("could not cache index %s: %s", key, exc)
         return symbols
