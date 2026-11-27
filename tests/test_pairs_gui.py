@@ -12,11 +12,13 @@ pytest.importorskip("pyqtgraph")
 
 import numpy as np  # noqa: E402
 import pyqtgraph as pg  # noqa: E402
-from PyQt6.QtGui import QTextDocument  # noqa: E402
+from PyQt6.QtCore import QEvent, QPointF, Qt  # noqa: E402
+from PyQt6.QtGui import QMouseEvent, QTextDocument  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from tradebot.gui.pairs import PairView  # noqa: E402
 from tradebot.gui.theme import ThemeManager  # noqa: E402
+from tradebot.symbols import SymbolSearch  # noqa: E402
 
 from .test_pairs import engine, frame_of, synthetic_pair  # noqa: E402
 
@@ -26,10 +28,14 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
+#: the user's own symbols; no network sources, so the tests stay offline and deterministic
+SEARCH = SymbolSearch(lambda: ["KO", "PEP", "KDP", "BTC/USDT", "ETH/USDT"], remote=[])
+
+
 @pytest.fixture
 def view(app, tmp_path):
     a, b = synthetic_pair()
-    v = PairView(engine(KO=frame_of(a), PEP=frame_of(b)), ThemeManager(user_dir=tmp_path), ["KO", "PEP"])
+    v = PairView(engine(KO=frame_of(a), PEP=frame_of(b)), ThemeManager(user_dir=tmp_path), ["KO", "PEP"], SEARCH)
     v.legs = (a, b)
     yield v
     v.close()
@@ -118,3 +124,58 @@ def test_a_redraw_replaces_the_chance_curve(view):
     show(view)
     show(view, horizon=5)
     assert len(view.chance.getPlotItem().listDataItems()) == 1
+
+
+# -- choosing the symbols: the chart's search and symbol dialog (#220) -------------------------------------------------
+def click(field):
+    field.show()
+    press = QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(5, 5), QPointF(5, 5), Qt.MouseButton.LeftButton,
+                        Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+    QApplication.sendEvent(field, press)
+
+
+@pytest.mark.parametrize("field, completer", [("symbol_a", 0), ("symbol_b", 1)])
+def test_both_symbol_fields_have_the_search_icon(view, field, completer):
+    assert view.completers[completer].edit is getattr(view, field)
+    assert view.completers[completer].dialog_action.toolTip() == "Search all symbols…"
+
+
+@pytest.mark.parametrize("field, completer", [("symbol_a", 0), ("symbol_b", 1)])
+def test_a_click_into_a_symbol_field_opens_the_symbol_dialog(view, field, completer):
+    click(getattr(view, field))
+    dialog = view.completers[completer].dialog
+    assert dialog is not None and dialog.isVisible()
+    dialog.close()
+
+
+def test_a_symbol_picked_in_the_dialog_goes_into_its_field(view):
+    click(view.symbol_b)
+    view.completers[1].dialog.pick("KDP")
+    assert (view.symbol_a.text(), view.symbol_b.text()) == ("KO", "KDP")
+
+
+def test_a_ratio_picked_in_the_dialog_fills_both_fields(view):
+    click(view.symbol_a)
+    dialog = view.completers[0].dialog
+    dialog.pick("BTC/USDT:ETH/USDT")  # what the dialog's ÷ button returns
+    assert (view.symbol_a.text(), view.symbol_b.text()) == ("BTC/USDT", "ETH/USDT")
+
+
+def test_typing_into_a_field_completes_from_the_users_symbols(view):
+    completer = view.completers[1]
+    view.symbol_b.setText("PE")
+    view.symbol_b.textEdited.emit("PE")
+    rows = [completer.model.item(r).data(completer.SYMBOL_ROLE) for r in range(completer.model.rowCount())]
+    assert rows[0] == "PEP"
+
+
+def test_the_app_gives_the_pairs_tab_its_shared_symbol_search(app, tmp_path):
+    view = PairView(None, ThemeManager(user_dir=tmp_path), ["KO", "PEP"], SEARCH)
+    assert all(c.search is SEARCH for c in view.completers)
+    view.deleteLater()
+
+
+def test_the_view_still_answers_which_window_it_is_in(view):
+    # its "Window" spin box was stored as `window`, hiding QWidget.window(): the symbol dialog then failed with
+    # "'QSpinBox' object is not callable" whenever the tab was the top-level widget
+    assert view.window() is view

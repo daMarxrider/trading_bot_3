@@ -15,36 +15,45 @@ from PyQt6.QtWidgets import (QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QLi
 
 from tradebot.analysis.pairs import cointegration, pair_health, kalman_pair, pair_stats, rolling_pair
 from tradebot.analysis.reversion import reversion
+from tradebot.core.models import split_pair
 from tradebot.core.timeframes import TIMEFRAMES
-from tradebot.gui.common import card, run_async
+from tradebot.gui.common import SymbolCompleter, card, run_async
 from tradebot.gui.theme import ThemeManager, qcolor
+from tradebot.symbols import SymbolSearch
 
 
 class PairView(QWidget):
     status = pyqtSignal(str)
 
-    def __init__(self, engine, themes: ThemeManager, watchlist: list[str]):
+    def __init__(self, engine, themes: ThemeManager, watchlist: list[str], symbol_search: SymbolSearch | None = None):
         super().__init__()
         self.engine, self.themes = engine, themes
         self.symbol_a = QLineEdit(watchlist[0] if watchlist else "KO", placeholderText="first, e.g. KO")
         self.symbol_b = QLineEdit(watchlist[1] if len(watchlist) > 1 else "PEP", placeholderText="second, e.g. PEP")
+        # the chart's symbol search (#220): completion while typing, the symbol dialog on a click or the search icon
+        search = symbol_search or SymbolSearch(lambda: watchlist)
+        self.completers = (SymbolCompleter(self.symbol_a, search), SymbolCompleter(self.symbol_b, search))
+        for completer in self.completers:
+            completer.chosen.connect(self._chosen)
         self.tf = QComboBox()
         self.tf.addItems(list(TIMEFRAMES))
         self.tf.setCurrentText("1d")
         self.bars = QSpinBox(minimum=100, maximum=20000, value=750)
-        self.window = QSpinBox(minimum=10, maximum=1000, value=60,
-                               toolTip="Candles for the rolling hedge ratio and z-score: short follows the pair "
-                                       "but absorbs the gap, long reacts slowly to a changed relationship")
+        self.window_box = QSpinBox(minimum=10, maximum=1000, value=60,
+                                   toolTip="Candles for the rolling hedge ratio and z-score: short follows the pair "
+                                           "but absorbs the gap, long reacts slowly to a changed relationship")
         self.method = QComboBox(toolTip="Rolling: OLS over the window. Kalman: an adaptive filter, no window, "
                                         "the hedge ratio follows the pair smoothly")
         self.method.addItems(["rolling", "kalman"])
         run = QPushButton("Analyse", objectName="Primary")
         run.clicked.connect(self.run)
+        for field in (self.symbol_a, self.symbol_b):
+            field.setMinimumWidth(150)  # a long symbol (BTC/USDT:USDT) next to the search icon
+        # what to load on the first row, how to read it on the second: each fits a narrow window
         row = QHBoxLayout()
-        for label, w in (("A", self.symbol_a), ("B", self.symbol_b), ("Timeframe", self.tf), ("Candles", self.bars),
-                         ("Window", self.window), ("Hedge ratio", self.method)):
+        for label, w in (("A", self.symbol_a), ("B", self.symbol_b), ("Timeframe", self.tf), ("Candles", self.bars)):
             row.addWidget(QLabel(label))
-            row.addWidget(w)
+            row.addWidget(w, 1 if w in (self.symbol_a, self.symbol_b) else 0)
         row.addWidget(run)
         # the trade the chance is about: closed inside ±exit, given up beyond ±stop, within the horizon (#223)
         self.exit = QDoubleSpinBox(minimum=0.0, maximum=10.0, singleStep=0.1, value=0.5, suffix=" σ",
@@ -56,7 +65,8 @@ class PairView(QWidget):
                                         "trade opened at each candle closes to the exit before the stop within this "
                                         "time, from how fast the gap reverted over the last 2 × window candles")
         trade = QHBoxLayout()
-        for label, w in (("Exit", self.exit), ("Stop", self.stop), ("Within", self.horizon)):
+        for label, w in (("Window", self.window_box), ("Hedge ratio", self.method), ("Exit", self.exit),
+                         ("Stop", self.stop), ("Within", self.horizon)):
             trade.addWidget(QLabel(label))
             trade.addWidget(w)
         trade.addStretch(1)
@@ -95,6 +105,13 @@ class PairView(QWidget):
         themes.changed.connect(self._style)
         self._style(themes.current)
 
+    def _chosen(self, symbol: str):
+        """A ratio picked in the dialog (its ÷ button returns ``A:B``) is a whole pair: it fills both fields."""
+        legs = split_pair(symbol)
+        if legs is not None:
+            self.symbol_a.setText(legs[0])
+            self.symbol_b.setText(legs[1])
+
     def _style(self, t):
         for plot in (self.prices, self.zplot, self.chance):
             plot.setBackground(None if t.glass else qcolor(t.panel))
@@ -107,7 +124,7 @@ class PairView(QWidget):
         if not a or not b:
             self.status.emit("pairs: enter both symbols")
             return
-        bars, window, method = self.bars.value(), self.window.value(), self.method.currentText()
+        bars, window, method = self.bars.value(), self.window_box.value(), self.method.currentText()
         self.status.emit(f"pairs: loading {a} and {b} …")
 
         def work():
