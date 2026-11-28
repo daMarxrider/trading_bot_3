@@ -21,6 +21,7 @@ def _cross(a, b, up: bool):
 
 class SMA(BaseIndicator):
     name = "sma"
+    category = "trend"
     description = "Simple moving average of the close"
     params = {"period": IntParam(20, 2, 400)}
     outputs = ("value", "cross_up", "cross_down")
@@ -34,6 +35,7 @@ class SMA(BaseIndicator):
 
 class EMA(BaseIndicator):
     name = "ema"
+    category = "trend"
     description = "Exponential moving average of the close"
     params = {"period": IntParam(20, 2, 400)}
     outputs = ("value", "cross_up", "cross_down")
@@ -47,6 +49,7 @@ class EMA(BaseIndicator):
 
 class RSI(BaseIndicator):
     name = "rsi"
+    category = "oscillator"
     description = "Relative Strength Index (Wilder)"
     params = {"period": IntParam(14, 2, 100)}
     overlay = False
@@ -71,6 +74,7 @@ class RSI(BaseIndicator):
 
 class MACD(BaseIndicator):
     name = "macd"
+    category = "oscillator"
     description = "Moving Average Convergence/Divergence"
     params = {"fast": IntParam(12, 2, 100), "slow": IntParam(26, 3, 200), "signal": IntParam(9, 2, 100)}
     outputs = ("macd", "signal", "hist", "cross_up", "cross_down")
@@ -88,6 +92,7 @@ class MACD(BaseIndicator):
 
 class Bollinger(BaseIndicator):
     name = "bbands"
+    category = "volatility"
     description = "Bollinger Bands"
     params = {"period": IntParam(20, 2, 200), "width": Param(2.0, 0.5, 4.0)}
     outputs = ("upper", "middle", "lower", "above_upper", "below_lower")
@@ -105,6 +110,7 @@ class Bollinger(BaseIndicator):
 
 class MACross(BaseIndicator):
     name = "ma_cross"
+    category = "trend"
     description = "Fast and slow moving average (SMA or EMA) with cross alerts"
     params = {"fast": IntParam(9, 2, 200), "slow": IntParam(21, 3, 400),
               "ema": IntParam(0, 0, 1, "0: simple averages, 1: exponential")}
@@ -120,6 +126,7 @@ class MACross(BaseIndicator):
 
 class ATR(BaseIndicator):
     name = "atr"
+    category = "volatility"
     description = "Average True Range (Wilder)"
     params = {"period": IntParam(14, 2, 100)}
     overlay = False
@@ -135,6 +142,7 @@ class ATR(BaseIndicator):
 
 class Stochastic(BaseIndicator):
     name = "stoch"
+    category = "oscillator"
     description = "Stochastic oscillator %K/%D"
     params = {"period": IntParam(14, 2, 100), "smooth": IntParam(3, 1, 20)}
     outputs = ("k", "d", "cross_up", "cross_down")
@@ -166,6 +174,7 @@ class StochasticShortWaves(BaseIndicator):
     """
 
     name = "ssw"
+    category = "oscillator"
     description = "Stochastic Short Waves: smoothed fast and slow RSI with signal levels"
     # same order as the Pine inputs, so the chart reads "ssw 22 66 83 35"
     params = {
@@ -201,6 +210,7 @@ class StochasticShortWaves(BaseIndicator):
 
 class Donchian(BaseIndicator):
     name = "donchian"
+    category = "volatility"
     description = "Donchian channel (highest high / lowest low)"
     params = {"period": IntParam(20, 2, 200)}
     outputs = ("upper", "lower", "breakout_up", "breakout_down")
@@ -220,6 +230,7 @@ class Ichimoku(BaseIndicator):
     """Ichimoku cloud. Spans are *not* displaced forward so no future value leaks into a bar."""
 
     name = "ichimoku"
+    category = "trend"
     description = "Ichimoku Kinko Hyo (conversion, base, span A/B)"
     params = {
         "conversion": IntParam(9, 2, 60, "Candles for the fast midpoint line (highest high plus lowest low, halved)."),
@@ -247,6 +258,7 @@ class Halving(BaseIndicator):
     """Bitcoin halving cycle (#99): a calendar clock, so it needs timestamped candles (NaN without)."""
 
     name = "halving"
+    category = "market"
     description = "Days since the last Bitcoin halving, and until the predicted next one"
     outputs = ("days", "days_to_next", "phase")
     overlay = False
@@ -266,6 +278,7 @@ class Halving(BaseIndicator):
 # Volume is venue-dependent (see OHLC): these give NaN on symbols without volume data.
 class Volume(BaseIndicator):
     name = "volume"
+    category = "volume"
     description = "Volume bars (up/down by candle) with their moving average"
     params = {"period": IntParam(20, 2, 200, "candles of the average"),
               "spike": Param(2.0, 1.1, 10.0, "a spike is volume above this multiple of the average")}
@@ -284,6 +297,7 @@ class Volume(BaseIndicator):
 
 class OBV(BaseIndicator):
     name = "obv"
+    category = "volume"
     description = "On-balance volume: volume added on up closes, subtracted on down closes"
     params = {"period": IntParam(20, 2, 200, "candles of its moving average")}
     outputs = ("value", "sma", "cross_up", "cross_down")
@@ -325,6 +339,7 @@ def _period_starts(time, anchor: int, like):
 
 class VWAP(BaseIndicator):
     name = "vwap"
+    category = "volume"
     description = "Volume-weighted average price, restarting every day, week, month or year (UTC)"
     params = {"anchor": IntParam(0, 0, 3, "a new average starts each 0: day, 1: week, 2: month, 3: year")}
     outputs = ("value", "cross_up", "cross_down")
@@ -347,6 +362,7 @@ class VWAP(BaseIndicator):
 
 class MFI(BaseIndicator):
     name = "mfi"
+    category = "oscillator"
     description = "Money Flow Index: a volume-weighted RSI of the typical price"
     params = {"period": IntParam(14, 2, 100)}
     outputs = ("value", "cross_up", "cross_down")
@@ -372,6 +388,7 @@ class MFI(BaseIndicator):
 
 class VolumeRatio(BaseIndicator):
     name = "volume_ratio"
+    category = "volume"
     description = "Volume relative to its moving average (2 = twice the usual volume)"
     params = {"period": IntParam(20, 2, 200, "candles of the average"),
               "spike": Param(2.0, 1.1, 10.0, "a spike is a ratio above this")}

@@ -187,7 +187,9 @@ def test_main_window_has_the_page_and_lists_saved_strategies(app, tmp_path, monk
     window.evolve.run()
     window.evolve.save_plugin("evolved_window_test")
     assert window.lab.algo.findText("evolved_window_test") >= 0
-    assert window.chart.algo_box.findText("evolved_window_test") >= 0
+    dialog = window.chart.open_studies()  # the chart lists it too, read when its dialog opens
+    assert any(r.name == "evolved_window_test" for r in dialog.catalogue())
+    dialog.reject()
     window.close()
 
 

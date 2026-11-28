@@ -469,6 +469,11 @@ class SymbolCompleter(QObject):
             edit.installEventFilter(self)
 
     def eventFilter(self, obj, event):
+        if obj is self.edit and event.type() == QEvent.Type.KeyPress:
+            from tradebot.gui.symbol_dialog import forward_key
+
+            if forward_key(self.dialog, event):
+                return True  # typed while the dialog opens: it gets the keys (#230)
         if (obj is self.edit and event.type() == QEvent.Type.MouseButtonPress
                 and event.button() == Qt.MouseButton.LeftButton and self.edit.isEnabled() and not self.edit.isReadOnly()):
             self.open_dialog()

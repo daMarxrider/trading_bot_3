@@ -29,6 +29,7 @@ NAMES = {"bull": "bull", "bear": "bear", "sideways": "sideways", "high_vol": "hi
 
 class Regime(BaseIndicator):
     name = "regime"
+    category = "trend"
     description = "Market regime: bull / bear / sideways trend and high / low volatility"
     params = {"period": IntParam(50, 5, 500, "candles the trend is measured over"),
               "threshold": Param(5.0, 0.5, 50.0, "percent the close must have risen (fallen) over the period to "

@@ -22,6 +22,7 @@ from PyQt6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QObject, QRec
 from PyQt6.QtGui import QColor, QFont, QKeyEvent, QPainter, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -169,6 +170,84 @@ def _scaled(font: QFont, factor: float) -> QFont:
     else:
         font.setPointSizeF(font.pointSizeF() * factor)
     return font
+
+
+def fit_dialog(dialog: QDialog, parent: QWidget | None, width: int = 1000, height: int = 640):
+    """Size a picker dialog to ``width`` x ``height``, smaller in a small window and never past it, and place it in
+    the upper middle of ``parent``'s window."""
+    window = parent.window() if parent is not None else None
+    w, h = (window.width(), window.height()) if window is not None else (1100, 760)
+    dialog.resize(max(620, min(width, w - 48)), max(400, min(height, h - 96)))
+    if window is not None:
+        center = window.mapToGlobal(window.rect().center())
+        dialog.move(center.x() - dialog.width() // 2, max(window.mapToGlobal(window.rect().topLeft()).y() + 48,
+                                                          center.y() - dialog.height() // 2 - 40))
+
+
+def rail_item(rail: QListWidget, key: str, label: str) -> QLabel:
+    """A selectable row of a picker's rail: ``label`` with room for a count at the right, which is returned."""
+    item = QListWidgetItem()
+    item.setData(Qt.ItemDataRole.UserRole, key)
+    row = QWidget()
+    row.setStyleSheet("background: transparent;")
+    name, count = QLabel(label), QLabel(objectName="Muted")
+    name.setStyleSheet("background: transparent;")
+    count.setStyleSheet("background: transparent;")
+    rl = QHBoxLayout(row)
+    rl.setContentsMargins(10, 6, 10, 6)
+    rl.addWidget(name, 1)
+    rl.addWidget(count)
+    item.setSizeHint(QSize(160, 32))
+    rail.addItem(item)
+    rail.setItemWidget(item, row)
+    return count
+
+
+def rail_header(rail: QListWidget, label: str):
+    """A heading in a picker's rail, not selectable."""
+    item = QListWidgetItem(label)
+    item.setFlags(Qt.ItemFlag.NoItemFlags)
+    item.setSizeHint(QSize(160, 30))
+    font = _scaled(rail.font(), 0.85)
+    font.setWeight(QFont.Weight.Medium)
+    item.setFont(font)
+    rail.addItem(item)
+
+
+class Palette:
+    """Mixed into a picker dialog (symbol, indicators): shown non-modal, like a command palette, so nothing typed while
+    it opens is lost (#230). A modal dialog blocks the main window at once, but until the window manager gives the new
+    window the keyboard, keys still go to the main window, and Qt drops input to a blocked window before any widget
+    sees it. Non-modal, those keys reach the field or chart the picker was opened from, which hands them over with
+    :func:`forward_key`. Clicking the main window closes it, as clicking off a menu does."""
+
+    def show_palette(self):
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange and self.isVisible() and not self.isActiveWindow():
+            QTimer.singleShot(0, self._dismiss_if_left)
+
+    def _dismiss_if_left(self):
+        """Close when the main window took over; not for a dialog opened from here (parameters, colours)."""
+        owner = self.parentWidget().window() if self.parentWidget() is not None else None
+        if self.isVisible() and owner is not None and QApplication.activeWindow() is owner:
+            self.reject()
+
+
+def forward_key(dialog: QDialog | None, event) -> bool:
+    """While ``dialog`` is open but doesn't have the keyboard yet, a key that reached its opener goes to its search
+    field instead; True if it was handed over."""
+    if dialog is None or not dialog.isVisible() or dialog.isActiveWindow():
+        return False
+    query = dialog.query
+    QApplication.sendEvent(query, QKeyEvent(event.type(), event.key(), event.modifiers(), event.text(),
+                                            event.isAutoRepeat(), event.count()))
+    return True
 
 
 def context_for(widget: QWidget) -> SymbolContext | None:
@@ -323,11 +402,11 @@ class _ColorDelegate(QStyledItemDelegate):
 
 
 class _TypeDelegate(QStyledItemDelegate):
-    """The Type column as a small outlined tag; ETFs in the accent colour, so they stand out among stocks."""
+    """The Type column as a small outlined tag; ``accent`` ones (ETFs here) in the accent colour, so they stand out."""
 
-    def __init__(self, dialog: SymbolDialog):
+    def __init__(self, dialog: QDialog, accent: tuple[str, ...] = ("ETF",)):
         super().__init__(dialog)
-        self.dialog = dialog
+        self.dialog, self.accent = dialog, accent
 
     def paint(self, painter: QPainter, option, index):
         text = index.data()
@@ -344,7 +423,7 @@ class _TypeDelegate(QStyledItemDelegate):
         width = painter.fontMetrics().horizontalAdvance(text) + 12
         height = painter.fontMetrics().height() + 2
         rect = QRectF(option.rect.left() + 6, option.rect.center().y() - height / 2 + 0.5, width, height)
-        color = QColor(theme.accent if text == "ETF" else theme.muted)
+        color = QColor(theme.accent if text in self.accent else theme.muted)
         painter.setPen(QPen(color, 1))
         painter.drawRoundedRect(rect, 4, 4)
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
@@ -352,7 +431,7 @@ class _TypeDelegate(QStyledItemDelegate):
 
 
 # -- the dialog --------------------------------------------------------------------------------------------------
-class SymbolDialog(QDialog):
+class SymbolDialog(Palette, QDialog):
     """Pick a symbol; :attr:`picked` carries it (``A:B`` for a ratio). With ``multi`` it stays open for more."""
 
     picked = pyqtSignal(str)
@@ -529,31 +608,10 @@ class SymbolDialog(QDialog):
         self.model.layoutChanged.emit()
 
     def _fit_to(self, parent):
-        """1000x640, smaller in a small window, never past it."""
-        window = parent.window() if parent is not None else None
-        w, h = (window.width(), window.height()) if window is not None else (1100, 760)
-        self.resize(max(620, min(1000, w - 48)), max(400, min(640, h - 96)))
-        if window is not None:
-            center = window.mapToGlobal(window.rect().center())
-            self.move(center.x() - self.width() // 2, max(window.mapToGlobal(window.rect().topLeft()).y() + 48,
-                                                           center.y() - self.height() // 2 - 40))
+        fit_dialog(self, parent)
 
     def _rail_item(self, key: str, label: str):
-        item = QListWidgetItem()
-        item.setData(Qt.ItemDataRole.UserRole, key)
-        row = QWidget()
-        row.setStyleSheet("background: transparent;")
-        name, count = QLabel(label), QLabel(objectName="Muted")
-        name.setStyleSheet("background: transparent;")
-        count.setStyleSheet("background: transparent;")
-        rl = QHBoxLayout(row)
-        rl.setContentsMargins(10, 6, 10, 6)
-        rl.addWidget(name, 1)
-        rl.addWidget(count)
-        item.setSizeHint(QSize(160, 32))
-        self.rail.addItem(item)
-        self.rail.setItemWidget(item, row)
-        self._counts[key] = count
+        self._counts[key] = rail_item(self.rail, key, label)
 
     def _fill_lists(self):
         """The watchlists under Recent, as they are now."""
@@ -564,13 +622,7 @@ class SymbolDialog(QDialog):
             self._rail_item(f"list:{name}", name)
 
     def _rail_header(self, label: str):
-        item = QListWidgetItem(label)
-        item.setFlags(Qt.ItemFlag.NoItemFlags)
-        item.setSizeHint(QSize(160, 30))
-        font = _scaled(self.font(), 0.85)
-        font.setWeight(QFont.Weight.Medium)
-        item.setFont(font)
-        self.rail.addItem(item)
+        rail_header(self.rail, label)
 
     def _update_hints(self):
         self.hints.setText(HINTS_RATIO if self.numerator else HINTS_MULTI if self.multi else HINTS)
@@ -893,5 +945,5 @@ def open_symbol_dialog(search: SymbolSearch, parent: QWidget, on_pick: Callable[
         except TypeError:
             pass
     dialog.picked.connect(on_pick)
-    dialog.open()
+    dialog.show_palette()
     return dialog

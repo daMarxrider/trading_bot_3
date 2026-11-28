@@ -75,6 +75,7 @@ class MainWindow(QMainWindow):
         # what the symbol dialog shows besides search results: prices, recent symbols, the watchlists (#220)
         self.symbol_context = SymbolContext(engine, settings, themes, lambda: self.chart.watchlists.lists)
         QTimer.singleShot(1500, lambda: self.symbol_context.prewarm(search, self))  # ready before the first click
+        QTimer.singleShot(2000, self.chart.prewarm_studies)  # and the indicator dialog before the first "/" (#230)
         self.screener = ScreenerView(engine, themes, symbols)
         self.scanner = ScannerView(engine, themes, lambda: self.chart.watchlists.lists, settings)
         self.chart.watchlists.changed.connect(self.scanner.watchlists_changed)
@@ -185,10 +186,9 @@ class MainWindow(QMainWindow):
         self.lab.show_on_chart.connect(lab_to_chart)
         self.evolve.show_on_chart.connect(lab_to_chart)
 
-        def strategy_saved(name):  # an evolved strategy saved as a plugin shows up in every list at once (#83)
-            for box in (self.lab.algo, self.chart.algo_box):
-                if box.findText(name) < 0:
-                    box.addItem(name)
+        def strategy_saved(name):  # an evolved strategy saved as a plugin shows up in the lab at once (#83); the
+            if self.lab.algo.findText(name) < 0:  # chart's indicator dialog reads the registry each time it opens
+                self.lab.algo.addItem(name)
 
         self.evolve.saved.connect(strategy_saved)
 

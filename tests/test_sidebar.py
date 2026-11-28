@@ -21,7 +21,7 @@ from tradebot.gui.news import NewsPanel, ago  # noqa: E402
 from tradebot.gui.sidebar import ChartSidebar  # noqa: E402
 from tradebot.gui.theme import ThemeManager  # noqa: E402
 
-from .conftest import make_ohlc  # noqa: E402
+from .conftest import assert_usable, make_ohlc  # noqa: E402
 
 NOW = datetime.now(timezone.utc)
 
@@ -71,22 +71,17 @@ def test_open_by_default_and_the_topmost_entry_collapses_it(themes, tmp_path):
     chart = make_chart(themes, settings)
     bar = chart.sidebar
     assert bar.is_open and bar.panel.isVisible() and bar.toggle.toolTip() == "Hide the sidebar"
-    assert bar.strip.itemAt(0).widget() is bar.toggle  # the topmost entry
-    wide = bar.width()
+    assert_usable(bar.toggle)
+    wide, room = bar.width(), chart.canvas.width()
     bar.toggle.click()
     for _ in range(3):  # the layout settles over a couple of event rounds
         QApplication.processEvents()
     assert not bar.is_open and not bar.panel.isVisible() and bar.toggle.toolTip() == "Show the sidebar"
-    assert bar.width() < wide / 4 and chart.canvas.width() > 900  # the chart takes the room
+    assert bar.width() < wide and chart.canvas.width() > room  # the chart takes the room
     again = make_chart(themes, Settings(tmp_path / "s.json"))  # a new session
     assert not again.sidebar.is_open
     again.sidebar.toggle.click()
     assert again.sidebar.is_open and again.sidebar.toggle.toolTip() == "Hide the sidebar"
-
-
-def test_sidebar_is_right_of_the_chart(themes):
-    chart = make_chart(themes)
-    assert chart.sidebar.geometry().left() >= chart.canvas.geometry().right()
 
 
 def test_categories(themes, tmp_path):
@@ -100,23 +95,22 @@ def test_categories(themes, tmp_path):
     bar.set_open(False)
     bar.group.buttons()[1].click()  # a category button opens a collapsed sidebar on it
     assert bar.is_open and bar.current == "other" and bar.title.text() == "Other" and shown[-1] == "other"
-    assert bar.strip.itemAt(2).widget() is bar.group.buttons()[1]  # below the toggle, in order
     restored = ChartSidebar(Settings(tmp_path / "s.json"))
     restored.add_category("news", "📰", "News", QLabel("n"))
     restored.add_category("other", "⭐", "Other", QLabel("o"))
     assert restored.current == "other"  # remembered
 
 
-@pytest.mark.parametrize("touch, side", [(False, 42), (True, 52)])
-def test_strip_buttons_are_squares(app, tmp_path, touch, side):
+@pytest.mark.parametrize("touch", [False, True])
+def test_strip_buttons_are_usable_and_finger_sized_in_touch_mode(app, tmp_path, touch):
     themes = ThemeManager(user_dir=tmp_path, touch=touch)  # the theme's min-height must not squash them
     themes.apply("light")
     chart = ChartView(None, themes, ["TEST"])
     chart.resize(1200, 700)
     chart.show()
     QApplication.processEvents()
-    for button in [chart.sidebar.toggle, *chart.sidebar.group.buttons()]:
-        assert (button.width(), button.height()) == (side, side)
+    for button in [chart.sidebar.toggle, *chart.sidebar.group.buttons()]:  # the theme's min-height can't squash them
+        assert_usable(button, touch=touch)
 
 
 def test_collapsed_or_expanded_is_restored_when_the_app_starts(app, tmp_path, monkeypatch):

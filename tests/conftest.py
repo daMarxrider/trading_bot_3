@@ -84,6 +84,28 @@ def _no_symbol_name_lookups(monkeypatch):
     tradebot.symbols.symbol_name.cache_clear()
 
 
+#: the smallest control a pointer hits reliably, and one a finger does (touch mode)
+MIN_TARGET, MIN_TOUCH_TARGET = 20, 40
+
+
+def assert_usable(widget, touch: bool = False):
+    """A control the user can see and use, wherever the layout puts it: shown on screen (not clipped away or
+    covered), its label and icon not cut, and big enough to hit. GUI tests check this instead of positions, orders
+    or exact sizes, so a layout change doesn't break them."""
+    from PyQt6.QtCore import Qt
+
+    assert widget.isVisibleTo(widget.window()), f"{widget!r} is hidden"
+    assert not widget.visibleRegion().isEmpty(), f"{widget!r} is clipped away or covered"
+    text = widget.text() if hasattr(widget, "text") else ""
+    icon_only = getattr(widget, "toolButtonStyle", lambda: None)() == Qt.ToolButtonStyle.ToolButtonIconOnly
+    if text and not icon_only:  # the label is not cut
+        assert widget.fontMetrics().horizontalAdvance(text.replace("&&", "&")) <= widget.width(), f"{widget!r} cuts {text!r}"
+    if hasattr(widget, "iconSize") and not widget.icon().isNull():  # nor the icon
+        assert widget.iconSize().width() <= widget.width() and widget.iconSize().height() <= widget.height()
+    least = MIN_TOUCH_TARGET if touch else MIN_TARGET
+    assert min(widget.width(), widget.height()) >= least, f"{widget!r} is too small to hit: {widget.size()}"
+
+
 def make_ohlc(n: int = 400, seed: int = 0, freq: str = "D") -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     close = 100 * np.exp(np.cumsum(rng.normal(0, 0.02, n)))

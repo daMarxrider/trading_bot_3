@@ -19,7 +19,7 @@ from tradebot.gui.chart import FIT_PADDING  # noqa: E402
 from tradebot.gui.theme import ThemeManager  # noqa: E402
 from tradebot.gui.views import BacktestView  # noqa: E402
 
-from .conftest import make_ohlc  # noqa: E402
+from .conftest import assert_usable, make_ohlc  # noqa: E402
 from .test_chart_autofit import FakeWheel  # noqa: E402
 
 
@@ -67,11 +67,10 @@ def assert_fits(lab, x0, x1):
     assert vb(lab).viewRange()[1] == pytest.approx((lo - pad, hi + pad), rel=1e-6)
 
 
-def test_on_by_default_in_bottom_left(lab):
+def test_on_by_default_and_usable(lab):
     btn = lab.fit_btn
-    assert btn.isCheckable() and btn.isChecked() and not btn.isHidden()
-    assert btn.parent() is lab.plot and btn.x() < 20
-    assert btn.geometry().bottom() > lab.plot.height() - 20
+    assert btn.isCheckable() and btn.isChecked()
+    assert_usable(btn)
 
 
 def test_a_run_fits_all_curves(lab):

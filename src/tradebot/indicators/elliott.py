@@ -40,6 +40,7 @@ class ElliottWaves(BaseIndicator):
     """
 
     name = "elliott"
+    category = "levels"
     description = "Automatic Elliott wave count (zigzag, wave labels, causal wave state)"
     params = {"atr_period": IntParam(14, 5, 50), "swing_atr": Param(4.0, 1.0, 10.0), "min_score": Param(0.25, 0.0, 0.9)}
     outputs = ("zigzag", "wave", "state")

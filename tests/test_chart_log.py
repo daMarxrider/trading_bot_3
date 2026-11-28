@@ -20,6 +20,8 @@ from tradebot.gui.chart import FIT_PADDING, ChartView, Curve, PriceAxis, price_l
 from tradebot.gui.theme import ThemeManager  # noqa: E402
 from tradebot.indicators.builtin import RSI, Bollinger  # noqa: E402
 
+from .conftest import assert_usable  # noqa: E402
+
 
 def growth(n=400, start=100.0, end=100_000.0) -> pd.DataFrame:
     """A thousandfold rise, like Bitcoin's history."""
@@ -57,16 +59,15 @@ def y_range(chart):
     return tuple(chart.price.vb.viewRange()[1])
 
 
-def test_button_next_to_autofit_off_by_default_and_remembered(themes, tmp_path):
+def test_button_off_by_default_and_remembered(themes, tmp_path):
     path = tmp_path / "s.json"
     first = ChartView(None, themes, ["TEST"], Settings(path))
     first.resize(800, 600)
     first.show()
     QApplication.processEvents()
-    btn, fit = first.log_btn, first.fit_btn
-    assert btn.isCheckable() and not btn.isChecked() and btn.parent() is first.canvas
-    assert btn.y() == fit.y() and btn.x() > fit.geometry().right()  # right of ↕, same row
-    assert btn.size() == fit.size()
+    btn = first.log_btn
+    assert btn.isCheckable() and not btn.isChecked()
+    assert_usable(btn)
     btn.setChecked(True)
     assert ChartView(None, themes, ["TEST"], Settings(path)).log_btn.isChecked()
 
@@ -188,15 +189,15 @@ def test_price_label():
 
 
 @pytest.mark.parametrize("touch", [False, True])
-def test_log_and_autofit_buttons_are_the_same_square(app, tmp_path, touch):
+def test_log_and_autofit_buttons_are_usable_and_finger_sized_in_touch_mode(app, tmp_path, touch):
     themes = ThemeManager(user_dir=tmp_path, touch=touch)
     themes.apply("glass")
     c = ChartView(None, themes, ["TEST"])
     c.resize(800, 600)
     c.show()
     QApplication.processEvents()
-    side = 40 if touch else 28
-    assert c.fit_btn.size() == c.log_btn.size() and (c.log_btn.width(), c.log_btn.height()) == (side, side)
+    for btn in (c.fit_btn, c.log_btn, c.vol_btn):  # the theme's min-height must not squash them
+        assert_usable(btn, touch=touch)
 
 
 def test_volume_overlay_is_a_setting_drawn_in_its_own_viewbox(chart):

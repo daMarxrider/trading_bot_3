@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QColorDialog,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
     QLineEdit,
@@ -35,7 +36,7 @@ from PyQt6.QtWidgets import (
 )
 
 from tradebot.analysis.charttypes import heikin_ashi, percent_change, renko
-from tradebot.algorithms import ALGORITHMS, algorithm_names, build_algorithm
+from tradebot.algorithms import ALGORITHMS, build_algorithm
 from tradebot import economic, fundamentals
 from tradebot.config import Settings
 from tradebot.core.series import MARKET_COLUMNS, volume_of
@@ -71,6 +72,7 @@ from tradebot.gui.params import ParamDialog
 from tradebot.gui.depth import DepthPanel
 from tradebot.gui.sidebar import ChartSidebar
 from tradebot.gui.style_dialog import StyleDialog
+from tradebot.gui.symbol_dialog import forward_key
 from tradebot.gui.theme import Theme, ThemeManager, qcolor, resolve_color
 from tradebot.gui.touch import PlotTouchHandler, TouchController
 from tradebot.gui.watchlists import WatchlistPanel
@@ -862,21 +864,22 @@ class ChartView(QWidget):
         self._info = None  # fundamentals.Snapshot of the charted symbol, once fetched
         self._info_for = ""
 
-        self.ind_btn = QToolButton(text="Indicators")
-        self.ind_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        bind_icon(self.ind_btn, "layers", themes, off="muted")
-        self.ind_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.ind_menu = QMenu(self)
-        self.ind_menu.aboutToShow.connect(self._fill_indicator_menu)
-        self.ind_btn.setMenu(self.ind_menu)
+        # indicators and the signal: one dialog (#230), also opened with "/" over the chart
+        self.studies_btn = QToolButton(text="Indicators", toolTip="Indicators and signals (/)")
+        self.studies_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        bind_icon(self.studies_btn, "layers", themes, off="muted")
+        self.studies_btn.clicked.connect(lambda: self.open_studies())
+        self._studies = None  # the dialog, built on first use and reused
 
-        self.algo_box = QComboBox()
-        self.algo_box.addItem("No signals")
-        self.algo_box.addItems(algorithm_names())
-        self.algo_box.currentTextChanged.connect(self._choose_algorithm)
-
+        # drawing tools: an icon rail on the chart's left edge, part of the chart (#230); the names are in the tooltips
         self.tools: dict[str, QToolButton] = {}
         tool_group = []
+
+        def rail_button(btn: QToolButton, glyph: str, checked_on: bool = True) -> QToolButton:
+            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)  # 32 px square, 44 in touch mode (theme)
+            bind_icon(btn, glyph, themes, off="muted", on="accent" if checked_on else None, size=18)
+            btn.setAccessibleName(btn.text())
+            return btn
         for key, glyph, label, tip in (("trend", "trend", "Trend", "Trendline: click two points"),
                                 ("hline", "hline", "Level", "Support/resistance: click a price"),
                                 ("rect", "rect", "Zone", "Rectangle: click two corners"),
@@ -885,20 +888,17 @@ class ChartView(QWidget):
                                 ("text", "text", "Note", "Text note: click where it goes, then type it"),
                                 ("measure", "ruler", "Measure", "Price range measure: click two points to read the change "
                                                          "in price, percent and time")):
-            btn = QToolButton(text=label, checkable=True, toolTip=tip)
-            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-            bind_icon(btn, glyph, themes, off="muted", on="accent_ink", size=14)
+            btn = rail_button(QToolButton(text=label, checkable=True, toolTip=f"{label} · {tip}"), glyph)
             btn.toggled.connect(lambda on, k=key: self._tool_toggled(k, on))
             self.tools[key] = btn
             tool_group.append(btn)
-        clear = QToolButton(text="Clear", toolTip="Remove all drawings of this symbol (right-click a single drawing to recolour, edit or delete it)")
-        clear.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        bind_icon(clear, "trash", themes, off="muted", size=14)
+        clear = rail_button(QToolButton(text="Clear", toolTip="Clear · remove all drawings of this symbol (right-click a "
+                                                              "single drawing to recolour, edit or delete it)"), "trash",
+                            checked_on=False)
         clear.clicked.connect(self.clear_drawings)
-        self.magnet_btn = QToolButton(text="Magnet", checkable=True, toolTip="Snap drawing points to the nearest candle open, "
-                                      "high, low or close (hold Ctrl to flip it while drawing)")
-        self.magnet_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        bind_icon(self.magnet_btn, "magnet", themes, off="muted", on="accent_ink", size=14)
+        self.magnet_btn = rail_button(QToolButton(text="Magnet", checkable=True, toolTip="Magnet · snap drawing points to the "
+                                                  "nearest candle open, high, low or close (hold Ctrl to flip it while drawing)"),
+                                      "magnet")
         self.magnet_btn.setChecked(bool(settings.get(self.MAGNET_KEY, False)) if settings else False)
         self.magnet_btn.toggled.connect(self._magnet_toggled)
         self._snap_marker = None  # dot on the value the next point would snap to
@@ -914,11 +914,20 @@ class ChartView(QWidget):
         self.loadout_menu.aboutToShow.connect(self._fill_loadout_menu)
         self.loadout_btn.setMenu(self.loadout_menu)
 
-        # three groups that wrap onto a second row on narrow windows; the tools (… Clear, Loadouts) stay top right
+        # what is charted (left) and how (right); on a narrow window the second group wraps onto a row of its own
         bar = FlowLayout(spacing=12, last_right=True)
-        for group in ((self.symbol, self.tf, self.bars, self.dates, load, self.live.button), (self.type_box, self.versus, self.style_btn, self.events_btn, self.ind_btn, self.algo_box),
-                      (*tool_group, self.magnet_btn, clear, self.loadout_btn)):
+        for group in ((self.symbol, self.tf, self.bars, self.dates, load, self.live.button),
+                      (self.type_box, self.versus, self.style_btn, self.events_btn, self.studies_btn, self.loadout_btn)):
             bar.addWidget(toolbar_group(*group))
+        self.tool_rail = QFrame(objectName="ToolRail")
+        rail = QVBoxLayout(self.tool_rail)
+        rail.setContentsMargins(6, 8, 6, 8)
+        rail.setSpacing(4)
+        for btn in tool_group:
+            rail.addWidget(btn)
+        rail.addStretch(1)
+        rail.addWidget(self.magnet_btn)
+        rail.addWidget(clear)
 
         # -- plot area ---------------------------------------------------------------------------
         self.canvas = pg.GraphicsLayoutWidget()
@@ -990,7 +999,13 @@ class ChartView(QWidget):
         lay.addLayout(bar)
         body = QHBoxLayout()
         body.setSpacing(10)
-        body.addWidget(self.canvas, 1)
+        chart_frame = QFrame(objectName="ChartFrame")  # the rail and the plot: one surface
+        cl = QHBoxLayout(chart_frame)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(0)
+        cl.addWidget(self.tool_rail)
+        cl.addWidget(self.canvas, 1)
+        body.addWidget(chart_frame, 1)
         body.addWidget(self.sidebar)
         lay.addLayout(body, 1)
         self.touch = TouchController(self.canvas.viewport(), PlotTouchHandler(
@@ -1284,25 +1299,63 @@ class ChartView(QWidget):
         self.depth.set_visible(False)
 
     # -- indicators & algorithms -----------------------------------------------------------------
-    def _fill_indicator_menu(self):
-        self.ind_menu.clear()
-        for ind in self.indicators:
-            act = self.ind_menu.addAction(f"✓ {ind.label}  (remove)")
-            act.triggered.connect(lambda _, i=ind: self._remove_indicator(i))
-            if self._styled_outputs(ind):
-                act = self.ind_menu.addAction(f"    {ind.name}: line colours…")
-                act.triggered.connect(lambda _, i=ind: self._edit_styles(i))
-        if self.indicators:
-            self.ind_menu.addSeparator()
-        for cls in INDICATORS:
-            act = self.ind_menu.addAction(f"{cls.name} — {cls.description}")
-            act.triggered.connect(lambda _, c=cls: self._add_indicator(c))
+    def open_studies(self, initial: str = ""):
+        """The indicator and signal dialog (#230) over this window."""
+        from tradebot.gui.study_dialog import StudyDialog
 
-    def _add_indicator(self, cls):
-        values = ParamDialog.ask(cls.name, cls.params, parent=self, timeframe=True)
-        if values is not None:
-            self.indicators.append(cls(**values))
+        window = self.window()
+        if self._studies is None:
+            self._studies = StudyDialog(self, window, initial)
+        else:
+            self._studies.reset(window, initial)
+        self._studies.show_palette()
+        return self._studies
+
+    def prewarm_studies(self):
+        """Build and style the indicator dialog while the app is idle, so the first "/" opens it at once."""
+        from tradebot.gui.study_dialog import StudyDialog
+
+        if self._studies is None:
+            self._studies = StudyDialog(self, self.window())
+            self._studies.ensurePolished()
+            self._studies.grab()  # lays out and paints it once, off screen
+
+    def add_indicator(self, cls, parent=None):
+        """Ask the parameters of indicator ``cls`` and add it; returns the new indicator, or None if cancelled."""
+        values = ParamDialog.ask(cls.name, cls.params, parent=parent or self, timeframe=True)
+        if values is None:
+            return None
+        ind = cls(**values)
+        self.indicators.append(ind)
+        self.redraw()
+        return ind
+
+    def edit_indicator(self, ind, parent=None):
+        """Ask new parameters for ``ind`` on the chart; it keeps its place and colours. Returns the new indicator."""
+        values = ParamDialog.ask(ind.name, type(ind).params, ind.values, parent=parent or self, timeframe=True,
+                                 tf=ind.tf)
+        if values is None or ind not in self.indicators:
+            return None
+        new = type(ind)(**values)
+        self.indicators[self.indicators.index(ind)] = new
+        if id(ind) in self._slots:
+            self._slots[id(new)] = self._slots.pop(id(ind))
+        self.redraw()
+        return new
+
+    def remove_indicator(self, ind):
+        if ind in self.indicators:
+            self.indicators.remove(ind)
             self.redraw()
+
+    def styled_outputs(self, ind) -> list[str]:
+        return self._styled_outputs(ind)
+
+    @staticmethod
+    def study_label(study) -> str:
+        """An indicator or algorithm as the legend names it: ``rsi 14``, ``bbands 20 2 · 4h``."""
+        tf = getattr(study, "tf", None)
+        return _spaced_label(study.name, study.values) + (f" · {tf}" if tf else "")
 
     STYLES_KEY = "chart.styles"  #: settings: {indicator name: {output: {"color", "width", "dash"}}} (#52)
 
@@ -1317,7 +1370,7 @@ class ChartView(QWidget):
         over = (self.settings.get(self.STYLES_KEY, {}) if self.settings else {}).get(ind.name, {}).get(output)
         return replace(base, **{k: v for k, v in over.items() if k in ("color", "width", "dash")}) if over else base
 
-    def _edit_styles(self, ind):
+    def edit_styles(self, ind, parent=None):
         t = self.themes.current
         slot = self._palette_slot(ind)
         rows = []
@@ -1327,7 +1380,7 @@ class ChartView(QWidget):
             st = self._style_of(ind, out)
             color = resolve_color(t, st.color) if st.color else t.series[(slot + k) % len(t.series)]
             rows.append((out, qcolor(color).name(), st.width or 1.6, st.dash if st.dash in ("dash", "dot") else None))
-        dlg = StyleDialog(f"{ind.label}: line colours", rows, self)
+        dlg = StyleDialog(f"{ind.label}: line colours", rows, parent or self)
         if not dlg.exec():
             return
         self.set_style_overrides(ind.name, dlg.overrides(), merge=not dlg.reset_requested)
@@ -1344,10 +1397,6 @@ class ChartView(QWidget):
             else:
                 data.pop(name, None)
             self.settings.set(self.STYLES_KEY, data)
-        self.redraw()
-
-    def _remove_indicator(self, ind):
-        self.indicators.remove(ind)
         self.redraw()
 
     def _volume_toggled(self, on: bool):
@@ -1398,20 +1447,24 @@ class ChartView(QWidget):
         vb.setLimits(yMin=0)
         self._overlay_vb = vb
 
-    def _choose_algorithm(self, name):
+    def choose_signal(self, name: str, parent=None) -> bool:
+        """Ask the parameters of algorithm ``name`` and show its signals; False if cancelled (the current one stays)."""
         if name not in ALGORITHMS:
-            self.algorithm = None
-        else:
-            algo = build_algorithm(name)
-            values = ParamDialog.ask(f"{name} parameters", algo.param_space(), algo.values, self)
-            self.algorithm = algo.with_params(**values) if values is not None else None
+            return False
+        algo = build_algorithm(name)
+        values = ParamDialog.ask(f"{name} parameters", algo.param_space(), algo.values, parent or self)
+        if values is None:
+            return False
+        self.algorithm = algo.with_params(**values)
+        self.redraw()
+        return True
+
+    def remove_signal(self):
+        self.algorithm = None
         self.redraw()
 
     def set_algorithm(self, algorithm):
         """Show an externally configured algorithm (e.g. from the backtest lab)."""
-        self.algo_box.blockSignals(True)
-        self.algo_box.setCurrentText(algorithm.name)
-        self.algo_box.blockSignals(False)
         self.algorithm = algorithm
         self.redraw()
 
@@ -2153,8 +2206,11 @@ class ChartView(QWidget):
         self.fit_y(force=True)  # the old y-range means nothing on the other scale
 
     def eventFilter(self, obj, event):
+        if obj is self.canvas and event.type() == QEvent.Type.KeyPress and (
+                forward_key(self.symbols.dialog, event) or forward_key(self._studies, event)):
+            return True  # typed while a picker opens: it gets the keys (#230)
         if obj is self.canvas and event.type() == QEvent.Type.KeyPress and self._type_to_search(event):
-            return True  # typing on the chart opens the symbol dialog (#220)
+            return True  # typing on the chart opens the symbol dialog (#220), "/" the indicator dialog (#230)
         if obj is self.canvas and event.type() == QEvent.Type.Resize:
             bottom = self.canvas.height() - self.fit_btn.height() - 8
             self.fit_btn.move(8, bottom)
@@ -2168,11 +2224,17 @@ class ChartView(QWidget):
         return super().eventFilter(obj, event)
 
     def _type_to_search(self, event) -> bool:
-        """A letter, digit, ``^`` or ``.`` typed with the cursor over the chart starts a symbol search with it, unless
-        a text field has the keyboard or a dialog or menu is open. Keys with Ctrl/Alt/Meta keep their meaning."""
+        """A letter, digit, ``^`` or ``.`` typed with the cursor over the chart starts a symbol search with it, and
+        ``/`` opens the indicator and signal dialog (#230), unless a text field has the keyboard or a dialog or menu
+        is open. Keys with Ctrl/Alt/Meta keep their meaning; AltGr (Ctrl+Alt on Windows) still types ``/`` on layouts
+        that need it."""
         text = event.text()
-        if (len(text) != 1 or not (text.isalnum() or text in "^.") or event.isAutoRepeat()
-                or event.modifiers() & ~(Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.KeypadModifier)):
+        mods = event.modifiers() & ~(Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.KeypadModifier
+                                     | Qt.KeyboardModifier.GroupSwitchModifier)
+        altgr = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
+        if text == "/" and mods == altgr:
+            mods = Qt.KeyboardModifier.NoModifier
+        if len(text) != 1 or not (text.isalnum() or text in "^./") or event.isAutoRepeat() or mods:
             return False
         app = QApplication.instance()
         focus = app.focusWidget()
@@ -2180,7 +2242,10 @@ class ChartView(QWidget):
                 or app.activePopupWidget() is not None or not self.window().isActiveWindow()
                 or isinstance(focus, (QLineEdit, QAbstractSpinBox, QTextEdit, QPlainTextEdit))):
             return False
-        self.symbols.open_dialog(text.upper())
+        if text == "/":  # the character, so any layout's slash works (Shift+7 on a German keyboard)
+            self.open_studies()
+        else:
+            self.symbols.open_dialog(text.upper())
         return True
 
     def _context_menu(self, scene_pos, global_pos):
@@ -2188,6 +2253,7 @@ class ChartView(QWidget):
         plot = self._plot_at(scene_pos)
         menu = QMenu(self)
         menu.addAction("Reset zoom", self.reset_view)
+        menu.addAction("Indicators and signals …  /", lambda: self.open_studies())
         if plot is self.price and self.df is not None:
             price = self.price_at(self.price.vb.mapSceneToView(scene_pos).y())
             menu.addAction(f"Add level at {price:.6g}", lambda: self._add_level(price))
@@ -2387,12 +2453,9 @@ class ChartView(QWidget):
         self.indicators, self.algorithm, line, skipped = restore(data)
         self._slots.clear()  # colours as when the loadout was made: palette from the start, in its order
         self._next_slot = 0
-        for widget, set_value in ((self.algo_box, lambda: self.algo_box.setCurrentText(
-                                       self.algorithm.name if self.algorithm else "No signals")),
-                                  (self.style_btn, lambda: self.style_btn.setChecked(line))):
-            widget.blockSignals(True)  # no parameter dialog, no extra redraw
-            set_value()
-            widget.blockSignals(False)
+        self.style_btn.blockSignals(True)  # no extra redraw
+        self.style_btn.setChecked(line)
+        self.style_btn.blockSignals(False)
         self.redraw()
         return f" (skipped, not installed: {', '.join(skipped)})" if skipped else ""
 
