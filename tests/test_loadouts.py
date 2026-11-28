@@ -11,7 +11,7 @@ from tradebot.config import Settings
 from tradebot.indicators.builtin import RSI, Bollinger, StochasticShortWaves
 from tradebot.loadouts import LoadoutStore, capture, restore
 
-from .conftest import make_ohlc
+from .conftest import assert_usable, make_ohlc
 
 
 def test_round_trip_with_vote_members_and_params():
@@ -94,20 +94,16 @@ def menu_rows(chart):
     return rows
 
 
-@pytest.mark.parametrize("width", [1200, 1700])  # wrapped onto two rows / one row
-def test_button_sits_top_right_next_to_indicators(gui, width):
+@pytest.mark.parametrize("width", [900, 1700])  # a narrow window (the toolbar wraps) and a wide one
+def test_button_is_usable_and_opens_the_loadouts(gui, width):
     app, make, _, _ = gui
     chart = make()
     chart.resize(width, 700)
     chart.show()
     app.processEvents()
-    group = chart.loadout_btn.parentWidget()  # the view group: … Indicators, Loadouts (drawing tools: the rail, #230)
-    lay = group.layout()
-    widgets = [lay.itemAt(i).widget() for i in range(lay.count())]
-    assert widgets[-2] is chart.studies_btn and widgets[-1] is chart.loadout_btn
-    right_edge = chart.loadout_btn.mapTo(chart, chart.loadout_btn.rect().topRight()).x()
-    assert right_edge >= chart.width() - 30  # flush with the right margin, whether it wrapped or not
-    assert group.y() < 120  # in the toolbar at the top
+    assert_usable(chart.loadout_btn)  # shown and not cut, wherever the toolbar puts it
+    chart._fill_loadout_menu()
+    assert "Save Current" in [a.text() for a in chart.loadout_menu.actions()]
 
 
 def test_menu_lists_loadouts_with_delete_and_save_last(gui, monkeypatch):

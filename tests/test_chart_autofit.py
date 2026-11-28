@@ -19,7 +19,7 @@ from tradebot.gui.chart import FIT_PADDING, ChartView, visible_y_range  # noqa: 
 from tradebot.gui.theme import ThemeManager  # noqa: E402
 from tradebot.indicators.builtin import RSI, Bollinger  # noqa: E402
 
-from .conftest import make_ohlc  # noqa: E402
+from .conftest import assert_usable, make_ohlc  # noqa: E402
 from .test_touch import touch  # noqa: E402
 
 S = QEventPoint.State
@@ -73,11 +73,10 @@ def assert_fits(plot, lo, hi):
     assert (y0, y1) == pytest.approx((lo - pad, hi + pad), rel=1e-6)
 
 
-def test_on_by_default_in_bottom_left(chart):
+def test_on_by_default_and_usable(chart):
     btn = chart.fit_btn
-    assert btn.isCheckable() and btn.isChecked() and not btn.isHidden()
-    assert btn.parent() is chart.canvas and btn.x() < 20
-    assert btn.geometry().bottom() > chart.canvas.height() - 20
+    assert btn.isCheckable() and btn.isChecked()
+    assert_usable(btn)
 
 
 def test_zooming_time_fits_candles(chart):

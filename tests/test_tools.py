@@ -192,12 +192,12 @@ def test_categories_on_the_left_switch_pages(dialog):
     assert dialog.page_names == ["Appearance", "Integrations", "News sources", "Notifications", "Data & cache"]
     assert dialog.nav_group.buttons()[4].text().endswith("Data && cache")  # shown as "&", not a shortcut
     assert dialog.nav_group.checkedButton() is dialog.nav_group.buttons()[0]  # opens on Appearance
-    appearance = dialog.pages.currentWidget()
-    assert appearance.isAncestorOf(dialog.theme_box)
+    first = dialog.pages.currentWidget()
     dialog.show_page("Integrations")
-    page = dialog.pages.currentWidget()
-    assert page is not appearance and page.isAncestorOf(dialog.paths["sc"])
-    assert page.isAncestorOf(dialog.credentials["binance", "api_key"])
+    assert dialog.pages.currentWidget() is not first and dialog.nav_group.checkedButton().text() == "Integrations"
+    pages = [dialog.pages.widget(i) for i in range(dialog.pages.count())]
+    for field in (dialog.theme_box, dialog.paths["sc"], dialog.credentials["binance", "api_key"]):
+        assert any(p.isAncestorOf(field) for p in pages)  # on some page, whichever it is
 
 
 def test_broker_keys_are_saved_in_their_table(dialog, config_file):

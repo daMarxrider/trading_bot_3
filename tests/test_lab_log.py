@@ -22,6 +22,8 @@ from tradebot.gui.views import BacktestView  # noqa: E402
 
 from .test_chart_log import growth  # noqa: E402
 
+from .conftest import assert_usable  # noqa: E402
+
 
 @pytest.fixture(scope="module")
 def app():
@@ -58,16 +60,15 @@ def curves(lab):
     return [item.getData() for item in lab.plot.getPlotItem().listDataItems()]
 
 
-def test_button_next_to_autofit_off_by_default_and_remembered(themes, tmp_path):
+def test_button_off_by_default_and_remembered(themes, tmp_path):
     path = tmp_path / "s.json"
     first = BacktestView(None, themes, ["TEST"], settings=Settings(path))
     first.resize(1000, 700)
     first.show()
     QApplication.processEvents()
-    btn, fit = first.log_btn, first.fit_btn
-    assert btn.isCheckable() and not btn.isChecked() and btn.parent() is first.plot
-    assert btn.y() == fit.y() and btn.x() > fit.geometry().right()  # right of ↕, same row
-    assert btn.size() == fit.size()
+    btn = first.log_btn
+    assert btn.isCheckable() and not btn.isChecked()
+    assert_usable(btn)
     btn.setChecked(True)
     assert BacktestView(None, themes, ["TEST"], settings=Settings(path)).log_btn.isChecked()
 

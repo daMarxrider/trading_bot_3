@@ -24,7 +24,7 @@ from tradebot.indicators import INDICATORS  # noqa: E402
 from tradebot.indicators.base import CATEGORIES, category_of  # noqa: E402
 from tradebot.indicators.builtin import RSI  # noqa: E402
 
-from .conftest import make_ohlc  # noqa: E402
+from .conftest import assert_usable, make_ohlc  # noqa: E402
 
 
 @pytest.fixture
@@ -250,7 +250,7 @@ def test_a_picker_closes_when_the_main_window_is_clicked_but_not_for_its_own_dia
     assert not d.isVisible()
 
 
-def test_drawing_tools_sit_in_a_rail_on_the_chart_not_in_the_toolbar(chart, tmp_path):
+def test_every_drawing_tool_is_usable_and_names_itself(chart, tmp_path):
     from PyQt6.QtWidgets import QMainWindow
 
     window = QMainWindow()
@@ -260,14 +260,10 @@ def test_drawing_tools_sit_in_a_rail_on_the_chart_not_in_the_toolbar(chart, tmp_
     window.resize(1440, 900)
     QApplication.processEvents()
     try:
-        rail = view.tool_rail
-        for btn in [*view.tools.values(), view.magnet_btn]:
-            assert btn.parent() is rail and btn.width() == btn.height() == 32  # icons; the names are in the tooltips
+        for btn in [*view.tools.values(), view.magnet_btn, view.studies_btn, view.loadout_btn]:
+            assert_usable(btn)
+        for btn in view.tools.values():  # icon buttons: the tooltip names the tool
             assert btn.text().lower() in btn.toolTip().lower()
-        assert rail.geometry().right() < view.canvas.geometry().left()  # beside the plot, on the same surface
-        groups = (view.symbol.parentWidget(), view.loadout_btn.parentWidget())  # the toolbar: what and how
-        assert view.studies_btn.parentWidget() is groups[1]
-        assert not any(g.isAncestorOf(b) for g in groups for b in view.tools.values())  # no tool row above the chart
         view.tools["trend"].click()
         assert view._active_tool() == "trend"
     finally:

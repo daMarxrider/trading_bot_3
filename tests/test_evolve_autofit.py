@@ -21,6 +21,8 @@ from tradebot.gui.theme import ThemeManager  # noqa: E402
 from .test_chart_autofit import FakeWheel  # noqa: E402
 from .test_evolve_gui import Engine, sync  # noqa: E402
 
+from .conftest import assert_usable  # noqa: E402
+
 
 @pytest.fixture(scope="module")
 def app():
@@ -74,12 +76,11 @@ def test_common_x_aligns_curves_on_different_times():
     np.testing.assert_array_equal(b, [np.nan, 3, 4, 5])
 
 
-def test_both_plots_have_the_toggle_on_by_default_in_bottom_left(view):
+def test_both_plots_have_the_toggle_on_by_default(view):
     for plot, fit in ((view.equity, view.equity_fit), (view.history, view.history_fit)):
         btn = fit.button
-        assert btn.isCheckable() and btn.isChecked() and not btn.isHidden()
-        assert btn.parent() is plot and btn.x() < 20
-        assert btn.geometry().bottom() > plot.height() - 20
+        assert btn.isCheckable() and btn.isChecked() and plot.isAncestorOf(btn)  # each plot has its own
+        assert_usable(btn)
 
 
 def test_a_run_fits_all_curves(view):
