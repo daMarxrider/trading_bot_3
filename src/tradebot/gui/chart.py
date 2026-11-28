@@ -12,8 +12,9 @@ from html import escape
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
-from PyQt6.QtCore import QEvent, QObject, QPointF, QRectF, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter
+from pyqtgraph.Qt.internals import PrimitiveArray
+from PyQt6.QtCore import QEvent, QLineF, QObject, QPointF, QRectF, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QPen, QTransform
 from PyQt6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
@@ -111,25 +112,188 @@ def opengl_viewport():
     return widget
 
 
-def _fast_curves(plot):
-    """Curves drawn only inside the view and at screen resolution (#68); "peak" keeps every spike visible.
-    Set on the plot: its addItem() overrides these options of each curve."""
-    plot.setClipToView(True)
-    plot.setDownsampling(auto=True, mode="peak")
+def view_slice(item, x, pad: float = 0.0):
+    """``(i0, i1, k)``: the points of the sorted ``x`` inside ``item``'s view (and ``pad`` beyond each edge, plus
+    one more point, so lines leave the view instead of ending inside it), and how many of them share a pixel
+    column (at least 1). Without a view: everything, one at a time."""
+    vb = item.getViewBox()
+    if not isinstance(vb, pg.ViewBox):
+        return 0, len(x), 1
+    x0, x1 = vb.viewRange()[0]
+    i0 = max(int(np.searchsorted(x, x0 - pad)) - 1, 0)
+    i1 = min(int(np.searchsorted(x, x1 + pad)) + 1, len(x))
+    return i0, i1, max(int((i1 - i0) / max(vb.width(), 1.0)), 1)
 
 
-class Curve(pg.PlotDataItem):
-    """A line that is antialiased only while it has fewer points than the view has pixels (#68): smoothing a
-    dense line shows no difference but costs up to a hundred times the time to paint."""
+def bucket_edges(i0: int, i1: int, k: int):
+    """``(start, edges, last)`` of the points ``i0 <= i < i1`` taken ``k`` at a time, the groups aligned to multiples
+    of ``k`` so they stay the same while panning (no shimmer): ``edges`` are the first index of each group,
+    ``last`` the last index of each group."""
+    start = i0 - i0 % k
+    edges = np.arange(start, i1, k)
+    return start, edges, np.minimum(edges + k, i1) - 1
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, skipFiniteCheck=True, autoDownsampleFactor=1.0, **kwargs)  # one bucket per pixel
 
-    def updateItems(self, styleUpdate=True):
-        super().updateItems(styleUpdate)
-        vb, x = self.getViewBox(), self.curve.xData
-        sparse = isinstance(vb, pg.ViewBox) and x is not None and len(x) <= vb.width()
-        self.curve.opts["antialias"] = sparse and pg.getConfigOption("antialias")
+def peak_buckets(x, y, i0: int, i1: int, k: int):
+    """The points ``i0 <= i < i1`` of a line as the lowest and highest value of every ``k`` (one pixel column), at
+    the middle of the group: every spike stays visible."""
+    start, edges, last = bucket_edges(i0, i1, k)
+    lo = np.minimum.reduceat(y[start:i1], edges - start)
+    hi = np.maximum.reduceat(y[start:i1], edges - start)
+    return np.repeat((x[edges] + x[last]) / 2, 2), np.column_stack([lo, hi]).ravel()
+
+
+def _to_device(p: QPainter, x, y):
+    """View coordinates -> the painter's device pixels, so the painter can draw without a transform: Qt strokes
+    a wide cosmetic pen two to three times faster in device coordinates than through the view's scaling."""
+    return _to_device_tr(p.transform(), x, y)
+
+
+def _to_device_tr(tr, x, y):
+    return x * tr.m11() + y * tr.m21() + tr.m31(), x * tr.m12() + y * tr.m22() + tr.m32()
+
+
+def _point_array(x, y):
+    arr = PrimitiveArray(QPointF, 2)
+    arr.resize(len(x))
+    mem = arr.ndarray()
+    mem[:, 0], mem[:, 1] = x, y
+    return arr
+
+
+class Curve(pg.GraphicsObject):
+    """A line drawn at screen resolution (#68, #228): only its points in view, and with more points than pixels the
+    lowest and highest of every pixel column ("peak" downsampling, so no spike is lost). Antialiased only while
+    there are fewer points than pixels: smoothing a dense line shows no difference but costs many times the time.
+
+    Painted in device pixels, and a dense wide line as separate segments: both are much faster in Qt's raster
+    engine than a transformed polyline. NaNs are dropped (the line joins over them, as before)."""
+
+    def __init__(self, x, y, pen=None, name: str | None = None):
+        super().__init__()
+        x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+        ok = np.isfinite(x) & np.isfinite(y)
+        self.xData, self.yData = x[ok], y[ok]
+        self.opts = {"pen": pg.mkPen(pen if pen is not None else pg.getConfigOption("foreground")), "name": name,
+                     "antialias": False}
+        self._cache = (None, None)  # ((i0, i1, k), (x, y) to draw)
+        if len(self.xData):
+            lo, hi = self.yData.min(), self.yData.max()
+            self._data_rect = QRectF(self.xData[0], lo, self.xData[-1] - self.xData[0], hi - lo)
+        else:
+            self._data_rect = QRectF()
+
+    def name(self):
+        return self.opts["name"]
+
+    def getData(self):
+        return self.xData, self.yData
+
+    def dataBounds(self, ax, frac=1.0, orthoRange=None):
+        d = self.xData if ax == 0 else self.yData
+        return (float(d.min()), float(d.max())) if len(d) else (None, None)
+
+    def boundingRect(self):
+        # the data, plus the pen's width in view units, so partial repaints never cut its edge
+        pw = self.opts["pen"].widthF() or 1.0
+        dx, dy = (self.pixelWidth() or 0.0) * pw, (self.pixelHeight() or 0.0) * pw
+        return self._data_rect.adjusted(-dx, -dy, dx, dy)
+
+    def viewTransformChanged(self):
+        self.prepareGeometryChange()  # the pen's margin in view units changed
+
+    def visible(self):
+        """``(x, y)`` as drawn now: the points in view, peak-downsampled when they're denser than the pixels."""
+        x, y = self.xData, self.yData
+        i0, i1, k = view_slice(self, x)
+        vb = self.getViewBox()
+        self.opts["antialias"] = bool(pg.getConfigOption("antialias")) and (
+            isinstance(vb, pg.ViewBox) and i1 - i0 <= vb.width())
+        key = (i0, i1, k)
+        if self._cache[0] != key:
+            pts = peak_buckets(x, y, i0, i1, k) if k > 1 else (x[i0:i1], y[i0:i1])
+            self._cache = (key, pts)
+        return self._cache[1]
+
+    def paint(self, p, *args):
+        x, y = self.visible()
+        if len(x) < 2:
+            return
+        pen = self.opts["pen"]
+        aa = self.opts["antialias"]
+        dx, dy = _to_device(p, x, y)
+        p.save()
+        p.resetTransform()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, aa)
+        p.setPen(pen)
+        if pen.widthF() > 1.0 and pen.style() == Qt.PenStyle.SolidLine and pen.isSolid() and pen.color().alpha() == 255:
+            # separate segments: Qt strokes a wide polyline (joins and all) five to ten times slower. Their ends
+            # overlap, which only shows on a see-through pen (excluded); smoothed, flat ends keep the overlap to the
+            # soft edge pixels of each joint, indistinguishable from a polyline at 1:1 (#228)
+            if aa:
+                pen = QPen(pen)
+                pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+                p.setPen(pen)
+            lines = PrimitiveArray(QLineF, 4)
+            lines.resize(len(dx) - 1)
+            mem = lines.ndarray()
+            mem[:, 0], mem[:, 1], mem[:, 2], mem[:, 3] = dx[:-1], dy[:-1], dx[1:], dy[1:]
+            p.drawLines(*lines.drawargs())
+        else:
+            p.drawPolyline(*_point_array(dx, dy).drawargs())
+        p.restore()
+
+
+class Band(pg.GraphicsObject):
+    """The area between two lines (e.g. inside the Bollinger bands), drawn at screen resolution like
+    :class:`Curve`: only the part in view, and with more points than pixels, one column per pixel from the lowest
+    to the highest of both lines. Points where either line is NaN are left out."""
+
+    def __init__(self, x, a, b, brush):
+        super().__init__()
+        x, a, b = (np.asarray(v, dtype=float) for v in (x, a, b))
+        ok = np.isfinite(x) & np.isfinite(a) & np.isfinite(b)
+        self.x, self.a, self.b = x[ok], a[ok], b[ok]
+        self._brush = pg.mkBrush(brush)
+        self._cache = (None, None)
+        if len(self.x):
+            lo, hi = min(self.a.min(), self.b.min()), max(self.a.max(), self.b.max())
+            self._bounds = QRectF(self.x[0], lo, self.x[-1] - self.x[0], hi - lo)
+        else:
+            self._bounds = QRectF()
+
+    def brush(self):
+        return self._brush
+
+    def boundingRect(self):
+        return QRectF(self._bounds)
+
+    def _outline(self):
+        i0, i1, k = view_slice(self, self.x)
+        if self._cache[0] != (i0, i1, k):
+            x, a, b = self.x, self.a, self.b
+            if k > 1:
+                start, edges, last = bucket_edges(i0, i1, k)
+                xs = (x[edges] + x[last]) / 2
+                top = np.maximum.reduceat(np.maximum(a[start:i1], b[start:i1]), edges - start)
+                bottom = np.minimum.reduceat(np.minimum(a[start:i1], b[start:i1]), edges - start)
+            else:
+                xs, top, bottom = x[i0:i1], a[i0:i1], b[i0:i1]
+            self._cache = ((i0, i1, k), (np.r_[xs, xs[::-1]], np.r_[top, bottom[::-1]]))
+        return self._cache[1]
+
+    def paint(self, p, *args):
+        x, y = self._outline()
+        if len(x) < 4:
+            return
+        dx, dy = _to_device(p, x, y)
+        p.save()
+        p.resetTransform()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)  # a soft-edged see-through area: no visible steps
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(self._brush)
+        p.drawPolygon(*_point_array(dx, dy).drawargs(), Qt.FillRule.OddEvenFill)  # crossing lines fill both lobes
+        p.restore()
 
 
 def _decimals(v: float) -> int:
@@ -173,15 +337,52 @@ def visible_y_range(x, series, x0, x1, padding=FIT_PADDING):
 
     NaNs (and infinities, e.g. log10(0)) are ignored; returns None if nothing is visible.
     """
-    i0, i1 = np.searchsorted(x, x0, "left"), np.searchsorted(x, x1, "right")
-    visible = [np.asarray(s, dtype=float)[i0:i1] for s in series]
-    visible = np.concatenate(visible) if visible else np.empty(0)
-    visible = visible[np.isfinite(visible)]
-    if not visible.size:
-        return None
-    lo, hi = float(visible.min()), float(visible.max())
-    span = (hi - lo) or abs(hi) * 0.01 or 1.0  # flat data: open up a small band around it
-    return lo - padding * span, hi + padding * span
+    return RangeIndex(x, series).y_range(x0, x1, padding)
+
+
+class RangeIndex:
+    """The lowest and highest value of several series (aligned with the sorted ``x``) over any x-range, for the
+    auto-fit on every scroll step (#228): the series are folded into one low and one high per point, and those
+    into blocks, so a query reads about ``n / BLOCK + 2 * BLOCK`` numbers instead of every visible value of every
+    series. NaNs and infinities (e.g. log10(0)) are ignored."""
+
+    BLOCK = 64
+
+    def __init__(self, x, series):
+        self.x = np.asarray(x, dtype=float)
+        n, b = len(self.x), self.BLOCK
+        lo, hi = np.full(n, np.inf), np.full(n, -np.inf)
+        for s in series:
+            s = np.asarray(s, dtype=float)
+            ok = np.isfinite(s)
+            np.minimum(lo, np.where(ok, s, np.inf), out=lo)
+            np.maximum(hi, np.where(ok, s, -np.inf), out=hi)
+        self.lo, self.hi = lo, hi
+        whole = n - n % b
+        self.block_lo = lo[:whole].reshape(-1, b).min(axis=1) if whole else np.empty(0)
+        self.block_hi = hi[:whole].reshape(-1, b).max(axis=1) if whole else np.empty(0)
+
+    def bounds(self, i0: int, i1: int):
+        """(low, high) over the points ``i0 <= i < i1``, or None when none of them has a value."""
+        b = self.BLOCK
+        a, z = -(-i0 // b), i1 // b  # the whole blocks inside
+        if a >= z:
+            parts = [(self.lo[i0:i1], self.hi[i0:i1])]
+        else:
+            parts = [(self.lo[i0:a * b], self.hi[i0:a * b]), (self.block_lo[a:z], self.block_hi[a:z]),
+                     (self.lo[z * b:i1], self.hi[z * b:i1])]
+        lo = min((float(p.min()) for p, _ in parts if p.size), default=np.inf)
+        hi = max((float(p.max()) for _, p in parts if p.size), default=-np.inf)
+        return (lo, hi) if lo <= hi else None
+
+    def y_range(self, x0, x1, padding=FIT_PADDING):
+        """Padded (low, high) over ``x0 <= x <= x1``, or None if nothing there has a value."""
+        found = self.bounds(int(np.searchsorted(self.x, x0, "left")), int(np.searchsorted(self.x, x1, "right")))
+        if found is None:
+            return None
+        lo, hi = found
+        span = (hi - lo) or abs(hi) * 0.01 or 1.0  # flat data: open up a small band around it
+        return lo - padding * span, hi + padding * span
 
 
 class PlotAutoFit(QObject):
@@ -198,6 +399,7 @@ class PlotAutoFit(QObject):
         self.plot, self.settings, self.key = plot, settings, key
         self.x = np.empty(0)
         self.series: list = []  # arrays aligned with self.x, in view coordinates (log10 on the log scale)
+        self._index = RangeIndex(self.x, [])
         self._adjusting = False
         self.button = QToolButton(plot, text="↕", checkable=True, toolTip=tip, objectName="ChartCorner")
         self.button.setChecked(bool(settings.get(key, True)) if settings and key else True)
@@ -224,6 +426,7 @@ class PlotAutoFit(QObject):
         self.x = np.asarray(x, dtype=float)
         with np.errstate(divide="ignore", invalid="ignore"):
             self.series = [np.log10(s) if log else np.asarray(s, dtype=float) for s in series]
+        self._index = RangeIndex(self.x, self.series)
         self._lock()
         self.reset()
 
@@ -246,7 +449,7 @@ class PlotAutoFit(QObject):
         self._adjusting = True
         try:
             self.plot.getPlotItem().enableAutoRange(y=False)  # pyqtgraph would otherwise fit y to all data
-            bounds = visible_y_range(self.x, self.series, x0, x1)
+            bounds = self._index.y_range(x0, x1)
             if bounds is not None:
                 self.plot.setYRange(*bounds, padding=0)
         finally:
@@ -328,11 +531,24 @@ class DateAxis(pg.DateAxisItem):
             DateAxis._shared[key] = compute()
         return DateAxis._shared[key]
 
+    MIN_GRID_PX = 24  #: tick levels whose lines would be closer than this are left out (#228)
+
     def tickValues(self, minVal, maxVal, size):
         key = (minVal, maxVal, size, self.fontMetrics.height(), self.utcOffset)
         values, self.zoomLevel, self.minSpacing = self._cached("values", key, lambda: (
-            super(DateAxis, self).tickValues(minVal, maxVal, size), self.zoomLevel, self.minSpacing))
+            self._sparse_levels(super(DateAxis, self).tickValues(minVal, maxVal, size), maxVal - minVal, size),
+            self.zoomLevel, self.minSpacing))
         return values
+
+    @classmethod
+    def _sparse_levels(cls, levels, span, size):
+        """The tick levels without the dense ones (the coarsest always stays). Lines that close are too faint to see
+        and too tight to be labelled, but each costs a span per pixel row in every pane on every scroll step: at 76
+        monthly lines per pane they took 8 ms of a 20 ms frame."""
+        if span <= 0 or size <= 0:
+            return levels
+        kept = [(spacing, ticks) for spacing, ticks in levels if spacing / span * size >= cls.MIN_GRID_PX]
+        return kept or levels[:1]
 
     def tickStrings(self, values, scale, spacing):
         key = (tuple(values), spacing, id(self.zoomLevel), self.utcOffset)
@@ -355,19 +571,46 @@ def _offline_note(df) -> str:
 
 def ohlc_buckets(x, o, h, l, c, i0: int, i1: int, k: int):
     """Candles ``i0 <= i < i1`` merged ``k`` at a time (first open, highest high, lowest low, last close), the
-    groups aligned to multiples of ``k`` so they stay the same while panning; x is the middle of each group."""
-    start = i0 - i0 % k
-    edges = np.arange(start, i1, k)
-    last = np.minimum(edges + k, i1) - 1
+    groups as in :func:`bucket_edges`; x is the middle of each group."""
+    start, edges, last = bucket_edges(i0, i1, k)
     return ((x[edges] + x[last]) / 2, o[edges], np.maximum.reduceat(h[start:i1], edges - start),
             np.minimum.reduceat(l[start:i1], edges - start), c[last])
 
 
-def _rects(x, bottom, top, width) -> list[QRectF]:
-    """Rectangles for QPainter.drawRects(), far faster than filling a path of them (#68); a flat one is still
-    drawn: the pen strokes it."""
+def _rects(x, bottom, top, width):
+    """``(n, 4)`` rectangles ``(left, bottom, width, height)`` for QPainter.drawRects(), far faster than filling a
+    path of them (#68); a flat one is still drawn: the pen strokes it."""
     height = np.where(top == bottom, 1e-12, top - bottom)
-    return list(map(QRectF, (x - width / 2).tolist(), bottom.tolist(), [width] * len(x), height.tolist()))
+    return np.column_stack([x - width / 2, bottom, np.full(len(x), float(width)), height])
+
+
+def _wicks(x, low, high):
+    """``(n, 4)`` vertical lines ``(x, low, x, high)`` for QPainter.drawLines()."""
+    return np.column_stack([x, low, x, high])
+
+
+def _primitives(kind, rows):
+    """An ``(n, 4)`` array as a QLineF or QRectF array that QPainter draws in one call, without a Python object
+    per row."""
+    arr = PrimitiveArray(kind, 4)
+    arr.resize(len(rows))
+    arr.ndarray()[:] = rows
+    return arr
+
+
+def _device_rects(tr, rects):
+    """``(left, bottom, width, height)`` rows mapped by a scale-and-move transform, with positive sizes."""
+    x, w = rects[:, 0] * tr.m11() + tr.m31(), rects[:, 2] * tr.m11()
+    y, h = rects[:, 1] * tr.m22() + tr.m32(), rects[:, 3] * tr.m22()
+    x, w = np.where(w < 0, x + w, x), np.abs(w)
+    y, h = np.where(h < 0, y + h, y), np.abs(h)
+    return np.column_stack([x, y, w, h])
+
+
+def _device_lines(tr, lines):
+    x0, y0 = _to_device_tr(tr, lines[:, 0], lines[:, 1])
+    x1, y1 = _to_device_tr(tr, lines[:, 2], lines[:, 3])
+    return np.column_stack([x0, y0, x1, y1])
 
 
 class ZonesItem(pg.GraphicsObject):
@@ -447,11 +690,9 @@ class CandlestickItem(pg.GraphicsObject):
         self.update()
 
     def _shapes(self, x, o, h, l, c, width):
-        """[(style index, wicks path or None, body rectangles)] for the given (visible, maybe merged) candles."""
+        """[(style index, wick lines or None, body rectangles)] for the given (visible, maybe merged) candles."""
         rising = c >= o
-        wicks = lambda m: pg.arrayToQPath(np.repeat(x[m], 2), np.column_stack([l[m], h[m]]).ravel(),  # noqa: E731
-                                          connect="pairs", finiteCheck=False)
-        return [(style, wicks(m), _rects(x[m], o[m], c[m], width))
+        return [(style, _wicks(x[m], l[m], h[m]), _rects(x[m], o[m], c[m], width))
                 for style, m in ((0, rising), (1, ~rising)) if m.any()]
 
     def _paths(self):
@@ -462,7 +703,7 @@ class CandlestickItem(pg.GraphicsObject):
             x0, x1 = vb.viewRange()[0]
             i0 = max(int(np.searchsorted(x, x0 - self.width)) - 1, 0)
             i1 = min(int(np.searchsorted(x, x1 + self.width)) + 1, len(x))
-            k = max(int((i1 - i0) / max(vb.width(), 1.0)), 1)  # candles per pixel
+            k = max(int(np.ceil((i1 - i0) / max(vb.width(), 1.0))), 1)  # candles per pixel: at most one bar each
             self._smooth = i1 - i0 <= vb.width()
         key = (i0, i1, k)
         if self._cache[0] != key:
@@ -482,14 +723,23 @@ class CandlestickItem(pg.GraphicsObject):
     def paint(self, p, *args):
         if self._data is None:
             return
+        shapes = self._paths()
+        if not shapes:
+            return
+        tr = p.transform()
+        device = tr.type().value <= QTransform.TransformationType.TxScale.value  # a view's transform: in device pixels (#228)
+        p.save()
+        if device:
+            p.resetTransform()
         p.setRenderHint(QPainter.RenderHint.Antialiasing, self._smooth and pg.getConfigOption("antialias"))
-        for style, wicks, rects in self._paths():
+        for style, wicks, rects in shapes:
             p.setPen(self.pens[style])
             if wicks is not None:
                 p.setBrush(Qt.BrushStyle.NoBrush)  # lines only: a brush makes OpenGL paint fill between the wicks
-                p.drawPath(wicks)
+                p.drawLines(*_primitives(QLineF, _device_lines(tr, wicks) if device else wicks).drawargs())
             p.setBrush(self.brushes[style])
-            p.drawRects(rects)
+            p.drawRects(*_primitives(QRectF, _device_rects(tr, rects) if device else rects).drawargs())
+        p.restore()
 
     def boundingRect(self):
         return QRectF(self._bounds)
@@ -512,9 +762,7 @@ def volume_buckets(x, o, v, c, i0: int, i1: int, k: int):
     """Volume bars ``i0 <= i < i1`` merged ``k`` at a time like :func:`ohlc_buckets`, their volumes summed (a gap
     counts as 0), so a merged bar is the volume traded over its candles; the first open and last close give its
     direction."""
-    start = i0 - i0 % k
-    edges = np.arange(start, i1, k)
-    last = np.minimum(edges + k, i1) - 1
+    start, edges, last = bucket_edges(i0, i1, k)
     return (x[edges] + x[last]) / 2, o[edges], np.add.reduceat(np.nan_to_num(v[start:i1]), edges - start), c[last]
 
 
@@ -556,6 +804,8 @@ class ChartView(QWidget):
         self._pending_point = None
         self._x = np.empty(0)
         self._fit_series: dict = {}  # plot -> the arrays its y-axis auto-fit covers
+        self._fit_index: dict = {}  # plot -> RangeIndex of those arrays
+        self._frames: dict = {}  # indicator key -> (candles, its frame) of the last redraw
         self._adjusting = False  # set while the chart changes view ranges itself, as opposed to the user
         self._title = ""  # "SYMBOL · 1d" of the loaded data
         self._hover: int | None = None  # bar under the cursor; None = show the latest bar
@@ -685,7 +935,6 @@ class ChartView(QWidget):
         self.price = self.canvas.addPlot(row=0, col=0, axisItems={"bottom": DateAxis(), "right": self.price_axis})
         self.price.showGrid(x=True, y=True, alpha=0.15)
         self.price.setMenuEnabled(False)
-        _fast_curves(self.price)
         self.price.getAxis("right").setWidth(70)
         self.price.getAxis("right").setStyle(maxTickLevel=0)  # minor y gridlines cost half of every pan/zoom frame
         self.price.showAxis("right")
@@ -1256,6 +1505,7 @@ class ChartView(QWidget):
         self._clear_volume_overlay()
         spare, self.panes = self.panes, []  # indicator panes are reused in order: building one takes ~30 ms (#68)
         self._fit_series = {}
+        self._fit_index = {}  # plot -> RangeIndex of its _fit_series, made on the first fit after a redraw
         self._rows = {self.price: []}
         self._positions = None
         self._style(t)
@@ -1304,12 +1554,13 @@ class ChartView(QWidget):
             self._draw_volume_overlay(x, volume_of(df), o, c, width, t)
 
         self._label_last = {True: -10**9, False: -10**9}  # pattern labels of all indicators share their spacing
+        frames: dict = {}  # this redraw's indicator frames, kept for the next one
         for ind in self.indicators:
             if compare and ind.overlay:
                 continue
             note = ""
             try:
-                frame = ind(df)
+                frame = self._frame_of(ind, df, frames)
             except ValueError as e:  # e.g. a higher timeframe (#161) shorter than these candles: the candles' own
                 if not ind.tf:
                     raise
@@ -1369,15 +1620,12 @@ class ChartView(QWidget):
                 values.append((raw, color, fmt_amount if amount else fmt_value))  # prices also on the log scale
             for a, b, fill in ind.fills:  # behind the lines; not in _fit_series, so they never change the auto-fit
                 if a in curves and b in curves:
-                    both = np.isfinite(curves[a]) & np.isfinite(curves[b])
-                    if both.any():
-                        item = pg.FillBetweenItem(pg.PlotCurveItem(x[both], curves[a][both]),
-                                                  pg.PlotCurveItem(x[both], curves[b][both]),
-                                                  brush=pg.mkBrush(qcolor(resolve_color(t, fill.color or "muted"))))
-                        item.setZValue(-5)
-                        target.addItem(item)
+                    item = Band(x, curves[a], curves[b], qcolor(resolve_color(t, fill.color or "muted")))
+                    item.setZValue(-5)
+                    target.addItem(item)
             self._draw_shades(ind, frame, x, width, t)
         self._drop_panes(spare)
+        self._frames = frames
         if self.algorithm is not None and not compare:
             self._positions = self.algorithm.run(df).to_numpy()
             change = np.diff(np.r_[0.0, self._positions])
@@ -1395,6 +1643,16 @@ class ChartView(QWidget):
             self.reset_view()
         else:
             self.fit_y()
+
+    def _frame_of(self, ind, df, frames: dict):
+        """``ind(df)``, reused from the last redraw while the candles are the same object (#228): a theme switch,
+        the line/candles toggle, the log scale or another indicator then don't recompute every indicator. New or
+        merged candles (a load, a live tick, market data) are a new frame, so those recompute."""
+        key = (type(ind), ind.tf, repr(sorted(ind.values.items())))
+        cached = self._frames.get(key)
+        frame = cached[1] if cached is not None and cached[0] is df else ind(df)
+        frames[key] = (df, frame)
+        return frame
 
     def _draw_compare(self, df, x, t):
         """The charted symbol and ``self.compare`` as percent change from the first time they all have (#163)."""
@@ -1423,8 +1681,7 @@ class ChartView(QWidget):
         pane.getAxis("right").setWidth(70)
         pane.getAxis("right").setStyle(maxTickLevel=0)
         pane.setMenuEnabled(False)
-        _fast_curves(pane)
-        pane.vb.sigRangeChanged.connect(self._range_changed)
+        # no sigRangeChanged hook: the price pane is x-linked to every pane and fits them all when the time moves
         self._add_crosshair(pane)
         self._add_legend(pane)
         return pane
@@ -1802,7 +2059,10 @@ class ChartView(QWidget):
         try:
             for plot in [self.price, *self.panes]:
                 plot.enableAutoRange(y=False)  # pyqtgraph would otherwise fit y to all data
-                bounds = visible_y_range(self._x, self._fit_series.get(plot, []), x0, x1)
+                index = self._fit_index.get(plot)
+                if index is None:  # built once per redraw, then every scroll step only looks it up
+                    index = self._fit_index[plot] = RangeIndex(self._x, self._fit_series.get(plot, []))
+                bounds = index.y_range(x0, x1)
                 if bounds is not None:
                     plot.setYRange(*bounds, padding=0)
         finally:

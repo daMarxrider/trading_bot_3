@@ -242,13 +242,13 @@ def _linear_scan(u, b, chunk: int = 64):
     else:
         powers, decay = b ** lag * mask, b ** steps
     local = blocks @ (powers.transpose(-1, -2) if is_torch(powers) else np.swapaxes(powers, -1, -2))  # within-chunk response from a zero start
-    carry = None
-    outs = []
-    for c in range(n_chunks):
-        y = local[..., c, :] if carry is None else local[..., c, :] + carry[..., None] * decay
-        carry = y[..., -1]
-        outs.append(y)
-    return concat(outs)[..., :T]
+    if n_chunks > 1:
+        # what each chunk carries into the next is its last value, end[c] = local_end[c] + b^chunk * end[c-1]: the
+        # same recurrence over the chunk ends, so solve it the same way instead of a Python loop over the chunks
+        ends = _linear_scan(local[..., -1], b ** chunk, chunk)
+        carry = concat([full((*ends.shape[:-1], 1), 0.0, ends), ends[..., :-1]])  # into chunk c: end[c-1]
+        local = local + carry[..., None] * decay[..., None, :]
+    return local.reshape(*local.shape[:-2], n_chunks * chunk)[..., :T]
 
 
 def ema(x, n: int):

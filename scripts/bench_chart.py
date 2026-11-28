@@ -4,7 +4,8 @@
 
     uv run python scripts/bench_chart.py [--sizes 500 5000 50000] [--repeat 3] [--onscreen] [--opengl]
 
-Offscreen, 1400x800, dark theme. A *redraw* is ``ChartView.redraw()`` plus painting the canvas once; a *pan
+Offscreen, 1400x800, dark theme. A *redraw* is ``ChartView.redraw()`` of new candles (so the indicators are
+recomputed, as after a load or a live tick) plus painting the canvas once; a *pan
 frame* is one scroll step (a tenth of the visible span, auto-fit on) plus painting. The view shows half of the
 candles while panning, like a user scrolled into the history.
 
@@ -72,6 +73,7 @@ def main():
             chart.canvas.grab()
 
     def redraw():
+        chart.df = chart.df.copy()  # new candles, as after a load or a live tick: indicators are recomputed
         chart.redraw()
         paint()
 

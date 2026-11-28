@@ -15,7 +15,7 @@ from PyQt6.QtCore import Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from tradebot.core import ops  # noqa: E402
-from tradebot.gui.chart import ChartView, HistogramItem  # noqa: E402
+from tradebot.gui.chart import ChartView, Curve, HistogramItem  # noqa: E402
 from tradebot.gui.theme import BUILTIN, ThemeManager, resolve_color  # noqa: E402
 from tradebot.indicators import INDICATORS, BaseIndicator, Style  # noqa: E402
 from tradebot.indicators.builtin import RSI, Bollinger  # noqa: E402
@@ -66,7 +66,7 @@ def chart(tmp_path):
 
 
 def curves(plot):
-    return {item.name(): item for item in plot.items if isinstance(item, pg.PlotDataItem)}
+    return {item.name(): item for item in plot.items if isinstance(item, Curve)}
 
 
 def bars(plot):

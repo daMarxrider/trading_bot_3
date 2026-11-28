@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from tradebot.config import Settings  # noqa: E402
 from tradebot.data.market import MarketDataError  # noqa: E402
-from tradebot.gui.chart import ChartView  # noqa: E402
+from tradebot.gui.chart import ChartView, Curve  # noqa: E402
 from tradebot.gui.depth import DepthPanel, imbalance_text  # noqa: E402
 from tradebot.gui.theme import ThemeManager  # noqa: E402
 from tradebot.indicators import INDICATORS  # noqa: E402
@@ -62,7 +62,7 @@ def test_market_indicator_pane_fetches_its_data_in_the_background(chart, app):
     chart.redraw()
     assert wait(app, lambda: "fear_greed" in chart.df.columns)
     assert chart.df["fear_greed"].notna().any()
-    assert len(chart.panes) == 1 and any(isinstance(i, pg.PlotDataItem) for i in chart.panes[0].items)
+    assert len(chart.panes) == 1 and any(isinstance(i, Curve) for i in chart.panes[0].items)
 
 
 def test_market_indicator_says_why_it_has_no_data(tmp_path, app):
