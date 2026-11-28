@@ -35,7 +35,7 @@ from PyQt6.QtWidgets import (
 
 from tradebot.algorithms import ALGORITHMS, algorithm_group, algorithm_names
 from tradebot.gui.icons import icon, pixmap
-from tradebot.gui.symbol_dialog import _ColorDelegate, _TypeDelegate, fit_dialog, rail_header, rail_item
+from tradebot.gui.symbol_dialog import Palette, _ColorDelegate, _TypeDelegate, fit_dialog, rail_header, rail_item
 from tradebot.indicators import INDICATORS
 from tradebot.indicators.base import CATEGORIES, category_of
 
@@ -167,7 +167,7 @@ class StudyTableModel(QAbstractTableModel):
             self.dataChanged.emit(self.index(row, 0), self.index(row, len(HEADERS) - 1))
 
 
-class StudyDialog(QDialog):
+class StudyDialog(Palette, QDialog):
     """Add, edit and remove the chart's indicators and its signal. ``host`` is the chart."""
 
     def __init__(self, host, parent: QWidget | None = None, initial: str = ""):

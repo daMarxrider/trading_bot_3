@@ -201,3 +201,48 @@ def test_user_scripts_get_their_own_category(chart, monkeypatch):
         assert names(d) == ["mine_test"] and d.model.data(d.model.index(0, NAME)) == "mine_test"
     finally:
         INDICATORS.unregister("mine_test")
+
+
+def test_a_pool_of_strategies_gets_a_section_per_part_that_fits_the_screen(chart):
+    from PyQt6.QtWidgets import QCheckBox
+
+    from tradebot.algorithms import build_algorithm
+    from tradebot.gui.params import GroupedParamForm, ParamDialog
+
+    pool = build_algorithm("pool")
+    values = {**pool.values, "use.donchian": 0}
+    d = ParamDialog("pool parameters", pool.param_space(), values, chart)
+    assert isinstance(d.form, GroupedParamForm)
+    switch = d.form.editors["use.donchian"]
+    assert isinstance(switch, QCheckBox) and not switch.isChecked()
+    assert not d.form.editors["donchian.period"].isEnabled()  # its settings are dimmed while it is off
+    switch.setChecked(True)
+    assert d.form.editors["donchian.period"].isEnabled()
+    assert d.values() == {**values, "use.donchian": 1}  # every parameter comes back, switches as 0/1
+    room = chart.screen().availableGeometry()
+    assert d.height() <= room.height() * 0.85 + 1  # scrolls instead of running off the screen
+    d.deleteLater()
+
+
+def test_keys_typed_while_a_picker_opens_reach_its_search(chart, monkeypatch):
+    d = chart.open_studies()
+    monkeypatch.setattr(d, "isActiveWindow", lambda: False)  # the window manager hasn't given it the keyboard yet
+    d.query.clear()
+    for ch in "macd":
+        QApplication.sendEvent(chart.canvas, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_A, Qt.KeyboardModifier.NoModifier,
+                                                       ch))
+    assert d.query.text() == "macd" and names(d)[0] == "macd"  # handed over and searched, none lost
+    monkeypatch.setattr(d, "isActiveWindow", lambda: True)
+    assert not chart_mod.forward_key(d, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_X, Qt.KeyboardModifier.NoModifier,
+                                                  "x"))  # once it has the keyboard, keys go to it directly
+
+
+def test_a_picker_closes_when_the_main_window_is_clicked_but_not_for_its_own_dialogs(chart, monkeypatch):
+    d = chart.open_studies()
+    owner = chart.window()
+    monkeypatch.setattr(QApplication, "activeWindow", staticmethod(lambda: d))  # e.g. a parameter dialog of its own
+    d._dismiss_if_left()
+    assert d.isVisible()
+    monkeypatch.setattr(QApplication, "activeWindow", staticmethod(lambda: owner))
+    d._dismiss_if_left()
+    assert not d.isVisible()

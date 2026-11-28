@@ -71,6 +71,7 @@ from tradebot.gui.params import ParamDialog
 from tradebot.gui.depth import DepthPanel
 from tradebot.gui.sidebar import ChartSidebar
 from tradebot.gui.style_dialog import StyleDialog
+from tradebot.gui.symbol_dialog import forward_key
 from tradebot.gui.theme import Theme, ThemeManager, qcolor, resolve_color
 from tradebot.gui.touch import PlotTouchHandler, TouchController
 from tradebot.gui.watchlists import WatchlistPanel
@@ -1287,8 +1288,17 @@ class ChartView(QWidget):
             self._studies = StudyDialog(self, window, initial)
         else:
             self._studies.reset(window, initial)
-        self._studies.open()
+        self._studies.show_palette()
         return self._studies
+
+    def prewarm_studies(self):
+        """Build and style the indicator dialog while the app is idle, so the first "/" opens it at once."""
+        from tradebot.gui.study_dialog import StudyDialog
+
+        if self._studies is None:
+            self._studies = StudyDialog(self, self.window())
+            self._studies.ensurePolished()
+            self._studies.grab()  # lays out and paints it once, off screen
 
     def add_indicator(self, cls, parent=None):
         """Ask the parameters of indicator ``cls`` and add it; returns the new indicator, or None if cancelled."""
@@ -2176,6 +2186,9 @@ class ChartView(QWidget):
         self.fit_y(force=True)  # the old y-range means nothing on the other scale
 
     def eventFilter(self, obj, event):
+        if obj is self.canvas and event.type() == QEvent.Type.KeyPress and (
+                forward_key(self.symbols.dialog, event) or forward_key(self._studies, event)):
+            return True  # typed while a picker opens: it gets the keys (#230)
         if obj is self.canvas and event.type() == QEvent.Type.KeyPress and self._type_to_search(event):
             return True  # typing on the chart opens the symbol dialog (#220), "/" the indicator dialog (#230)
         if obj is self.canvas and event.type() == QEvent.Type.Resize:

@@ -22,6 +22,7 @@ from PyQt6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QObject, QRec
 from PyQt6.QtGui import QColor, QFont, QKeyEvent, QPainter, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -213,6 +214,42 @@ def rail_header(rail: QListWidget, label: str):
     rail.addItem(item)
 
 
+class Palette:
+    """Mixed into a picker dialog (symbol, indicators): shown non-modal, like a command palette, so nothing typed while
+    it opens is lost (#230). A modal dialog blocks the main window at once, but until the window manager gives the new
+    window the keyboard, keys still go to the main window, and Qt drops input to a blocked window before any widget
+    sees it. Non-modal, those keys reach the field or chart the picker was opened from, which hands them over with
+    :func:`forward_key`. Clicking the main window closes it, as clicking off a menu does."""
+
+    def show_palette(self):
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange and self.isVisible() and not self.isActiveWindow():
+            QTimer.singleShot(0, self._dismiss_if_left)
+
+    def _dismiss_if_left(self):
+        """Close when the main window took over; not for a dialog opened from here (parameters, colours)."""
+        owner = self.parentWidget().window() if self.parentWidget() is not None else None
+        if self.isVisible() and owner is not None and QApplication.activeWindow() is owner:
+            self.reject()
+
+
+def forward_key(dialog: QDialog | None, event) -> bool:
+    """While ``dialog`` is open but doesn't have the keyboard yet, a key that reached its opener goes to its search
+    field instead; True if it was handed over."""
+    if dialog is None or not dialog.isVisible() or dialog.isActiveWindow():
+        return False
+    query = dialog.query
+    QApplication.sendEvent(query, QKeyEvent(event.type(), event.key(), event.modifiers(), event.text(),
+                                            event.isAutoRepeat(), event.count()))
+    return True
+
+
 def context_for(widget: QWidget) -> SymbolContext | None:
     return getattr(widget.window(), "symbol_context", None)
 
@@ -394,7 +431,7 @@ class _TypeDelegate(QStyledItemDelegate):
 
 
 # -- the dialog --------------------------------------------------------------------------------------------------
-class SymbolDialog(QDialog):
+class SymbolDialog(Palette, QDialog):
     """Pick a symbol; :attr:`picked` carries it (``A:B`` for a ratio). With ``multi`` it stays open for more."""
 
     picked = pyqtSignal(str)
@@ -908,5 +945,5 @@ def open_symbol_dialog(search: SymbolSearch, parent: QWidget, on_pick: Callable[
         except TypeError:
             pass
     dialog.picked.connect(on_pick)
-    dialog.open()
+    dialog.show_palette()
     return dialog

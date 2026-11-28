@@ -75,6 +75,7 @@ class MainWindow(QMainWindow):
         # what the symbol dialog shows besides search results: prices, recent symbols, the watchlists (#220)
         self.symbol_context = SymbolContext(engine, settings, themes, lambda: self.chart.watchlists.lists)
         QTimer.singleShot(1500, lambda: self.symbol_context.prewarm(search, self))  # ready before the first click
+        QTimer.singleShot(2000, self.chart.prewarm_studies)  # and the indicator dialog before the first "/" (#230)
         self.screener = ScreenerView(engine, themes, symbols)
         self.scanner = ScannerView(engine, themes, lambda: self.chart.watchlists.lists, settings)
         self.chart.watchlists.changed.connect(self.scanner.watchlists_changed)
