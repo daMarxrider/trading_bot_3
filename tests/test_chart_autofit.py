@@ -259,7 +259,7 @@ def test_adding_indicators_through_the_menu_keeps_the_time_range(chart, added):
     before = chart.price.vb.viewRange()[0]
     for name in added:
         accept_next_dialog()
-        chart._add_indicator(INDICATORS.get(name))  # what the Indicators menu does, dialog included
+        chart.add_indicator(INDICATORS.get(name))  # what picking it in the indicator dialog does, parameters included
         app.processEvents()
     ranges = x_ranges(chart)
     assert all(r == pytest.approx(before, abs=1) for r in ranges)  # no collapse, no drift, all panes aligned
@@ -276,7 +276,7 @@ def test_switching_the_signal_keeps_the_time_range(chart):
     before = chart.price.vb.viewRange()[0]
     for name in ("rsi_threshold", "macd_cross"):
         accept_next_dialog()
-        chart.algo_box.setCurrentText(name)  # what picking a signal does, dialog included
+        chart.choose_signal(name)  # what picking a signal does, parameters included
         app.processEvents()
     assert all(r == pytest.approx(before, abs=1) for r in x_ranges(chart))
 

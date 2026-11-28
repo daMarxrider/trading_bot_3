@@ -185,10 +185,9 @@ class MainWindow(QMainWindow):
         self.lab.show_on_chart.connect(lab_to_chart)
         self.evolve.show_on_chart.connect(lab_to_chart)
 
-        def strategy_saved(name):  # an evolved strategy saved as a plugin shows up in every list at once (#83)
-            for box in (self.lab.algo, self.chart.algo_box):
-                if box.findText(name) < 0:
-                    box.addItem(name)
+        def strategy_saved(name):  # an evolved strategy saved as a plugin shows up in the lab at once (#83); the
+            if self.lab.algo.findText(name) < 0:  # chart's indicator dialog reads the registry each time it opens
+                self.lab.algo.addItem(name)
 
         self.evolve.saved.connect(strategy_saved)
 

@@ -36,6 +36,7 @@ def _back(a: np.ndarray, shape: tuple, like):
 # -- trend ------------------------------------------------------------------------------------------
 class ADX(BaseIndicator):
     name = "adx"
+    category = "trend"
     description = "Average Directional Index (Wilder): trend strength with +DI / -DI"
     params = {"period": IntParam(14, 2, 100, "candles of the smoothing; the ADX needs about twice that to settle")}
     outputs = ("adx", "plus_di", "minus_di", "cross_up", "cross_down")
@@ -105,6 +106,7 @@ def _flips(direction):
 
 class Supertrend(BaseIndicator):
     name = "supertrend"
+    category = "trend"
     description = "Supertrend: an ATR band that flips sides when the close breaks through it"
     params = {"period": IntParam(10, 2, 100, "candles of the ATR"),
               "mult": Param(3.0, 0.5, 10.0, "band distance from the candle's midpoint, in ATRs")}
@@ -152,6 +154,7 @@ def _sar(h, l, c, step: float, max_af: float):
 
 class ParabolicSAR(BaseIndicator):
     name = "psar"
+    category = "trend"
     description = "Parabolic SAR (Wilder): a trailing stop that accelerates towards the price"
     params = {"step": Param(0.02, 0.005, 0.1, "acceleration added each time the trend makes a new extreme"),
               "max_af": Param(0.2, 0.05, 0.5, "the acceleration never grows beyond this")}
@@ -174,6 +177,7 @@ class ParabolicSAR(BaseIndicator):
 # -- channels and oscillators -----------------------------------------------------------------------
 class Keltner(BaseIndicator):
     name = "keltner"
+    category = "volatility"
     description = "Keltner channel: an EMA with bands a multiple of the ATR away"
     params = {"period": IntParam(20, 2, 200, "candles of the EMA of the close"),
               "mult": Param(2.0, 0.5, 6.0, "band distance in ATRs"),
@@ -195,6 +199,7 @@ class Keltner(BaseIndicator):
 
 class CCI(BaseIndicator):
     name = "cci"
+    category = "oscillator"
     description = "Commodity Channel Index: how far the typical price is from its average, in mean deviations"
     params = {"period": IntParam(20, 2, 200)}
     outputs = ("value", "cross_up", "cross_down")
@@ -220,6 +225,7 @@ class CCI(BaseIndicator):
 
 class WilliamsR(BaseIndicator):
     name = "williams_r"
+    category = "oscillator"
     description = "Williams %R: where the close sits in the recent range, from -100 (low) to 0 (high)"
     params = {"period": IntParam(14, 2, 100)}
     outputs = ("value", "cross_up", "cross_down")
@@ -238,6 +244,7 @@ class WilliamsR(BaseIndicator):
 
 class ROC(BaseIndicator):
     name = "roc"
+    category = "oscillator"
     description = "Rate of change: the close's percentage change over N candles"
     params = {"period": IntParam(12, 1, 200, "candles to look back")}
     outputs = ("value", "cross_up", "cross_down")
@@ -255,6 +262,7 @@ class ROC(BaseIndicator):
 
 class Momentum(BaseIndicator):
     name = "momentum"
+    category = "oscillator"
     description = "Momentum: the close minus the close N candles ago"
     params = {"period": IntParam(10, 1, 200, "candles to look back")}
     outputs = ("value", "cross_up", "cross_down")
@@ -292,6 +300,7 @@ class Pivots(BaseIndicator):
     """
 
     name = "pivots"
+    category = "levels"
     description = "Classic pivot points (P, R1, R2, S1, S2) from the previous day, week, month or year (UTC)"
     params = {"anchor": IntParam(0, 0, 3, "pivots of the previous 0: day, 1: week, 2: month, 3: year")}
     outputs = ("p", "r1", "r2", "s1", "s2", "above_r1", "below_s1")
@@ -367,6 +376,7 @@ class VolumeProfile(BaseIndicator):
     """Volume profile over a fixed rolling window (the last ``period`` candles), not the chart's visible range."""
 
     name = "volume_profile"
+    category = "volume"
     description = "Rolling volume profile: point of control and value area of the last N candles"
     params = {"period": IntParam(100, 10, 1000, "candles of the window"),
               "bins": IntParam(24, 5, 200, "price bins the window's range is split into"),
@@ -391,6 +401,7 @@ class AnchoredVWAP(BaseIndicator):
     """VWAP from a fixed start date. The chart has no anchor picker, so the anchor is a parameter."""
 
     name = "avwap"
+    category = "volume"
     description = "Anchored VWAP: volume-weighted average price since a chosen date (UTC)"
     params = {"anchor": IntParam(0, 0, 21001231, "start date as YYYYMMDD (UTC); 0: from the first candle")}
     outputs = ("value", "cross_up", "cross_down")

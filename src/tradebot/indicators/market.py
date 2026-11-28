@@ -23,6 +23,7 @@ def _smooth(x, n: int):
 
 class Funding(BaseIndicator):
     name = "funding"
+    category = "market"
     description = "Perpetual futures funding rate in percent per settlement (positive: longs pay shorts)"
     params = {"smooth": IntParam(1, 1, 100, "candles averaged (1 = the raw rate)")}
     overlay = False
@@ -37,6 +38,7 @@ class Funding(BaseIndicator):
 
 class OpenInterest(BaseIndicator):
     name = "open_interest"
+    category = "market"
     description = "Open interest of the perpetual futures, in the quote currency"
     params = {"smooth": IntParam(1, 1, 100, "candles averaged (1 = the raw value)")}
     overlay = False
@@ -51,6 +53,7 @@ class OpenInterest(BaseIndicator):
 
 class OpenInterestChange(BaseIndicator):
     name = "oi_change"
+    category = "market"
     description = "Change of the open interest over a number of candles, in percent"
     params = {"period": IntParam(24, 1, 500, "candles the change is measured over")}
     overlay = False
@@ -66,6 +69,7 @@ class OpenInterestChange(BaseIndicator):
 
 class FearGreed(BaseIndicator):
     name = "fear_greed"
+    category = "market"
     description = "Crypto Fear & Greed index (alternative.me), 0 = extreme fear, 100 = extreme greed"
     params = {"smooth": IntParam(1, 1, 60, "candles averaged (1 = the daily value)")}
     overlay = False
@@ -81,6 +85,7 @@ class FearGreed(BaseIndicator):
 
 class MVRV(BaseIndicator):
     name = "mvrv"
+    category = "market"
     description = "Market value to realized value of the coin (Coin Metrics): above 3.5 is historically hot, below 1 cheap"
     params = {"smooth": IntParam(1, 1, 60, "candles averaged (1 = the daily value)")}
     overlay = False
@@ -96,6 +101,7 @@ class MVRV(BaseIndicator):
 
 class ActiveAddresses(BaseIndicator):
     name = "active_addresses"
+    category = "market"
     description = "Addresses active on the coin's chain per day (Coin Metrics)"
     params = {"smooth": IntParam(1, 1, 60, "candles averaged (1 = the daily value)")}
     overlay = False
@@ -110,6 +116,7 @@ class ActiveAddresses(BaseIndicator):
 
 class NewsSentiment(BaseIndicator):
     name = "news_sentiment"
+    category = "market"
     description = "Tone of the symbol's news headlines per hour, -1 (negative) to +1 (positive); any symbol"
     params = {"smooth": IntParam(1, 1, 200, "candles averaged (1 = the hourly value)")}
     overlay = False
@@ -125,6 +132,7 @@ class NewsSentiment(BaseIndicator):
 
 class ExchangeNetFlow(BaseIndicator):
     name = "exchange_netflow"
+    category = "market"
     description = ("Coins moved onto exchanges minus moved off them per day, in USD (Coin Metrics): above 0 is "
                    "selling pressure, below 0 coins leaving for cold storage")
     params = {"smooth": IntParam(1, 1, 60, "candles averaged (1 = the daily value)")}

@@ -197,7 +197,7 @@ QStatusBar {{ color: {muted}; background: {status_bg}; border-top: 1px solid {pa
 QStatusBar::item {{ border: none; }}
 QProgressBar {{ text-align: center; }}
 QToolTip {{ background: {menu_bg}; color: {text}; border: 1px solid {panel_border}; }}
-QDialog#SymbolDialog {{ background: {menu_bg}; border: 1px solid {border_strong}; }}
+QDialog#SymbolDialog, QDialog#StudyDialog {{ background: {menu_bg}; border: 1px solid {border_strong}; }}
 QFrame#SymbolSearchBar {{ border: none; border-bottom: 1px solid {panel_border}; }}
 QLineEdit#SymbolQuery {{ background: transparent; border: none; padding: 0; font-size: 15px; font-weight: 500; }}
 QFrame#RatioToken {{ background: {selection}; border-radius: {radius_sm}px; }}

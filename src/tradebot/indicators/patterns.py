@@ -89,6 +89,7 @@ class Candles(BaseIndicator):
     """
 
     name = "candles"
+    category = "levels"
     description = "Candlestick patterns (hammer, engulfing, stars, three soldiers/crows, harami, tweezers) with markers and alerts"
     params = {"doji_ratio": Param(0.1, 0.01, 0.4, "largest body, as a share of the candle's range, of a doji", share=True),
               "trend": IntParam(5, 1, 50, "candles a hammer / shooting star must follow a fall / rise over"),
@@ -144,6 +145,7 @@ class ChartPatterns(BaseIndicator):
     """
 
     name = "chart_patterns"
+    category = "levels"
     description = "Chart patterns (double top/bottom, head and shoulders, triangles, wedges, flags, cup) with markers and alerts"
     params = {"strength": IntParam(5, 2, 30, "candles on each side that make a swing point"),
               "tolerance": Param(0.03, 0.005, 0.1, "relative difference still counted as equal (tops, shoulders)"),
@@ -198,6 +200,7 @@ class SupportResistance(BaseIndicator):
     """
 
     name = "support_resistance"
+    category = "levels"
     description = "Automatic support and resistance levels from swing points and volume"
     params = {"strength": IntParam(5, 2, 30, "candles on each side that make a swing point"),
               "zone": Param(0.01, 0.001, 0.05, "swing points this close (relative) form one level"),
@@ -242,6 +245,7 @@ class VolumeLevels(BaseIndicator):
     """
 
     name = "volume_levels"
+    category = "levels"
     description = "Support and resistance at the high-volume nodes of the volume profile"
     params = {"lookback": IntParam(250, 20, 2000, "candles the volume profile covers"),
               "bins": IntParam(40, 10, 200, "price bins of the profile"),

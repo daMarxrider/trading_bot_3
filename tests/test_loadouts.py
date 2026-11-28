@@ -169,7 +169,7 @@ def test_apply_replaces_indicators_and_signal_without_dialogs(gui):
     chart.apply_loadout("Swing")
     app.processEvents()
     assert [i.name for i in chart.indicators] == ["bbands", "ssw"] and len(chart.panes) == 1
-    assert chart.algorithm.values["lower"] == 25 and chart.algo_box.currentText() == "rsi_threshold"
+    assert chart.algorithm.values["lower"] == 25 and chart.algorithm.name == "rsi_threshold"
     assert chart.style_btn.isChecked()
 
 
@@ -188,7 +188,7 @@ def test_last_session_is_restored_on_the_next_start(gui):
     assert second.symbol.text() == "BTC/USDT" and second.tf.currentText() == "4h"
     assert [(i.name, i.values) for i in second.indicators] == [("bbands", {"period": 30, "width": 2.0}),
                                                                 ("rsi", {"period": 14})]
-    assert second.algorithm.name == "sma_cross" and second.algo_box.currentText() == "sma_cross"
+    assert second.algorithm.name == "sma_cross"
     assert second.loadouts.all() == {}  # the session isn't a loadout
 
 

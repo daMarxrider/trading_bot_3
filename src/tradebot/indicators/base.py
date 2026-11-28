@@ -61,6 +61,15 @@ from tradebot.core.series import OHLC
 
 INDICATORS: Registry["BaseIndicator"] = Registry("indicator")
 
+#: Indicator categories, as the indicator dialog lists them (#230): key -> label.
+CATEGORIES = {"trend": "Trend", "oscillator": "Oscillators", "volatility": "Volatility", "volume": "Volume",
+              "levels": "Levels & patterns", "market": "Market data", "script": "Scripts"}
+
+
+def category_of(cls) -> str:
+    """The indicator class's category key; one it doesn't know (or none) files it under scripts."""
+    return cls.category if cls.category in CATEGORIES else "script"
+
 
 @dataclass(frozen=True)
 class Style:
@@ -79,6 +88,8 @@ class Style:
 class BaseIndicator(ABC):
     name: ClassVar[str]
     description: ClassVar[str] = ""
+    #: Where the indicator dialog files it, a key of :data:`CATEGORIES` (#230); "" (a script that sets none): "script".
+    category: ClassVar[str] = ""
     params: ClassVar[dict[str, Param]] = {}
     #: Names of the arrays returned by :meth:`compute`.
     outputs: ClassVar[tuple[str, ...]] = ("value",)
