@@ -13,7 +13,7 @@ pg = pytest.importorskip("pyqtgraph")
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from tradebot.config import Settings  # noqa: E402
-from tradebot.gui.chart import ChartView  # noqa: E402
+from tradebot.gui.chart import Band, ChartView, Curve  # noqa: E402
 from tradebot.gui.style_dialog import StyleDialog  # noqa: E402
 from tradebot.gui.theme import BUILTIN, ThemeManager, qcolor, resolve_color  # noqa: E402
 from tradebot.indicators.builtin import RSI, Bollinger  # noqa: E402
@@ -37,7 +37,7 @@ def make_chart(tmp_path, themes=None):
 
 
 def curve_pen(plot, name):
-    return next(i for i in plot.items if isinstance(i, pg.PlotDataItem) and i.name() == name).opts["pen"]
+    return next(i for i in plot.items if isinstance(i, Curve) and i.name() == name).opts["pen"]
 
 
 def test_override_is_applied_and_remembered(tmp_path):
@@ -73,7 +73,7 @@ def test_level_colours(tmp_path):
 
 def test_fill_drawn_and_not_fitted(tmp_path):
     c = make_chart(tmp_path)
-    fills = [i for i in c.price.items if isinstance(i, pg.FillBetweenItem)]
+    fills = [i for i in c.price.items if isinstance(i, Band)]
     assert len(fills) == 1
     assert fills[0].brush().color().alpha() == qcolor("rgba(76, 201, 240, 0.08)").alpha()
     assert len(c._fit_series[c.price]) == 2 + 3  # high/low and the three band lines only

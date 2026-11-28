@@ -14,7 +14,7 @@ import pyqtgraph as pg  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from tradebot.config import Settings  # noqa: E402
-from tradebot.gui.chart import ChartView, ZonesItem, zone_segments  # noqa: E402
+from tradebot.gui.chart import ChartView, Curve, ZonesItem, zone_segments  # noqa: E402
 from tradebot.gui.theme import ThemeManager  # noqa: E402
 from tradebot.indicators import INDICATORS  # noqa: E402
 
@@ -69,7 +69,7 @@ def test_levels_are_drawn_as_bands_not_lines(chart):
     draw(chart, "support_resistance", "volume_levels")
     zones = [i for i in chart.price.items if isinstance(i, ZonesItem)]
     assert len(zones) == 5 and all(z.segments for z in zones)
-    assert not [i for i in chart.price.items if isinstance(i, pg.PlotDataItem) and i.name()]  # no line curves
+    assert not [i for i in chart.price.items if isinstance(i, Curve) and i.name()]  # no line curves
 
 
 def test_pattern_labels_pair_colour_with_a_triangle_and_explain_themselves(chart):

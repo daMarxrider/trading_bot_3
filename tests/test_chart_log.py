@@ -16,7 +16,7 @@ import pyqtgraph as pg  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from tradebot.config import Settings  # noqa: E402
-from tradebot.gui.chart import FIT_PADDING, ChartView, PriceAxis, price_label  # noqa: E402
+from tradebot.gui.chart import FIT_PADDING, ChartView, Curve, PriceAxis, price_label  # noqa: E402
 from tradebot.gui.theme import ThemeManager  # noqa: E402
 from tradebot.indicators.builtin import RSI, Bollinger  # noqa: E402
 
@@ -99,7 +99,7 @@ def test_overlays_and_markers_on_the_log_scale_panes_stay_linear(chart):
     chart.indicators = [Bollinger(), RSI()]
     chart.log_btn.setChecked(True)
     bands = Bollinger()(chart.df).iloc[:, 0].to_numpy()
-    curves = [i for i in chart.price.items if isinstance(i, pg.PlotDataItem)]
+    curves = [i for i in chart.price.items if isinstance(i, Curve)]
     ys = curves[0].getData()[1]
     assert ys == pytest.approx(np.log10(bands[~np.isnan(bands)]))
     (pane,) = chart.panes
