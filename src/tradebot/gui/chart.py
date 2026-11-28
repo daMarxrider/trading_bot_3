@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QColorDialog,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
     QLineEdit,
@@ -870,8 +871,15 @@ class ChartView(QWidget):
         self.studies_btn.clicked.connect(lambda: self.open_studies())
         self._studies = None  # the dialog, built on first use and reused
 
+        # drawing tools: an icon rail on the chart's left edge, part of the chart (#230); the names are in the tooltips
         self.tools: dict[str, QToolButton] = {}
         tool_group = []
+
+        def rail_button(btn: QToolButton, glyph: str, checked_on: bool = True) -> QToolButton:
+            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)  # 32 px square, 44 in touch mode (theme)
+            bind_icon(btn, glyph, themes, off="muted", on="accent" if checked_on else None, size=18)
+            btn.setAccessibleName(btn.text())
+            return btn
         for key, glyph, label, tip in (("trend", "trend", "Trend", "Trendline: click two points"),
                                 ("hline", "hline", "Level", "Support/resistance: click a price"),
                                 ("rect", "rect", "Zone", "Rectangle: click two corners"),
@@ -880,20 +888,17 @@ class ChartView(QWidget):
                                 ("text", "text", "Note", "Text note: click where it goes, then type it"),
                                 ("measure", "ruler", "Measure", "Price range measure: click two points to read the change "
                                                          "in price, percent and time")):
-            btn = QToolButton(text=label, checkable=True, toolTip=tip)
-            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-            bind_icon(btn, glyph, themes, off="muted", on="accent_ink", size=14)
+            btn = rail_button(QToolButton(text=label, checkable=True, toolTip=f"{label} · {tip}"), glyph)
             btn.toggled.connect(lambda on, k=key: self._tool_toggled(k, on))
             self.tools[key] = btn
             tool_group.append(btn)
-        clear = QToolButton(text="Clear", toolTip="Remove all drawings of this symbol (right-click a single drawing to recolour, edit or delete it)")
-        clear.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        bind_icon(clear, "trash", themes, off="muted", size=14)
+        clear = rail_button(QToolButton(text="Clear", toolTip="Clear · remove all drawings of this symbol (right-click a "
+                                                              "single drawing to recolour, edit or delete it)"), "trash",
+                            checked_on=False)
         clear.clicked.connect(self.clear_drawings)
-        self.magnet_btn = QToolButton(text="Magnet", checkable=True, toolTip="Snap drawing points to the nearest candle open, "
-                                      "high, low or close (hold Ctrl to flip it while drawing)")
-        self.magnet_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        bind_icon(self.magnet_btn, "magnet", themes, off="muted", on="accent_ink", size=14)
+        self.magnet_btn = rail_button(QToolButton(text="Magnet", checkable=True, toolTip="Magnet · snap drawing points to the "
+                                                  "nearest candle open, high, low or close (hold Ctrl to flip it while drawing)"),
+                                      "magnet")
         self.magnet_btn.setChecked(bool(settings.get(self.MAGNET_KEY, False)) if settings else False)
         self.magnet_btn.toggled.connect(self._magnet_toggled)
         self._snap_marker = None  # dot on the value the next point would snap to
@@ -909,11 +914,20 @@ class ChartView(QWidget):
         self.loadout_menu.aboutToShow.connect(self._fill_loadout_menu)
         self.loadout_btn.setMenu(self.loadout_menu)
 
-        # three groups that wrap onto a second row on narrow windows; the tools (… Clear, Loadouts) stay top right
+        # what is charted (left) and how (right); on a narrow window the second group wraps onto a row of its own
         bar = FlowLayout(spacing=12, last_right=True)
-        for group in ((self.symbol, self.tf, self.bars, self.dates, load, self.live.button), (self.type_box, self.versus, self.style_btn, self.events_btn, self.studies_btn),
-                      (*tool_group, self.magnet_btn, clear, self.loadout_btn)):
+        for group in ((self.symbol, self.tf, self.bars, self.dates, load, self.live.button),
+                      (self.type_box, self.versus, self.style_btn, self.events_btn, self.studies_btn, self.loadout_btn)):
             bar.addWidget(toolbar_group(*group))
+        self.tool_rail = QFrame(objectName="ToolRail")
+        rail = QVBoxLayout(self.tool_rail)
+        rail.setContentsMargins(6, 8, 6, 8)
+        rail.setSpacing(4)
+        for btn in tool_group:
+            rail.addWidget(btn)
+        rail.addStretch(1)
+        rail.addWidget(self.magnet_btn)
+        rail.addWidget(clear)
 
         # -- plot area ---------------------------------------------------------------------------
         self.canvas = pg.GraphicsLayoutWidget()
@@ -985,7 +999,13 @@ class ChartView(QWidget):
         lay.addLayout(bar)
         body = QHBoxLayout()
         body.setSpacing(10)
-        body.addWidget(self.canvas, 1)
+        chart_frame = QFrame(objectName="ChartFrame")  # the rail and the plot: one surface
+        cl = QHBoxLayout(chart_frame)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(0)
+        cl.addWidget(self.tool_rail)
+        cl.addWidget(self.canvas, 1)
+        body.addWidget(chart_frame, 1)
         body.addWidget(self.sidebar)
         lay.addLayout(body, 1)
         self.touch = TouchController(self.canvas.viewport(), PlotTouchHandler(

@@ -112,6 +112,8 @@ QPushButton:hover {{ border-color: {accent}; }}
 QPushButton:checked, QPushButton#Primary {{ background: {accent}; color: {accent_ink}; border-color: {accent}; }}
 QPushButton#Primary {{ font-weight: 600; }}
 QPushButton:disabled, QToolButton:disabled {{ color: {muted}; background: transparent; }}
+QLabel:disabled, QCheckBox:disabled, QRadioButton:disabled {{ color: {muted}; }}
+QLineEdit:disabled, QComboBox:disabled, QAbstractSpinBox:disabled {{ color: {muted}; background: transparent; border-color: {panel_border}; }}
 QPushButton#Nav {{ background: transparent; border: none; text-align: left; padding: 7px 10px; border-radius: {radius_sm}px; color: {muted}; }}
 QPushButton#Nav:hover {{ background: {nav_hover}; color: {text}; }}
 QPushButton#Nav:checked {{ background: {selection}; color: {text}; font-weight: 500; border: none; }}
@@ -132,6 +134,12 @@ QTabBar::tab:hover {{ color: {text}; }}
 QTabBar::tab:selected {{ color: {text}; font-weight: 500; border-bottom: 2px solid {accent}; }}
 QFrame#Chip {{ border: 1px solid {panel_border}; border-radius: {radius_sm}px; }}
 QFrame#Chip QToolButton {{ background: transparent; border: none; padding: 3px 6px; }}
+QFrame#ChartFrame {{ background: {panel}; border: none; }}
+QFrame#ToolRail {{ background: transparent; border: none; border-right: 1px solid {panel_border}; border-radius: 0; }}
+QFrame#ToolRail QToolButton {{ background: transparent; border: none; border-radius: {radius_sm}px; padding: 0;
+    min-width: 32px; max-width: 32px; min-height: 32px; max-height: 32px; }}
+QFrame#ToolRail QToolButton:hover {{ background: {nav_hover}; }}
+QFrame#ToolRail QToolButton:checked {{ background: {selection}; }}
 QFrame#ChartSidebar {{ background: {panel}; border: 1px solid {panel_border}; border-radius: {radius}px; }}
 QFrame#ChartSidebar QToolButton#SidebarToggle, QFrame#ChartSidebar QToolButton#SidebarTab {{
     background: transparent; border: none; border-radius: {radius_sm}px; padding: 0; min-height: 0; font-size: 24px; }}
@@ -222,6 +230,7 @@ QFrame#SymbolFooter {{ border: none; border-top: 1px solid {panel_border}; }}
 TOUCH_QSS = """
 QPushButton, QToolButton {{ min-height: 30px; padding: 8px 16px; }}
 QPushButton#Nav {{ min-height: 34px; padding: 12px 16px; }}
+QFrame#ToolRail QToolButton {{ min-width: 44px; max-width: 44px; min-height: 44px; max-height: 44px; padding: 0; }}
 QLineEdit, QComboBox, QAbstractSpinBox {{ min-height: 30px; }}
 QSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{ width: 28px; }}
 QComboBox QAbstractItemView::item, QMenu::item, QAbstractItemView#SymbolPopup::item {{ min-height: 36px; padding: 6px 24px; }}
