@@ -95,16 +95,16 @@ def menu_rows(chart):
 
 
 @pytest.mark.parametrize("width", [1200, 1700])  # wrapped onto two rows / one row
-def test_button_sits_top_right_next_to_clear(gui, width):
+def test_button_sits_top_right_next_to_indicators(gui, width):
     app, make, _, _ = gui
     chart = make()
     chart.resize(width, 700)
     chart.show()
     app.processEvents()
-    group = chart.loadout_btn.parentWidget()  # the tools group: … Clear, Loadouts
+    group = chart.loadout_btn.parentWidget()  # the view group: … Indicators, Loadouts (drawing tools: the rail, #230)
     lay = group.layout()
     widgets = [lay.itemAt(i).widget() for i in range(lay.count())]
-    assert widgets[-2].text() == "Clear" and widgets[-1] is chart.loadout_btn
+    assert widgets[-2] is chart.studies_btn and widgets[-1] is chart.loadout_btn
     right_edge = chart.loadout_btn.mapTo(chart, chart.loadout_btn.rect().topRight()).x()
     assert right_edge >= chart.width() - 30  # flush with the right margin, whether it wrapped or not
     assert group.y() < 120  # in the toolbar at the top

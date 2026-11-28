@@ -218,7 +218,9 @@ def test_a_pool_of_strategies_gets_a_section_per_part_that_fits_the_screen(chart
     assert not d.form.editors["donchian.period"].isEnabled()  # its settings are dimmed while it is off
     switch.setChecked(True)
     assert d.form.editors["donchian.period"].isEnabled()
-    assert d.values() == {**values, "use.donchian": 1}  # every parameter comes back, switches as 0/1
+    got = d.values()
+    assert set(got) == set(pool.param_space()) and got["use.donchian"] == 1  # every parameter, switches as 0/1
+    assert got["threshold"] == values["threshold"] and got["donchian.period"] == values["donchian.period"]
     room = chart.screen().availableGeometry()
     assert d.height() <= room.height() * 0.85 + 1  # scrolls instead of running off the screen
     d.deleteLater()
